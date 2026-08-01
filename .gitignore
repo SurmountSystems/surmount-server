@@ -1,0 +1,18 @@
+# Build artifacts
+result
+result-*
+crates/target/
+
+# Editor / OS
+.DS_Store
+*~
+*.swp
+
+# Local secrets (never commit plaintext)
+secrets/**/*.decrypted.*
+.env
+.env.*
+
+# sops age keys must never land in the repo
+keys.txt
+*.agekey

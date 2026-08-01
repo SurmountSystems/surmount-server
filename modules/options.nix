@@ -1,0 +1,696 @@
+# Shared Surmount options: domains, accounts, paths, and feature toggles.
+# Other modules read config.surmount.* so host configuration stays declarative
+# and free of duplicated strings.
+
+{
+  lib,
+  ...
+}:
+let
+  inherit (lib) mkOption mkEnableOption types;
+in
+{
+  options.surmount = {
+    enable = mkEnableOption "Surmount mail + web stack modules";
+
+    primaryDomain = mkOption {
+      type = types.str;
+      default = "surmount.systems";
+      description = "Apex domain used for mail identity and default vhosts.";
+    };
+
+    mailHostname = mkOption {
+      type = types.str;
+      default = "mail.surmount.systems";
+      description = "FQDN advertised in SMTP banners, TLS, and MX targets.";
+    };
+
+    servicesHostname = mkOption {
+      type = types.str;
+      default = "services.surmount.systems";
+      description = "Hostname for the management UI (reverse-proxied).";
+    };
+
+    additionalDomains = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [
+        "legacy.example.com"
+        "old-brand.net"
+      ];
+      description = ''
+        Extra mail domains (aliases / multi-tenant legacy). Add SPF/DKIM/DMARC
+        DNS for each; see docs/DNS.md.
+      '';
+    };
+
+    acmeEmail = mkOption {
+      type = types.str;
+      default = "admin@surmount.systems";
+      description = "Contact email for Let's Encrypt / ACME registration.";
+    };
+
+    # Declarative account *names* only. Passwords live in sops secrets.
+    mailAccounts = mkOption {
+      type = types.listOf (
+        types.submodule {
+          options = {
+            localPart = mkOption {
+              type = types.str;
+              example = "admin";
+              description = "Local part before @domain.";
+            };
+            domain = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              description = "Domain override; null means primaryDomain.";
+            };
+            displayName = mkOption {
+              type = types.str;
+              default = "";
+              description = "Human-readable name for directory entries.";
+            };
+            # Secret path key under sops (not the password itself).
+            passwordSecret = mkOption {
+              type = types.str;
+              default = "";
+              example = "mail/accounts/admin";
+              description = ''
+                sops key name for this account password. Empty means the
+                operator will create the account out-of-band (stalwart-cli).
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      example = [
+        {
+          localPart = "admin";
+          displayName = "Admin";
+          passwordSecret = "mail/accounts/admin";
+        }
+      ];
+      description = "Sample / production mail accounts (no plaintext secrets).";
+    };
+
+    stateDir = mkOption {
+      type = types.path;
+      default = "/var/lib/surmount";
+      description = ''
+        Root for Surmount-owned state (UI, import staging, future product DB).
+        Inventory and backup expectations: docs/DATASTORES.md.
+      '';
+    };
+
+    mailDataDir = mkOption {
+      type = types.path;
+      default = "/var/lib/stalwart-mail";
+      description = ''
+        Stalwart data directory (must match services.stalwart-mail.dataDir).
+        Scaffold default: RocksDB at ''${mailDataDir}/db for all four store
+        roles. Design, gates, and alternatives: docs/DATASTORES.md and
+        docs/open-choices.md. Not "whatever nixpkgs defaulted to."
+      '';
+    };
+
+    # Future (not implemented): explicit store backend switch for Stalwart.
+    # When added, options should name engine + paths per role (data/blob/fts/
+    # lookup) and force DATASTORES.md + open-choices updates. Do not add a
+    # silent multi-backend switch without migration runbooks.
+    # mailStore = { backend = "rocksdb" | "postgresql" | ...; ... };
+
+    # Deploy secrets on host (bucket 1). Material never in git.
+    # Tool can change (Q-DEP-1); need for host paths at activation is fixed.
+    secrets = {
+      requireDeployMaterial = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          When true, activation fails loud if any requiredHostPaths entry is
+          missing on the host. Default false so scaffold hosts and VM smoke
+          still eval without real secrets. Production hosts should set true
+          once material is installed out-of-band.
+        '';
+      };
+
+      deployMaterialDir = mkOption {
+        type = types.str;
+        default = "/run/surmount-secrets";
+        description = ''
+          Conventional host directory for deploy material (TLS PEMs, Arti HS
+          state, etc.). Operator-placed only; never a path under the public
+          git tree. Not automatically created with secret contents.
+        '';
+      };
+
+      requiredHostPaths = mkOption {
+        type = types.listOf (
+          types.submodule {
+            options = {
+              path = mkOption {
+                type = types.str;
+                example = "/run/surmount-secrets/tls/cert.pem";
+                description = "Absolute host path (no secret values).";
+              };
+              kind = mkOption {
+                type = types.enum [
+                  "file"
+                  "directory"
+                ];
+                example = "file";
+                description = ''
+                  Host check: file (-f) or directory (-d). Required per entry
+                  so PEM files and Arti state dirs can mix in one list.
+                '';
+              };
+            };
+          }
+        );
+        default = [ ];
+        example = [
+          {
+            path = "/run/surmount-secrets/tls/cert.pem";
+            kind = "file";
+          }
+          {
+            path = "/run/surmount-secrets/tls/key.pem";
+            kind = "file";
+          }
+          {
+            path = "/run/surmount-secrets/arti/onion-service";
+            kind = "directory";
+          }
+        ];
+        description = ''
+          Host paths that must exist when requireDeployMaterial is true.
+          Each entry is { path; kind; } with kind file or directory (no
+          global kind; no weak "any" default). Paths only (no secret values).
+          Empty list with require true is a configuration error (assertion).
+          Strict charset /[A-Za-z0-9._/-]+ (no metacharacters).
+        '';
+      };
+    };
+
+    managementUi = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Enable the Rust management UI service + reverse proxy.";
+      };
+
+      listenAddress = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+        description = "Bind address for the management UI (loopback only).";
+      };
+
+      port = mkOption {
+        type = types.port;
+        # 8090: Stalwart 0.16 first-boot defaults bind HTTP on :8080; keep
+        # the Surmount UI on a distinct loopback port.
+        default = 8090;
+        description = "Local HTTP port for the management UI (loopback).";
+      };
+
+      package = mkOption {
+        type = types.nullOr types.package;
+        default = null;
+        description = "Override management-ui package; null uses pkgs.surmount-management-ui overlay.";
+      };
+
+      # Axum edge foundation (TLS paths from host deploy secrets; no secrets in git).
+      listenMode = mkOption {
+        type = types.enum [
+          "http"
+          "https"
+        ];
+        default = "http";
+        description = ''
+          Management UI listen mode. "https" terminates TLS 1.3 in-process
+          (rustls) using tlsCertPath/tlsKeyPath host deploy-secret PEMs and is
+          the public edge when web.enable is false (product default). "http"
+          is for dev/scaffold and dual-run behind transitional nginx
+          (set surmount.web.enable = true).
+        '';
+      };
+
+      # Emergency only: always forces cleartext under the https label when set.
+      allowCleartextHttpsEscape = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          DANGEROUS cleartext override. When true with listenMode=https, sets
+          SURMOUNT_HTTPS_ALLOW_CLEARTEXT_ESCAPE=1 and the binary **always**
+          binds cleartext under the https label. It does **not** take the
+          rustls path even when PEMs load and the acceptor is ready. Default
+          false. Not for production. Happy path is bare listenMode=https with
+          PEMs and real TLS terminate (leave this option false).
+        '';
+      };
+
+      tlsCertPath = mkOption {
+        type = types.str;
+        default = "";
+        example = "/run/surmount-secrets/tls/cert.pem";
+        description = "Absolute host path to TLS certificate PEM when listenMode is https.";
+      };
+
+      tlsKeyPath = mkOption {
+        type = types.str;
+        default = "";
+        example = "/run/surmount-secrets/tls/key.pem";
+        description = "Absolute host path to TLS private key PEM when listenMode is https.";
+      };
+
+      redirectHttpToHttps = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          When true with a non-empty httpRedirectListen, the management-ui
+          binary binds a plain HTTP redirect-only listener (no cleartext API)
+          and upgrades allowlisted Hosts to HTTPS. Sets
+          SURMOUNT_REDIRECT_HTTP_TO_HTTPS. Requires listenMode=https (eval
+          asserts). Product path: web.enable=false. Fail-closed at eval if
+          web.enable is true (nginx dual-run owns public :80/:443 ACME/redirect).
+          ACME HTTP-01 on the product :80 listener is not implemented (parked;
+          Q-EDGE / RESIDUAL).
+        '';
+      };
+
+      httpRedirectListen = mkOption {
+        type = types.str;
+        default = "0.0.0.0:80";
+        example = "0.0.0.0:80";
+        description = ''
+          Bind address for the plain HTTP redirect-only listener when
+          redirectHttpToHttps is true. Emitted as SURMOUNT_HTTP_REDIRECT_LISTEN.
+          Must be empty or host:port (e.g. 0.0.0.0:80, [::]:80). Empty string
+          skips the listen env (no bind) even if the flag is true. Default
+          0.0.0.0:80. CAP_NET_BIND_SERVICE is granted only when the primary port
+          or this listen port is under 1024.
+        '';
+      };
+
+      # Full management API on loopback cleartext (not redirect-only :80).
+      # Used when primary is https and a local reverse-proxy (Arti HS lean path)
+      # cannot speak TLS to the UI TCP target.
+      localCleartextListen = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "127.0.0.1:8090";
+        description = ''
+          Optional plain HTTP bind for the full management API (health, SSR,
+          stubs), loopback only. Not the redirect-only :80 listener.
+          Emitted as SURMOUNT_LOCAL_CLEARTEXT_LISTEN when set or when auto-
+          derived for Arti.
+
+          Auto path (null): when managementUi is https (escape off), Arti HS
+          is enabled, and artiHiddenService.backendAddress / backendUnixSocket
+          are both null, the module binds a dedicated loopback cleartext API
+          and points the onion reverse-proxy at it. Auto port prefers
+          127.0.0.1:8090, then 8091, then primary+1, always avoiding
+          managementUi.port and the active redirect port (so 0.0.0.0:8090
+          primary does not collide with 127.0.0.1:8090). Explicit host:port
+          here overrides the auto address (numeric loopback only: 127.0.0.1
+          or [::1]; not localhost hostnames). Must differ in port from primary
+          and redirect listens. Never a public cleartext API. Redirect-only
+          :80 stays redirect-only (no ACME product invent).
+        '';
+      };
+
+      rateLimitMaxRequests = mkOption {
+        type = types.ints.unsigned;
+        default = 120;
+        description = "Fixed-window max requests per client IP (0 disables).";
+      };
+
+      rateLimitWindowSecs = mkOption {
+        type = types.ints.positive;
+        default = 60;
+        description = "Fixed-window length in seconds for edge rate limit.";
+      };
+
+      rateLimitMaxKeys = mkOption {
+        type = types.ints.positive;
+        default = 50000;
+        description = "Cap on distinct rate-limit keys retained in memory.";
+      };
+    };
+
+    # Arti onion / hidden service (REQUIRED product surface).
+    # HS private keys are deploy secrets on the host only (never in git).
+    # Generated arti.toml is a management-publish config (onion + rproxy).
+    artiHiddenService = {
+      enable = mkEnableOption "Arti onion/hidden service for Surmount backends";
+
+      # Default false: enable installs config only; no multi-user daemon.
+      startDaemon = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Start the arti systemd service under multi-user. Default false so
+          enable=true only installs management-publish config + status oneshot.
+          When true, uses the complete management-publish arti.toml (no need
+          for acceptIncompleteOnionConfig). Requires: onionServiceStateDir on
+          the host (ConditionPathIsDirectory), a non-null arti package, and a
+          service-capable package gate: Surmount pkgs.artiOnionService
+          (passthru.surmountOnionServiceCapable when package is null) or an
+          explicit packageIsOnionServiceCapable = true claim for a non-Surmount
+          binary. Unit active does not by itself prove an onion is published
+          on the Tor network.
+        '';
+      };
+
+      # No effect in this module version (kept for experimental future modes).
+      acceptIncompleteOnionConfig = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          No effect in this module version. Kept only as a reserved flag for a
+          possible future experimental incomplete-config path. The lean
+          management-publish config is complete: startDaemon does not read this
+          flag for assertions or generated toml. Leave false.
+        '';
+      };
+
+      package = mkOption {
+        type = types.nullOr types.package;
+        default = null;
+        description = ''
+          Arti package. Null prefers pkgs.artiOnionService from the Surmount
+          overlay (cargo feature onion-service-service), then falls back to
+          stock pkgs.arti when the overlay package is absent. Stock nixpkgs
+          arti is client-default; the Surmount package is a distinct attribute
+          and does not replace pkgs.arti. Explicit package = pkgs.arti keeps
+          the client binary and requires packageIsOnionServiceCapable if you
+          still start the daemon (documented footgun). Live Tor publish also
+          needs operator host HS keys (never in git).
+        '';
+      };
+
+      # Fail-closed claim: stock channel arti is NOT service-capable.
+      packageIsOnionServiceCapable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Operator claim that `package` was built with onion-service-service
+          (and keymgr as needed via arti-client) so it can publish a hidden
+          service. Default false. When package is null and pkgs.artiOnionService
+          is present, the module treats passthru.surmountOnionServiceCapable as
+          sufficient (happy path without setting this bool). Required true for
+          startDaemon when using a non-Surmount binary. unit active != onion
+          published without a capable binary and live Tor verify. Do not set
+          true on stock client arti unless you intentionally override the gate.
+        '';
+      };
+
+      nickname = mkOption {
+        type = types.str;
+        default = "surmount-management";
+        description = ''
+          Onion service nickname (Arti local name embedded in config; not the
+          .onion address). Must match [A-Za-z0-9][A-Za-z0-9_-]*.
+        '';
+      };
+
+      # Host path for non-secret process cache (and related stateDir layout).
+      stateDir = mkOption {
+        type = types.str;
+        default = "/var/lib/surmount/arti";
+        description = ''
+          Host directory for Arti process cache (storage.cache_dir). Must not
+          be in the public git tree. Owned by surmount-arti after tmpfiles
+          (0750 surmount-arti:surmount-arti).
+        '';
+      };
+
+      onionServiceStateDir = mkOption {
+        type = types.str;
+        default = "/run/surmount-secrets/arti/onion-service";
+        description = ''
+          Host path for onion service identity and HS instance state
+          (arti storage.state_dir). Deploy secrets on host only; never example
+          private key material in repo. Daemon unit requires this directory
+          to exist (ConditionPathIsDirectory) and to be writable by the
+          surmount-arti service user (e.g. chown surmount-arti:surmount-arti,
+          mode 0750 or tighter). Root-owned 0700 will pass the path condition
+          then fail at runtime when opening the keystore. Module does not
+          auto-create this directory.
+        '';
+      };
+
+      # Backend for the default lean surface: management HTTP only (cleartext).
+      backendAddress = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "127.0.0.1:8090";
+        description = ''
+          Local TCP host:port for onion reverse-proxy when backendUnixSocket
+          is null. Null (default): when UI is https (escape off) and no
+          backendUnixSocket, the module auto-points at the local cleartext
+          API (managementUi.localCleartextListen or auto-derived loopback);
+          otherwise derives managementUi.listenAddress:port. Explicit
+          override must match host:port or [ipv6]:port. Lean path expects
+          plain HTTP on this target (not TLS). Do not invent TLS-on-onion.
+        '';
+      };
+
+      backendUnixSocket = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "/run/surmount/management-ui.sock";
+        description = ''
+          When set, onion reverse-proxy target is unix:<path> instead of
+          backendAddress / derived UI TCP. Prefer TCP loopback for production
+          until upstream UDS forward is fully proven (tor-hsrproxy residual).
+        '';
+      };
+
+      # Lean defaults: do not onion-publish Stalwart admin/JMAP without explicit yes.
+      publishStalwartAdmin = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Intent to onion-publish Stalwart admin HTTP. Default false (Q-ARTI-3
+          lean). Reserved: does not yet add onion stanzas (no admin backend
+          address option). Management-publish config stays lean either way.
+        '';
+      };
+
+      publishStalwartJmap = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Intent to onion-publish Stalwart JMAP. Default false (Q-ARTI-3 lean).
+          Reserved: does not yet add onion stanzas (no JMAP backend address
+          option). Management-publish config stays lean either way.
+        '';
+      };
+    };
+
+    web = {
+      enable = mkOption {
+        type = types.bool;
+        # Product default off: management-ui rustls owns public HTTPS.
+        # Escape: set true for dual-run nginx + ACME while migrating.
+        default = false;
+        description = ''
+          Enable transitional nginx + ACME virtual hosts.
+          TRANSITIONAL-TO-DELETE: product edge is Axum-first (management-ui
+          listenMode=https with host PEMs). Default false. Set true only as a
+          dual-run escape while migrating off nginx
+          (`surmount.web.enable = true`).
+        '';
+      };
+
+      extraVhosts = mkOption {
+        type = types.attrsOf types.attrs;
+        default = { };
+        description = ''
+          Extra nginx virtualHost attrsets merged into services.nginx.virtualHosts.
+          Legacy / migrated sites are static files only; use root
+          locations, not app-server upstreams, for old Synology content.
+        '';
+      };
+
+      # TODO(static-sites): structured staticSites option (hostname -> root path)
+      # once content is staged; keep extraVhosts for escape hatches.
+    };
+
+    backups = {
+      enable = mkEnableOption "restic backups of mail store and site data";
+
+      repository = mkOption {
+        type = types.str;
+        default = "";
+        example = "s3:s3.amazonaws.com/surmount-backups";
+        description = "restic repository URL. Empty disables timer until set.";
+      };
+
+      passwordFile = mkOption {
+        type = types.str;
+        default = "";
+        description = "Path to restic password file (typically a sops secret path).";
+      };
+
+      paths = mkOption {
+        type = types.listOf types.path;
+        default = [ ];
+        description = "Extra paths to include beyond mail store defaults.";
+      };
+    };
+
+    hardening = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Apply SSH hardening, fail2ban sketch, and sensible defaults.";
+      };
+
+      allowPasswordAuth = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Allow SSH password authentication (prefer keys only).";
+      };
+    };
+
+    # Merciless ban / whitelist first product path (Rust edge + optional nft sets).
+    # Defaults lean private: off. Q-ACL-1..6 remain open (see docs/open-choices.md).
+    accessControl = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Install Surmount nft set placeholders and wire management-ui ban env when
+          managementUi is enabled. Default false (lean private). Does not claim
+          live host bans without operator nft load + optional helper. See
+          docs/research/access-control-fail2ban.md and docs/EDGE_AND_TLS.md.
+        '';
+      };
+
+      # off | dry-run | enforce — matches SURMOUNT_BAN_ENFORCEMENT.
+      enforcement = mkOption {
+        type = types.enum [
+          "off"
+          "dry-run"
+          "enforce"
+        ];
+        default = "off";
+        description = ''
+          Ban enforcement mode for management-ui. Default off.
+          dry-run: record bans in app state without 403; does **not** mutate
+          nft and does not require helper/nftBin existence.
+          enforce: 403 banned clients at the Axum edge; when backend=nft and
+          nftHelper (preferred) or nftExec is on, privileged apply runs
+          (fail-closed if helper sock/bin or nftBin missing). UI never gets
+          CAP_NET_ADMIN; host drop uses socket-activated helper unit.
+        '';
+      };
+
+      backend = mkOption {
+        type = types.enum [
+          "memory"
+          "nft"
+        ];
+        default = "memory";
+        description = ''
+          Ban backend kind. memory = app-level only (never installs or calls
+          the privileged helper). nft = same app store plus optional host nft
+          add-element sync when nftHelper (preferred) or nftExec is true.
+          Preferred host-drop path: backend=nft + nftHelper + absolute nftBin
+          + enforcement=enforce + socket-activated oneshot
+          (SURMOUNT_BAN_NFT_HELPER_SOCK). nftHelper/nftExec require backend=nft
+          (Nix assertion + binary fail-closed); otherwise the helper sock would
+          be a silent no-op. nftExec is unsupported on the UI unit
+          (NoNewPrivileges; no CAP_NET_ADMIN). Mutually exclusive: nftHelper vs
+          nftExec. DryRun/Off skip capable-bin existence checks.
+        '';
+      };
+
+      whitelist = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [
+          "203.0.113.10/32"
+          "2001:db8::/64"
+        ];
+        description = ''
+          Whitelist CIDRs (comma-joined into SURMOUNT_BAN_WHITELIST). Never
+          banned; last-used touched on allowed requests from a match.
+        '';
+      };
+
+      statePath = mkOption {
+        type = types.str;
+        default = "";
+        description = ''
+          Absolute host path for ban/whitelist-last-used JSON (SURMOUNT_BAN_STATE_PATH).
+          Empty uses in-memory only. Typical: ''${config.surmount.stateDir}/ui/ban-state.json
+          when management-ui owns the file. Never put secrets here.
+        '';
+      };
+
+      nftSets = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          When accessControl.enable, define inet surmount_guard table with sets
+          surmount-ban4/6 and surmount-whitelist4/6 (names match Rust constants).
+          networking.nftables.enable is turned on. Sets start empty; operator
+          must load ruleset and still owns live ban drop policy (Q-ACL open).
+        '';
+      };
+
+      nftExec = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Enable direct in-process `nft` exec from management-ui
+          (SURMOUNT_BAN_NFT_EXEC). Default false. **Unsupported for live host
+          drop:** UI has NoNewPrivileges and no CAP_NET_ADMIN (and on
+          privileged ports CapabilityBoundingSet is CAP_NET_BIND_SERVICE only).
+          Mutually exclusive with nftHelper. Prefer nftHelper. Module warns.
+        '';
+      };
+
+      nftBin = mkOption {
+        type = types.str;
+        default = "";
+        description = ''
+          Absolute path to nft binary. Required when nftHelper or nftExec is
+          true under Enforce (helper oneshot env and/or direct exec). DryRun/Off
+          do not require the bin at config parse.
+        '';
+      };
+
+      # Product elevation: UDS -> socket-activated oneshot (not UI child setcap).
+      nftHelper = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Install socket-activated surmount-nft-ban-helper@.service with
+          CAP_NET_ADMIN/CAP_NET_RAW on the **helper unit only**, and wire UI
+          SURMOUNT_BAN_NFT_HELPER_SOCK=/run/surmount/nft-ban-helper.sock.
+          **Requires backend = "nft"** (asserted; Memory never applies). For
+          live host drop also set enforcement = "enforce" and absolute nftBin.
+          management-ui keeps NoNewPrivileges and never receives CAP_NET_ADMIN.
+          Child setcap spawn is intentionally not used (NNP blocks elevation).
+          Default false (lean). Mutually exclusive with nftExec. DryRun does
+          not call the helper. Live host nft smoke still operator residual.
+        '';
+      };
+
+      nftHelperBin = mkOption {
+        type = types.str;
+        default = "";
+        description = ''
+          Absolute path to surmount-nft-ban-helper binary used as ExecStart for
+          the socket-activated oneshot when nftHelper is true. Empty uses
+          ''${managementUi.package}/bin/surmount-nft-ban-helper. Non-empty must
+          be absolute. UI env points at the UDS path, not this binary.
+        '';
+      };
+    };
+  };
+}

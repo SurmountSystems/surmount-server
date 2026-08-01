@@ -1,0 +1,40 @@
+[package]
+name = "surmount-management-ui"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Surmount mail/services management console (Axum + Leptos SSR)"
+publish = false
+
+[lib]
+name = "surmount_management_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "surmount-management-ui"
+path = "src/main.rs"
+
+[[bin]]
+name = "surmount-nft-ban-helper"
+path = "src/bin/surmount-nft-ban-helper.rs"
+
+[dependencies]
+axum.workspace = true
+axum-server.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+# SSR-only admin shell (no hydrate / WASM / NPM). MSRV 1.88; crane uses rust_1_88.
+leptos.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+# Pin kept for reproducible PEMs; crane rustc is 1.88+ (Leptos).
+time.workspace = true

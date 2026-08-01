@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+  "management-ui",
+  "surmount-e2e",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/SurmountSystems/surmount-server"
+
+[workspace.dependencies]
+axum = "0.8"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# No tls12 here: product ServerConfig is TLS 1.3 only. Feature unification may
+# still enable tls12 via reqwest/hyper-rustls (outbound HTTP client); that does
+# not change the edge ServerConfig protocol list.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "std", "logging"] }
+rustls-pki-types = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+# Leptos SSR admin shell (ssr only; no csr/hydrate dual build). Current stable.
+# MSRV 1.88: crane/management-ui uses nixpkgs rustPackages_1_88 (not default 1.86).
+leptos = { version = "0.8", default-features = false, features = ["ssr"] }
+# Dev-only self-signed PEMs in tests. Pin kept for lock stability.
+rcgen = "=0.13.2"
+# Exact pin kept so `cargo update` cannot float time without editing here.
+time = { version = "=0.3.45", default-features = false }

@@ -1,0 +1,22 @@
+[package]
+name = "surmount-e2e"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Surmount end-to-end runners (local hermetic + host probes) and pure helpers"
+publish = false
+
+[lib]
+name = "surmount_e2e"
+path = "src/lib.rs"
+
+[[bin]]
+name = "surmount-e2e"
+path = "src/bin/surmount_e2e.rs"
+
+[[bin]]
+name = "surmount-e2e-host"
+path = "src/bin/surmount_e2e_host.rs"
+
+[dependencies]
+# std only: keep the e2e crate light and offline-friendly.
