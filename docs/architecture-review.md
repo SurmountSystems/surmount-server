@@ -12,7 +12,7 @@ still documents as open or CX-class small-VPS framed:
 
 | Topic | This review (historical peer frame) | Operator direction 2026-07-30 |
 |-------|-------------------------------------|------------------------------|
-| Host size / provider | Hetzner/OVH-class, CX22-ish framing in places | **Operator-chosen VPS**; ~**16 GB RAM**, **2 TB NVMe**, **16 cores**; not Hetzner-as-default |
+| Host size / provider | Hetzner/OVH-class, CX22-ish framing in places | **Operator-chosen VPS**; size/plan open (Q-HOST-1); not Hetzner-as-default; no invented SKUs |
 | All-RocksDB co-location | Scaffold with heavy exit gates / open pressure | **RocksDB fine for now**; all-role co-location OK this phase |
 | Internal FTS | Open vs external FTS pressure | **Good enough for now**; Surmount builds own search product later |
 | In-memory on RocksDB | Open | **Fine for now** |
@@ -50,7 +50,7 @@ scaffold hardens into accidental product law.
 |------|---------|----------|
 | **Fact** | Measurable from this tree, upstream docs, or a green build | Stalwart **0.16.15** FOD; `config.json` is DataStore-only; UI default **:8090**; nixpkgs lock rev |
 | **Scaffold** | Wired so the host boots or evals green; provisional until you choose | All-RocksDB path; nginx edge (transitional-to-delete); restic module off; sample hostnames |
-| **Operator direction** | Dated working direction (2026-07-30 + follow-up); stronger than scaffold when they conflict | RocksDB OK now; Axum-first edge; Nostr; Vaultwarden; deploy secrets; LUKS2; 16G/2TB/16c VPS |
+| **Operator direction** | Dated working direction (2026-07-30 + follow-up); stronger than scaffold when they conflict | RocksDB OK now; Axum-first edge; Nostr; Vaultwarden; deploy secrets; LUKS2; operator-chosen VPS (size open) |
 | **Open choice** | Proposed in docs or inventory, not required by working code | Exact edge crate (Axum vs Rama); sops alternative; fork consume path |
 
 **Fix / FixOS (stated agreement only):** You agreed with the Fix/FixOS ownership
@@ -253,7 +253,7 @@ agent assumptions, operator questions.
 |--|--|
 | **Upstream** | Soft state: rate limits, greylist, locks, OAuth/ACME tokens, etc. Default = data store; Redis for heavy/distributed. Loss on restart often acceptable; durable backend needs cleanup schedules. https://stalw.art/docs/storage/in-memory |
 | **We wire** | Implicit Default on same RocksDB. |
-| **Not proven** | Whether greylist/rate-limit write load on co-located RocksDB is hot under real mail volume (16 GB host should be comfortable vs tiny VPS). No Redis module in tree. |
+| **Not proven** | Whether greylist/rate-limit write load on co-located RocksDB is hot under real mail volume. No Redis module in tree. |
 | **Questions** | Fine with ephemeral limits resetting on restart? Any reason to add Redis on a single VPS? |
 
 ### 3.6 Physical backend options (when each might earn a seat)
@@ -393,7 +393,7 @@ Full row inventory:
 | Secrets buckets: deploy secrets / Vaultwarden / LUKS disk | SECRETS, secrets.nix; **operator direction** | Deploy secrets: sops-nix scaffold (need real; tool can change); VW + LUKS directed | Keep sops-nix or replace tool (Q-DEP-1)? When do VW and LUKS become real work? |
 | restic opt-in | backups.nix disabled until repo+password | Scaffold; **clever RPO/RTO later, not now** (operator) | Where does the restic repo live? Basic backup before MX still wise |
 | Single VPS; ends when operator says | open-choices, hosts/mail-vps; **operator direction** | No invented scale-out triggers | Do not invent multi-host exit criteria |
-| Operator-chosen VPS ~16G/2TB NVMe/16c; PTR; LUKS first-class | operator-direction.md | Preference/direction text, not automation | Actual provider (Q-HOST-1)? First install LUKS or interim plain disk (Q-HOST-2)? |
+| Operator-chosen VPS; size/plan open; PTR; LUKS first-class | operator-direction.md | Preference/direction text, not automation | Actual provider (Q-HOST-1)? First install LUKS or interim plain disk (Q-HOST-2)? |
 | Firewall 22/25/80/443/465/587/993/4190 | networking.nix | Scaffold perimeter; 0.16 may still bind 8080/443/995 broadly | Lock SSH to admin nets? Open POP3 995 at all? |
 
 ### 4.6 Fix level, migration, ops, flake
@@ -449,8 +449,8 @@ you have not discussed. **This section does not choose for you.**
    hermetic spam/webui apply requirement. Priority: recover MailPlus data.
 
 9. **Host topology and Fix level**
-   Provider pick on ~16G/2TB/16c shape; single VPS until operator says; stay
-   Surmount package overlay in-repo vs early fixpkgs channel.
+   Provider/plan pick (Q-HOST-1; no invented SKUs); single VPS until operator
+   says; stay Surmount package overlay in-repo vs early fixpkgs channel.
 
 10. **Self-ops bar**
     journald+scripts enough, or external uptime/metrics before go-live.

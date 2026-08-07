@@ -544,23 +544,23 @@ ports; docs lag is called out per row where it matters.
 
 ---
 
-## 23. Hosting preference: Hetzner/OVH-class VPS, PTR control, LUKS install path
+## 23. Hosting preference: operator-chosen VPS, PTR control, LUKS install path
 
-- **Claim the tree currently implies:** Prefer **Hetzner CX22/CX32** (or larger)
-  or **OVH** equivalent; operator-controlled **PTR/rDNS**; install path that
+- **Claim the tree currently implies:** **Operator-chosen VPS** (not
+  Hetzner-as-default); operator-controlled **PTR/rDNS**; install path that
   can do **LUKS2** via disko + nixos-anywhere when possible. Sample host uses
-  qemu-guest profile and labeled ext4 root (placeholder).
-- **Where it lives:** `README.md` (Hosting preferences), `docs/SECURITY.md`,
-  `hosts/mail-vps/configuration.nix`.
+  qemu-guest profile and labeled ext4 root (placeholder). **Size/plan open
+  (Q-HOST-1)**; public docs must not invent RAM/disk/core/SKU numbers.
+- **Where it lives:** `README.md` (Hosting), `docs/SECURITY.md`,
+  `docs/operator-direction.md`, `hosts/mail-vps/configuration.nix`.
 - **Why someone might have put it there:** Mail-friendly VPS + rDNS; FDE when
-  greenfield install allows; cheap single-node sizing.
-- **Status:** **proposed / preference in docs.** Not encoded as provider
-  automation.
-- **Should revisit now that Stalwart is 0.16.15?** **No** for provider brand.
-  **Yes** for RAM/disk sizing once real mailbox corpus and 0.16 memory use are
-  known (DATASTORES mentions CX22-class headroom).
-- **Open question for operator:** Which provider and instance size is the
-  actual production target, and will first install be LUKS or interim plain disk?
+  greenfield install allows.
+- **Status:** **operator direction** for "operator-chosen / not Hetzner
+  default"; size remains open. Historical CX-class framing scrubbed from
+  living docs (2026-08-07).
+- **Open question for operator:** Which provider and plan is production
+  (**Q-HOST-1**), and will first install be LUKS or interim plain disk
+  (**Q-HOST-2**)?
 
 ---
 

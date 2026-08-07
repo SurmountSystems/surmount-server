@@ -52,8 +52,8 @@ Official Stalwart storage docs (authoritative for engine behavior):
    now** (operator direction 2026-07-30); not a forever lock.
 3. **We have not load-tested** this host under production mailbox counts,
    concurrent IMAP/JMAP, or large Maildir import. Numbers below are
-   design intent and upstream guidance, not Surmount SLOs. Host size
-   direction is ~16 GB RAM / 2 TB NVMe / 16 cores (operator-direction.md).
+   design intent and upstream guidance, not Surmount SLOs. Host size/plan is
+   operator-open (**Q-HOST-1**); do not invent RAM/disk/core numbers.
 4. **Do not read engine files from product code.** Surmount talks to
    Stalwart over HTTP/JMAP/admin/CLI. Direct RocksDB/SQL access from
    `surmount-management-ui` is out of bounds.
@@ -184,17 +184,17 @@ NixOS VPS unless stated.
 | **Concurrency / multi-node** | **Single node.** Do not point two Stalwart processes at one RocksDB path. Multi-node needs different backends (deferred). |
 | **Ops burden (1 VPS)** | Lowest: no Postgres/Redis/ES to patch. Cost is LSM literacy (write amp, space amp, "why is disk still full"). |
 | **Failure modes** | Disk full mid-compaction; corrupted SST after bad hardware; split-brain if two writers; backup of live files restores garbage; OOM if write buffer + caches oversized for RAM. |
-| **When Surmount chooses it** | **Fine for now** (operator direction 2026-07-30) for all four roles on the single operator-chosen VPS. Not a forever lock. See operator-direction.md for knobs on the ~16 GB / 16-core box. |
+| **When Surmount chooses it** | **Fine for now** (operator direction 2026-07-30) for all four roles on the single operator-chosen VPS. Not a forever lock. See operator-direction.md for host-agnostic knob starting points. |
 
 **Knobs Stalwart actually documents** for RocksDB
 ([rocksdb backend](https://stalw.art/docs/storage/backends/rocksdb/)):
 
-| Field | Meaning | Upstream default | Surmount start (16G/16c) |
+| Field | Meaning | Upstream default | Surmount start |
 |-------|---------|------------------|-------------------------|
 | `path` | DB directory | required | `/var/lib/stalwart-mail/db` |
 | `blobSize` | Inline vs blob spill threshold (bytes) | `16834` | omit (default) until measured |
 | `bufferSize` | In-memory write buffer (bytes) | `134217728` (128 MiB) | omit; optional 256 MiB if import write-bound |
-| `poolWorkers` | DB worker threads | CPU count | omit (=16) or pin 8 to leave cores |
+| `poolWorkers` | DB worker threads | CPU count | omit (logical CPUs) or pin lower if measured oversubscription |
 
 Surmount 0.16 module (`modules/stalwart-service.nix`) writes `config.json`
 DataStore JSON. Optional Nix options: `blobSize`, `bufferSize` (null = omit).
@@ -344,10 +344,9 @@ If upstream does not expose them, do not inject side-channel option files
 without a design-doc update and upgrade test.
 
 **RAM:** default write buffer 128 MiB plus block cache (engine-internal).
-On the directed ~16 GB host, 128 MiB is a small slice; leave headroom for
-SMTP bursts, spam-filter, edge, UI, and future Vaultwarden. Optional raise
-to 256 MiB is documented in operator-direction.md. If OOM on a smaller box:
-lower `bufferSize` only after measuring.
+Leave headroom for SMTP bursts, spam-filter, edge, UI, and future Vaultwarden
+on whatever host the operator chose. Optional raise to 256 MiB is documented
+in operator-direction.md. If OOM: lower `bufferSize` only after measuring.
 
 ### 4.6 Co-locate vs split (decision aids)
 

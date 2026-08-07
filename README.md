@@ -25,7 +25,7 @@ stack:
 - **No Cloudflare required path** - direct DNS to the VPS
 - **Arti onion/hidden services (REQUIRED)** - first-class reachability via
   Tor Project Rust Arti HS alongside clearnet; HS keys never in git
-- **Single operator-chosen VPS** - ~16 GB RAM / 2 TB NVMe / 16 cores direction;
+- **Single operator-chosen VPS** - size/plan open (do not invent SKUs);
   multi-host ends when the operator says
 
 Primary domain: `surmount.systems`
@@ -100,8 +100,9 @@ direction and open choices live in `docs/`.
 
 ## Hosting
 
-- **Operator-chosen VPS** (not a default Hetzner preference). Working size
-  direction: about **16 GB RAM**, **2 TB direct NVMe**, **16 logical cores**.
+- **Operator-chosen VPS** (not a default Hetzner preference). Do **not**
+  invent RAM, disk, core counts, or provider plan SKUs in public docs
+  (**Q-HOST-1**).
 - Prefer a provider where you control **PTR/rDNS** on the sending IP.
 - Prefer install paths that allow **LUKS2** root (disko + nixos-anywhere);
   see [docs/SECURITY.md](docs/SECURITY.md) and operator-direction.md.
@@ -301,4 +302,8 @@ How Surmount owns packages today and how to consume
 ## License / ownership
 
 Operator-owned infrastructure for Surmount Systems. Application code under
-`crates/` is MIT unless noted otherwise.
+`crates/` is dedicated to the public domain under the **Unlicense**
+(SPDX: `Unlicense`). See [UNLICENSE.md](UNLICENSE.md). Workspace Cargo
+metadata matches (`license = "Unlicense"` in `crates/Cargo.toml`). Upstream
+dependencies and vendored packages keep their own licenses (for example
+Stalwart AGPL).

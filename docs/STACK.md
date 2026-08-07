@@ -13,7 +13,7 @@ law). Scaffold defaults still describe what code does today when they differ.
 ## Goals in one paragraph
 
 Run mail, light static web, admin console, and v1 webmail on a **single
-operator-chosen VPS** (~16 GB RAM, 2 TB NVMe, 16 cores as directed). **Stalwart**
+operator-chosen VPS** (size/plan open; **Q-HOST-1**; do not invent SKUs). **Stalwart**
 is the mail engine (version from `nix/packages/stalwart-mail.nix`; currently
 **0.16.15** binary FOD). **RocksDB** for all store roles is **fine for now**.
 Our Rust product layer (**Axum + Leptos SSR**) is operator admin first, then
@@ -139,9 +139,9 @@ Official: [Choosing a database](https://stalw.art/docs/install/store/),
 Live engine version: `nix/packages/stalwart-mail.nix`. Spam-filter FOD is
 **not** the message DB. Maildir import staging is **not** the runtime store.
 
-**RocksDB knobs** (blobSize / bufferSize / poolWorkers) starting points for
-the 16 GB / 16-core box: [operator-direction.md](operator-direction.md)
-section 2. Module options today: `blobSize` / `bufferSize` optional overrides.
+**RocksDB knobs** (blobSize / bufferSize / poolWorkers) host-agnostic starting
+points: [operator-direction.md](operator-direction.md) section 2. Module
+options today: `blobSize` / `bufferSize` optional overrides.
 
 No blob tiering/compliance split this phase. Clever RPO/RTO backup design later.
 
@@ -222,7 +222,7 @@ Legacy content: **static files only**, no exceptions. Extra vhosts via
 
 ## Topology: single host (ends when operator says)
 
-- One mail VPS now (operator-chosen; size direction above).
+- One mail VPS now (operator-chosen; size/plan open).
 - Modules stay readable/separable; no active multi-node design.
 - Do not invent scale-out triggers.
 

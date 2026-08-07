@@ -72,8 +72,8 @@ Product detail lives under `docs/`. This file is standing law only.
   [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md) section 7 and
   [docs/research/arti-and-secrets-manager.md](docs/research/arti-and-secrets-manager.md).
 - First-class spam detection, lock-down, integrity.
-- Host: **operator-chosen VPS** (not Hetzner-as-default). Size direction
-  ~16 GB / 2 TB NVMe / 16 cores in operator-direction.md.
+- Host: **operator-chosen VPS** (not Hetzner-as-default). Size/plan open
+  (Q-HOST-1); do **not** invent or publish RAM/disk/core/SKU numbers.
 - No Cloudflare products as critical path (research cites OK).
 
 ## Evidence before "unsafe"

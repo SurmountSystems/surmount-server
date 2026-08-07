@@ -32,7 +32,7 @@ Summaries only. Detail and wording of record: operator-direction.md.
 
 | Topic | Direction (2026-07-30 + follow-up) |
 |-------|-------------------------------------|
-| Host | Operator-chosen VPS; ~16 GB / 2 TB NVMe / 16 cores; not Hetzner-as-default; do not invent provider name; assume NixOS allowed |
+| Host | Operator-chosen VPS; size/plan open (Q-HOST-1); not Hetzner-as-default; do not invent provider name or RAM/disk/core/SKU numbers; assume NixOS allowed |
 | RocksDB | Fine for now; all-role co-location OK |
 | Internal FTS | Good enough for now; Surmount own search product later |
 | In-memory store | Fine on RocksDB for now |
@@ -48,7 +48,7 @@ Summaries only. Detail and wording of record: operator-direction.md.
 | Spam / security | First-class; integrity highest |
 | Single VPS end | When operator says |
 | Stalwart fork | SurmountSystems/stalwart; **flake input** integration; agents never git fork unless instructed |
-| poolWorkers | Leave upstream default (logical CPU count = 16 on directed box) |
+| poolWorkers | Leave upstream default (logical CPU count on the operator-chosen host) |
 | Cert / ACME lock | **Not** locked ACME-only or rustls-acme-only; research open |
 | **Arti onion / HS** | **REQUIRED** reachability via Arti hidden services alongside clearnet; not optional; not clearnet edge replacement |
 
@@ -114,10 +114,9 @@ open engine files; JMAP/admin/CLI only.
 
 **Physical now:** one RocksDB at `/var/lib/stalwart-mail/db`.
 
-**Knobs:** starting points for blobSize / bufferSize / poolWorkers on the
-16 GB / 16-core box in operator-direction.md section 2. **poolWorkers:** leave
-default (16 on this box). Optional host note: 32-core SKU may be worth
-considering later; not a requirement.
+**Knobs:** host-agnostic starting points for blobSize / bufferSize /
+poolWorkers in operator-direction.md section 2. **poolWorkers:** leave
+upstream default (logical CPU count on the real host).
 
 **Still open later (not Day-1 blockers):** Postgres for data; split blobs;
 Surmount search product replacing reliance on internal FTS; product SQLite
@@ -363,14 +362,11 @@ separate services.
 
 ## Host provider and disk encryption
 
-**Directed shape:** ~16 GB RAM, 2 TB direct NVMe, 16 logical cores;
-operator-chosen VPS; not Hetzner-as-default preference text. Operator will ask
-the provider about NixOS + LUKS2. Assume NixOS is allowed. Do not invent a
-provider name.
-
-**Optional sizing note (not a requirement):** 32 cores is often not much more
-expensive and may be worth considering later because one node runs a lot. If
-the host has 32 logical CPUs, default `poolWorkers` becomes 32 unless pinned.
+**Directed shape:** operator-chosen VPS; not Hetzner-as-default preference
+text. **Do not invent or publish RAM, disk, core counts, or plan SKUs.**
+Operator will ask the provider about NixOS + LUKS2. Assume NixOS is allowed.
+Do not invent a provider name. `poolWorkers` defaults to logical CPU count on
+whatever host is bought (leave default unless measured need to cap).
 
 **Still open:**
 

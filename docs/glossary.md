@@ -243,9 +243,8 @@ Surmount packages are exposed this way.
 
 **poolWorkers (Stalwart RocksDB knob)**
 Worker threads for database operations. Upstream default: **number of
-logical CPUs** on the host. On a 16-core box, default is **16** unless
-overridden. Agents clarifying this were **not** requesting a 32-core host.
-Leave default unless measured need to pin.
+logical CPUs** on the host. Leave default unless measured need to pin.
+Do not invent a public core count for the VPS.
 
 **PTR / rDNS**
 Reverse DNS for the sending IP. Needed for decent mail deliverability.
@@ -327,7 +326,7 @@ deploy secrets for NixOS activation.
 
 **VPS**
 Virtual private server. Surmount mail host is an **operator-chosen VPS**
-(size direction ~16 GB RAM, 2 TB NVMe, 16 cores as of 2026-07-30). Not a
+(size/plan open; **Q-HOST-1**; do not invent RAM/disk/core/SKU numbers). Not a
 default "must be Hetzner" preference.
 
 ---

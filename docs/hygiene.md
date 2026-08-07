@@ -235,8 +235,8 @@ paths and operator-managed secret stores outside the public tree.
   [research/pqconnect-and-pqc.md](research/pqconnect-and-pqc.md).
 - First-class **spam detection**, lock-down, integrity.
 - Backups (`backups.nix`) before clever automation (clever RPO/RTO later).
-- Prefer an **operator-chosen VPS** you control (size direction ~16 GB /
-  2 TB NVMe / 16 cores); not Hetzner-as-default copy. Prefer **LUKS2** when
+- Prefer an **operator-chosen VPS** you control (size/plan open; do not invent
+  RAM/disk/core/SKU numbers); not Hetzner-as-default copy. Prefer **LUKS2** when
   install path allows.
 - Self-ops: journald, health endpoints, `scripts/` checks
   ([OPS.md](OPS.md)). No required third-party WAF.

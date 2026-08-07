@@ -52,6 +52,8 @@ craneLib'.buildPackage (
     meta = {
       description = "Surmount management UI (Axum + Leptos SSR)";
       mainProgram = "surmount-management-ui";
+      # Matches crates/ Cargo.toml SPDX: Unlicense (public domain dedication).
+      license = lib.licenses.unlicense;
     };
   }
 )

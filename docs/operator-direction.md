@@ -23,30 +23,16 @@ mark scaffold pieces transitional. Do not silently keep Hetzner-default or
 | Item | Direction |
 |------|-----------|
 | Form factor | Single **operator-chosen VPS** |
-| RAM | **16 GB** |
-| Disk | **2 TB direct NVMe** |
-| CPU | **16 logical cores** (working direction) |
+| Size / plan | **Open (Q-HOST-1).** Do **not** invent or publish RAM, disk, core counts, or provider SKUs as product law. Operator picks the machine. |
 | Provider default | **Not Hetzner as default preference.** Say operator-chosen VPS. Prefer a provider where PTR/rDNS and LUKS install path are workable. **Do not invent a provider name.** Operator will ask the chosen provider about NixOS + LUKS2 recommendations. **Assume** the provider allows NixOS. |
-| Load | Minimize idle load on the node; use cores when useful (compaction, FTS, builds, spam). |
+| Load | Minimize idle load on the node; use cores when useful (compaction, FTS, builds, spam). Do not run extra always-on agents "because cores exist." |
 | Topology end | Single VPS ends **when the operator says**. Do not invent scale-out triggers. Do not cite other projects as exit criteria. |
 
-### Host sizing notes (why this is comfortable for current phase)
+### Host capacity (no public size claim)
 
-- 16 GB RAM leaves headroom for RocksDB block cache (default 128 MiB write
-  buffer alone is small relative to 16 GB), Stalwart process caches, edge,
-  management UI, journald, and OS page cache over a large NVMe working set.
-- 2 TB NVMe is the long-horizon mail + static + backup staging capacity story
-  for recovering Synology MailPlus data without immediate blob tiering.
-- 16 cores: RocksDB `poolWorkers` defaults to the **number of logical CPUs**.
-  On this box that is **16** if unset. Agents were **not** asking for a 32-core
-  host. Spam and FTS can use parallelism without fighting a 2-core toy box.
-  Still prefer energy/idle thrift: do not run extra always-on agents "because
-  cores exist."
-- **Optional sizing note (not a requirement):** 32 cores is often not much more
-  expensive and can be worth considering later because one node runs mail,
-  edge, UI, spam, FTS, builds, and backups. If the operator buys 32 cores,
-  upstream `poolWorkers` default becomes 32 unless pinned. Stay at 16 for the
-  working direction until the operator changes host SKU.
+Capacity is whatever the operator buys. Public docs and agent prose must not
+assert a fixed RAM/disk/CPU SKU. Size RocksDB and other knobs from **upstream
+defaults + measurement on the real host**, not from an invented plan.
 
 ---
 
@@ -75,7 +61,7 @@ Surmount product code does **not** open RocksDB for search.
 | Good enough now? | **Yes. Good enough for now** (operator direction). |
 | Forever? | No. Surmount will **build its own search product later**. Until then do not add Meilisearch/ES "for convenience." |
 
-### RocksDB knobs on a 16 GB / 16-core / 2 TB NVMe box
+### RocksDB knobs (host-agnostic starting points)
 
 Upstream defaults (Stalwart RocksDB docs):
 
@@ -85,16 +71,17 @@ Upstream defaults (Stalwart RocksDB docs):
 | `bufferSize` | 134217728 (128 MiB) | In-memory write buffer |
 | `poolWorkers` | number of logical CPUs | DB worker threads |
 
-**On a 16-core host, default `poolWorkers` is 16.** Agents were clarifying
-that fact, not requesting 32 cores. Leave the default (16 on this box).
+Default `poolWorkers` follows **logical CPU count on the machine the operator
+chose**. Leave that default unless oversubscription is measured. Do not pin a
+public core count in docs.
 
-**Recommended starting points for this host (reasoning, not eternal law):**
+**Recommended starting points (reasoning, not eternal law; re-measure on host):**
 
 | Knob | Start with | Why |
 |------|------------|-----|
 | `blobSize` | **omit (16834)** or keep default | No evidence yet on Surmount attachment mix. Default is fine until import metrics say otherwise. Changing later is a store/settings apply concern; do not bikeshed Day-1. |
-| `bufferSize` | **omit (128 MiB)** initially; optional raise to **256 MiB** (`268435456`) if write-heavy import stalls and RAM headroom is clear | 128 MiB is a small slice of 16 GB. Doubling is still cheap. Do not jump to multi-GiB buffers without measurement; Stalwart has other caches too. |
-| `poolWorkers` | **omit (defaults to 16 on this box)** | Follow-up answer: leave at default. Cap later only if oversubscription is measured. |
+| `bufferSize` | **omit (128 MiB)** initially; optional raise to **256 MiB** (`268435456`) if write-heavy import stalls and **measured** RAM headroom is clear | Upstream 128 MiB is a small write buffer vs whole-node RAM on a typical mail box. Do not jump to multi-GiB buffers without measurement; Stalwart has other caches too. |
+| `poolWorkers` | **omit (defaults to logical CPUs)** | Leave at default. Cap later only if oversubscription is measured. |
 
 Module today: `services.stalwart-mail.blobSize` / `bufferSize` in
 `modules/stalwart-service.nix` (null = omit from `config.json`).
@@ -268,7 +255,7 @@ Full write-up: [SECRETS.md](SECRETS.md). Hygiene top rule: [hygiene.md](hygiene.
 
 | Older claim | Now |
 |-------------|-----|
-| Hetzner CX22/CX32 as default hosting preference | Operator-chosen VPS; size direction 16 GB / 2 TB NVMe / 16 cores |
+| Hetzner CX22/CX32 as default hosting preference | Operator-chosen VPS; size/plan open (Q-HOST-1); no invented SKUs |
 | "Caddy is the target edge default" | **Axum-first** HTTPS edge preferred; nginx transitional-to-delete; separate proxy products only if measured need |
 | All-RocksDB only as fragile scaffold with heavy "open" pressure | **RocksDB fine for now**; co-location OK this phase |
 | External FTS as near-term open pressure | Internal FTS **good enough for now**; own search product later |
@@ -324,8 +311,8 @@ docs updated to match.
 
 | | |
 |--|--|
-| **Answer** | If default is 16 (nCPU on this box), **leave at 16**. Agents were **not** asking for 32 cores. `poolWorkers` defaults to number of logical CPUs. Optional note: 32-core SKU may be worth considering later for one busy node; not a requirement. |
-| **Status** | Directed for this host shape: leave default. |
+| **Answer** | Leave `poolWorkers` at upstream default (**number of logical CPUs** on the host the operator chose). Cap only if oversubscription is measured. Do **not** invent or publish a core count as product law. |
+| **Status** | Directed: leave default; host size remains open (Q-HOST-1). |
 
 ---
 

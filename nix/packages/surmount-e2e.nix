@@ -43,6 +43,8 @@ let
       meta = {
         description = "Surmount end-to-end runners (local hermetic + host probes)";
         mainProgram = "surmount-e2e";
+        # Matches crates/ Cargo.toml SPDX: Unlicense (public domain dedication).
+        license = lib.licenses.unlicense;
       };
     }
   );
@@ -86,6 +88,7 @@ in
     meta = {
       description = "Local comprehensive Surmount end-to-end (nix run .#e2e)";
       mainProgram = "surmount-e2e";
+      license = lib.licenses.unlicense;
     };
   };
 
@@ -103,6 +106,7 @@ in
     meta = {
       description = "Host Surmount end-to-end probes (nix run .#e2e-host; exit 2 without env)";
       mainProgram = "surmount-e2e-host";
+      license = lib.licenses.unlicense;
     };
   };
 }

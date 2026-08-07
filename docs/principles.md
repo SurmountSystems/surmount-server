@@ -172,13 +172,12 @@ Nix+Rust.)
 ## 8. Single operator-chosen VPS (for now)
 
 - Host is an **operator-chosen VPS** (not a default Hetzner preference). Do
-  not invent a provider name. Assume NixOS is allowed; operator will confirm
-  NixOS + LUKS2 with the provider.
-- Working size direction (2026-07-30): about **16 GB RAM**, **2 TB direct
-  NVMe**, **16 logical cores**. Minimize idle load; use cores when useful
-  (FTS, compaction, builds). Optional later note: 32 cores can be worth
-  considering for one busy node; not a requirement. `poolWorkers` defaults
-  to logical CPU count (16 on the directed box).
+  not invent a provider name or publish assumed RAM/disk/core/SKU numbers
+  (**Q-HOST-1**). Assume NixOS is allowed; operator will confirm NixOS + LUKS2
+  with the provider.
+- Minimize idle load; use cores when useful (FTS, compaction, builds).
+  `poolWorkers` defaults to logical CPU count on whatever machine the
+  operator chose (leave default unless oversubscription is measured).
 - Single VPS ends **when the operator says**. Do not invent scale-out triggers
   or mention other projects as exit criteria.
 
