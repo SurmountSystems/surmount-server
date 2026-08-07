@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use rustls::server::ServerConfig;
 
 /// PEM certificate + private key paths for rustls / edge HTTPS.
@@ -299,7 +299,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{write_temp_self_signed_pems, TempPemDir};
+    use super::test_support::{TempPemDir, write_temp_self_signed_pems};
     use super::*;
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;

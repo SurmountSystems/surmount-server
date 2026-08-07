@@ -560,10 +560,10 @@ fn run_tor_deep(crates: &Path, tor_mode: &str, c: &mut Counters) -> bool {
             backend_ok = true;
             break;
         }
-        if let Some(ref mut b) = session.backend_child {
-            if let Ok(Some(_)) = b.try_wait() {
-                break;
-            }
+        if let Some(ref mut b) = session.backend_child
+            && let Ok(Some(_)) = b.try_wait()
+        {
+            break;
         }
         thread::sleep(Duration::from_millis(200));
     }
@@ -652,17 +652,17 @@ proxy_ports = [
     let mut onion = String::new();
     let deadline = Instant::now() + Duration::from_secs(120);
     while Instant::now() < deadline {
-        if let Some(ref mut a) = session.arti_child {
-            if let Ok(Some(_)) = a.try_wait() {
-                c.row(
-                    Status::Fail,
-                    "E. Local Tor publish+fetch",
-                    Some("arti exited early (may lack onion-service-service feature)"),
-                );
-                eprintln!("---- arti.log (tail, onion-redacted) ----");
-                redact_onion_tail(&arti_log, 60);
-                return false;
-            }
+        if let Some(ref mut a) = session.arti_child
+            && let Ok(Some(_)) = a.try_wait()
+        {
+            c.row(
+                Status::Fail,
+                "E. Local Tor publish+fetch",
+                Some("arti exited early (may lack onion-service-service feature)"),
+            );
+            eprintln!("---- arti.log (tail, onion-redacted) ----");
+            redact_onion_tail(&arti_log, 60);
+            return false;
         }
         onion = find_onion(&tmp.join("hs"), &arti_log);
         if onion.ends_with(".onion") {
@@ -742,12 +742,12 @@ fn find_onion(hs_dir: &Path, arti_log: &Path) -> String {
     if let Ok(walker) = walk_files(hs_dir) {
         for f in walker {
             let name = f.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name == "hostname" || name.ends_with(".onion") {
-                if let Ok(s) = fs::read_to_string(&f) {
-                    let t = s.trim().to_string();
-                    if t.ends_with(".onion") {
-                        return t;
-                    }
+            if (name == "hostname" || name.ends_with(".onion"))
+                && let Ok(s) = fs::read_to_string(&f)
+            {
+                let t = s.trim().to_string();
+                if t.ends_with(".onion") {
+                    return t;
                 }
             }
         }

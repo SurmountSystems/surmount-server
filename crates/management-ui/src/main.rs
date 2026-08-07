@@ -30,18 +30,18 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use axum::body::Bytes;
 use axum::extract::Path;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
-use axum::middleware::{from_fn, from_fn_with_state, Next};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
-use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
-use serde_json::{json, Value};
+use axum_server::tls_rustls::RustlsConfig;
+use serde_json::{Value, json};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -49,21 +49,21 @@ use crate::client_ip::client_ip_for_rate_limit;
 use crate::config::AppConfig;
 use crate::directory::Directory;
 use crate::redirect::{
-    https_port_for_redirect, redirect_bind_decision, redirect_http_to_https, HttpToHttps,
-    RedirectBindDecision, RedirectStatus,
+    HttpToHttps, RedirectBindDecision, RedirectStatus, https_port_for_redirect,
+    redirect_bind_decision, redirect_http_to_https,
 };
 use crate::tls::{
-    https_startup_decision, load_rustls_server_config, HttpsStartupDecision, RUSTLS_ACCEPTOR_READY,
+    HttpsStartupDecision, RUSTLS_ACCEPTOR_READY, https_startup_decision, load_rustls_server_config,
 };
 use surmount_management_ui::auth::{
-    absolute_request_url, auth_error_kind, baseline_csp, cookie_value, csrf_clear_cookie_header,
-    csrf_set_cookie_header, decode_event_b64_or_json, decode_session_cookie, encode_session_cookie,
-    is_html_path, is_public_path, new_csp_nonce, new_csrf_token, now_unix,
-    parse_event_from_auth_header, session_clear_cookie_header, session_set_cookie_header,
-    verify_csrf_double_submit, verify_nip98_event, AuthError, ChallengeResponse, CspNonce,
-    SessionPayload, CSRF_COOKIE_NAME, CSRF_HEADER_NAME, SESSION_COOKIE_NAME,
+    AuthError, CSRF_COOKIE_NAME, CSRF_HEADER_NAME, ChallengeResponse, CspNonce,
+    SESSION_COOKIE_NAME, SessionPayload, absolute_request_url, auth_error_kind, baseline_csp,
+    cookie_value, csrf_clear_cookie_header, csrf_set_cookie_header, decode_event_b64_or_json,
+    decode_session_cookie, encode_session_cookie, is_html_path, is_public_path, new_csp_nonce,
+    new_csrf_token, now_unix, parse_event_from_auth_header, session_clear_cookie_header,
+    session_set_cookie_header, verify_csrf_double_submit, verify_nip98_event,
 };
-use surmount_management_ui::ban::{should_reject_banned, AccessDecision, BanGuard};
+use surmount_management_ui::ban::{AccessDecision, BanGuard, should_reject_banned};
 use surmount_management_ui::rate_limit::{FixedWindowRateLimiter, RateLimitDecision};
 
 pub struct AppState {
@@ -533,8 +533,7 @@ async fn auth_challenge(
         created_at_window_secs: state.config.auth.nip98_max_skew_secs,
         kind: surmount_management_ui::auth::NIP98_KIND,
         auth_mode: state.config.auth.mode.as_str(),
-        note:
-            "Sign a kind 27235 event with u=url and method=POST; exchange at /api/v1/auth/session \
+        note: "Sign a kind 27235 event with u=url and method=POST; exchange at /api/v1/auth/session \
                (Authorization: Nostr <base64> or JSON body). nsec never sent to server. \
                Scaffold: rust-nostr verify + HMAC cookie session (Q-AUTH-1 residual).",
     })
@@ -639,10 +638,10 @@ async fn auth_session_create(
 }
 
 fn resolve_session_event(headers: &HeaderMap, body: &Bytes) -> Result<nostr::Event, AuthError> {
-    if let Some(auth) = header_str(headers, "authorization") {
-        if auth.to_ascii_lowercase().starts_with("nostr ") || auth.starts_with("Nostr ") {
-            return parse_event_from_auth_header(auth);
-        }
+    if let Some(auth) = header_str(headers, "authorization")
+        && (auth.to_ascii_lowercase().starts_with("nostr ") || auth.starts_with("Nostr "))
+    {
+        return parse_event_from_auth_header(auth);
     }
     if body.is_empty() {
         return Err(AuthError::Malformed);
@@ -824,17 +823,17 @@ fn identity_from_request(
         .ok_or(AuthError::Config)?;
 
     // 1) Session cookie
-    if let Some(cookie_hdr) = header_str(headers, "cookie") {
-        if let Some(val) = cookie_value(cookie_hdr, SESSION_COOKIE_NAME) {
-            match decode_session_cookie(val, secret, now_unix()) {
-                Ok(payload) => {
-                    return Ok(surmount_management_ui::auth::VerifiedIdentity {
-                        hex_pubkey: payload.sub,
-                    });
-                }
-                Err(AuthError::SessionExpired) | Err(AuthError::SessionInvalid) => {}
-                Err(e) => return Err(e),
+    if let Some(cookie_hdr) = header_str(headers, "cookie")
+        && let Some(val) = cookie_value(cookie_hdr, SESSION_COOKIE_NAME)
+    {
+        match decode_session_cookie(val, secret, now_unix()) {
+            Ok(payload) => {
+                return Ok(surmount_management_ui::auth::VerifiedIdentity {
+                    hex_pubkey: payload.sub,
+                });
             }
+            Err(AuthError::SessionExpired) | Err(AuthError::SessionInvalid) => {}
+            Err(e) => return Err(e),
         }
     }
 
@@ -1173,7 +1172,7 @@ mod edge_wire_tests {
     #[test]
     fn signal_unauthorized_hook_whitelist_and_enforce_record() {
         use surmount_management_ui::ban::{
-            parse_whitelist_cidrs, BanReason, BanSignalOutcome, MemoryBanBackend,
+            BanReason, BanSignalOutcome, MemoryBanBackend, parse_whitelist_cidrs,
         };
 
         let wl = parse_whitelist_cidrs("198.51.100.40/32").unwrap();
@@ -1186,9 +1185,11 @@ mod edge_wire_tests {
         headers.insert("x-real-ip", "198.51.100.40".parse().unwrap());
         let out = signal_unauthorized(&state, loopback, &headers).unwrap();
         assert_eq!(out, BanSignalOutcome::SkippedWhitelisted);
-        assert!(!state
-            .ban
-            .is_banned(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 40))));
+        assert!(
+            !state
+                .ban
+                .is_banned(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 40)))
+        );
 
         headers.insert("x-real-ip", "203.0.113.9".parse().unwrap());
         let out = signal_unauthorized(&state, loopback, &headers).unwrap();
@@ -1198,9 +1199,11 @@ mod edge_wire_tests {
                 reason: BanReason::Unauthorized
             }
         );
-        assert!(state
-            .ban
-            .is_banned(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9))));
+        assert!(
+            state
+                .ban
+                .is_banned(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9)))
+        );
     }
 
     #[test]
@@ -1498,7 +1501,7 @@ mod edge_wire_tests {
     async fn auth_failure_ban_matrix_signals_and_skips() {
         use std::net::Ipv4Addr;
         use surmount_management_ui::auth::{
-            event_to_nostr_authorization, sign_nip98_event, HttpMethod,
+            HttpMethod, event_to_nostr_authorization, sign_nip98_event,
         };
         use surmount_management_ui::ban::MemoryBanBackend;
 
@@ -1712,7 +1715,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn auth_session_from_nip98_then_me_and_root() {
         use surmount_management_ui::auth::{
-            event_to_nostr_authorization, sign_nip98_event, HttpMethod,
+            HttpMethod, event_to_nostr_authorization, sign_nip98_event,
         };
 
         let secret = b"test-session-secret-for-http-sess!!";
@@ -1830,7 +1833,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn middleware_whitelist_bypasses_rate_limit_and_touches_last_used() {
         use std::net::Ipv4Addr;
-        use surmount_management_ui::ban::{parse_whitelist_cidrs, MemoryBanBackend};
+        use surmount_management_ui::ban::{MemoryBanBackend, parse_whitelist_cidrs};
 
         let wl = parse_whitelist_cidrs("198.51.100.40/32").unwrap();
         let backend = MemoryBanBackend::new(wl);
@@ -1998,8 +2001,8 @@ mod edge_wire_tests {
 
     #[tokio::test]
     async fn https_serves_health_over_tls_with_temp_self_signed_pems() {
-        use crate::tls::test_support::{write_temp_self_signed_pems, TempPemDir};
-        use crate::tls::{https_startup_decision, ListenMode, RUSTLS_ACCEPTOR_READY};
+        use crate::tls::test_support::{TempPemDir, write_temp_self_signed_pems};
+        use crate::tls::{ListenMode, RUSTLS_ACCEPTOR_READY, https_startup_decision};
         use std::os::unix::fs::PermissionsExt;
 
         // Drop cleans PEMs even on panic/assert fail.
@@ -2084,8 +2087,8 @@ mod edge_wire_tests {
     /// stays separate: cleartext local serves /health 200, not 308/404-only.
     #[tokio::test]
     async fn https_plus_local_cleartext_api_serves_health_on_both() {
-        use crate::tls::test_support::{write_temp_self_signed_pems, TempPemDir};
-        use crate::tls::{https_startup_decision, ListenMode, RUSTLS_ACCEPTOR_READY};
+        use crate::tls::test_support::{TempPemDir, write_temp_self_signed_pems};
+        use crate::tls::{ListenMode, RUSTLS_ACCEPTOR_READY, https_startup_decision};
 
         let dir = TempPemDir::new("surmount-https-local-ct");
         let paths = write_temp_self_signed_pems(dir.path(), "surmount-https-local-ct");
@@ -2634,11 +2637,11 @@ mod edge_wire_tests {
     /// injected client (wire mock; no live Stalwart required).
     #[tokio::test]
     async fn accounts_api_respects_live_stalwart_directory() {
+        use axum::Router;
         use axum::body::Body;
-        use axum::http::{header, StatusCode};
+        use axum::http::{StatusCode, header};
         use axum::response::Response;
         use axum::routing::post;
-        use axum::Router;
         use serde_json::json;
 
         let mock = Router::new().route(
@@ -2895,7 +2898,7 @@ mod edge_wire_tests {
         keys: &nostr::Keys,
     ) -> (String, String, String) {
         use surmount_management_ui::auth::{
-            event_to_nostr_authorization, sign_nip98_event, HttpMethod,
+            HttpMethod, event_to_nostr_authorization, sign_nip98_event,
         };
 
         let session_url = format!("{base}/api/v1/auth/session");

@@ -19,7 +19,7 @@ use std::pin::Pin;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use surmount_management_ui::auth::AuthMode;
 
 use crate::api::{AccountEntry, AccountsInventory};
@@ -583,15 +583,15 @@ pub fn account_from_jmap_set_create(
 ) -> Result<AccountEntry, String> {
     let set_args = first_account_set_args(body)?;
     // JMAP set notCreated: { "new1": { type, description } }
-    if let Some(not_created) = set_args.get("notCreated").and_then(|v| v.as_object()) {
-        if let Some(err) = not_created.get(create_key) {
-            let err_type = err
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("unknown");
-            // Type only; never reflect full description body into client note.
-            return Err(format!("JMAP set notCreated type={err_type}"));
-        }
+    if let Some(not_created) = set_args.get("notCreated").and_then(|v| v.as_object())
+        && let Some(err) = not_created.get(create_key)
+    {
+        let err_type = err
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown");
+        // Type only; never reflect full description body into client note.
+        return Err(format!("JMAP set notCreated type={err_type}"));
     }
     let created = set_args
         .get("created")
@@ -640,14 +640,14 @@ pub fn account_from_jmap_set_create(
 /// Confirm update succeeded; prefer updated map entry if present.
 pub fn account_from_jmap_set_update(body: &Value, id: &str) -> Result<AccountEntry, String> {
     let set_args = first_account_set_args(body)?;
-    if let Some(not_updated) = set_args.get("notUpdated").and_then(|v| v.as_object()) {
-        if let Some(err) = not_updated.get(id) {
-            let err_type = err
-                .get("type")
-                .and_then(|t| t.as_str())
-                .unwrap_or("unknown");
-            return Err(format!("JMAP set notUpdated type={err_type}"));
-        }
+    if let Some(not_updated) = set_args.get("notUpdated").and_then(|v| v.as_object())
+        && let Some(err) = not_updated.get(id)
+    {
+        let err_type = err
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("JMAP set notUpdated type={err_type}"));
     }
     let updated = set_args
         .get("updated")
@@ -677,13 +677,12 @@ fn first_account_set_args(body: &Value) -> Result<&Value, String> {
         let name = arr[0].as_str().unwrap_or("");
         if name == "x:Account/set" || name == "Account/set" {
             let args = &arr[1];
-            if let Some(err_type) = args.get("type").and_then(|t| t.as_str()) {
-                if args.get("created").is_none()
-                    && args.get("updated").is_none()
-                    && args.get("destroyed").is_none()
-                {
-                    return Err(format!("JMAP method error type={err_type}"));
-                }
+            if let Some(err_type) = args.get("type").and_then(|t| t.as_str())
+                && args.get("created").is_none()
+                && args.get("updated").is_none()
+                && args.get("destroyed").is_none()
+            {
+                return Err(format!("JMAP method error type={err_type}"));
             }
             return Ok(args);
         }
@@ -739,10 +738,10 @@ pub fn accounts_from_jmap_response(body: &Value) -> Result<Vec<AccountEntry>, St
         let args = &arr[1];
         // JMAP error form: ["error", { type, ... }, "c1"] - method name is still
         // the requested method in some servers; others use "error". Check type.
-        if let Some(err_type) = args.get("type").and_then(|t| t.as_str()) {
-            if args.get("list").is_none() {
-                return Err(format!("JMAP method error type={err_type}"));
-            }
+        if let Some(err_type) = args.get("type").and_then(|t| t.as_str())
+            && args.get("list").is_none()
+        {
+            return Err(format!("JMAP method error type={err_type}"));
         }
         let list = args
             .get("list")
@@ -796,15 +795,15 @@ pub fn accounts_from_jmap_response(body: &Value) -> Result<Vec<AccountEntry>, St
 
     // Surface first error method if present (type only; no full args JSON).
     for entry in responses {
-        if let Some(arr) = entry.as_array() {
-            if arr.first().and_then(|v| v.as_str()) == Some("error") {
-                let err_type = arr
-                    .get(1)
-                    .and_then(|v| v.get("type"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("unknown");
-                return Err(format!("JMAP error response type={err_type}"));
-            }
+        if let Some(arr) = entry.as_array()
+            && arr.first().and_then(|v| v.as_str()) == Some("error")
+        {
+            let err_type = arr
+                .get(1)
+                .and_then(|v| v.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("unknown");
+            return Err(format!("JMAP error response type={err_type}"));
         }
     }
 
@@ -1045,12 +1044,12 @@ pub fn directory_stalwart(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::extract::Request;
-    use axum::http::{header, StatusCode};
+    use axum::http::{StatusCode, header};
     use axum::response::Response;
     use axum::routing::post;
-    use axum::Router;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 

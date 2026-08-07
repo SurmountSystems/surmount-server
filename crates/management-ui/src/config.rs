@@ -6,9 +6,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::tls::{ListenMode, TlsPaths};
-use surmount_management_ui::auth::{resolve_allowlist, AuthConfig, AuthMode};
-use surmount_management_ui::ban::{ban_config_from_env, BanConfig};
-use surmount_management_ui::rate_limit::{FixedWindowRateLimiter, DEFAULT_MAX_KEYS};
+use surmount_management_ui::auth::{AuthConfig, AuthMode, resolve_allowlist};
+use surmount_management_ui::ban::{BanConfig, ban_config_from_env};
+use surmount_management_ui::rate_limit::{DEFAULT_MAX_KEYS, FixedWindowRateLimiter};
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -78,10 +78,10 @@ pub fn onion_url_from_file(path: &Path) -> Option<String> {
 /// Resolve onion URL: `SURMOUNT_ONION_URL` wins when non-empty; else readable
 /// non-empty `SURMOUNT_ONION_HOSTNAME_FILE`. Unreadable file = unset.
 pub fn resolve_onion_url_from_env() -> Option<String> {
-    if let Ok(v) = env::var("SURMOUNT_ONION_URL") {
-        if let Some(n) = normalize_onion_url(&v) {
-            return Some(n);
-        }
+    if let Ok(v) = env::var("SURMOUNT_ONION_URL")
+        && let Some(n) = normalize_onion_url(&v)
+    {
+        return Some(n);
     }
     match env::var("SURMOUNT_ONION_HOSTNAME_FILE") {
         Ok(p) => {
@@ -413,6 +413,13 @@ mod tests {
         }
     }
 
+    /// Edition 2024: `set_var`/`remove_var` are unsafe (process-global).
+    /// Call only under `EnvGuard` (serialized tests).
+    fn set_env(key: &str, val: impl AsRef<std::ffi::OsStr>) {
+        // SAFETY: EnvGuard mutex serializes process env mutation in this module's tests.
+        unsafe { std::env::set_var(key, val) }
+    }
+
     fn clear_surmount_env() {
         for k in [
             "SURMOUNT_LISTEN",
@@ -449,7 +456,8 @@ mod tests {
             "SURMOUNT_PUBLIC_BASE_URL",
             "SURMOUNT_NIP98_MAX_SKEW_SECS",
         ] {
-            std::env::remove_var(k);
+            // SAFETY: EnvGuard mutex serializes process env mutation in this module's tests.
+            unsafe { std::env::remove_var(k) }
         }
     }
 
@@ -464,7 +472,7 @@ mod tests {
     #[test]
     fn auth_mode_nostr_requires_session_secret() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_AUTH_MODE", "nostr");
+        set_env("SURMOUNT_AUTH_MODE", "nostr");
         let err = AppConfig::from_env().unwrap_err();
         assert!(
             err.contains("SESSION_SECRET") || err.contains("session"),
@@ -475,8 +483,8 @@ mod tests {
     #[test]
     fn auth_mode_nostr_with_secret_ok() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_AUTH_MODE", "nostr");
-        std::env::set_var("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
+        set_env("SURMOUNT_AUTH_MODE", "nostr");
+        set_env("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
         let cfg = AppConfig::from_env().unwrap();
         assert_eq!(cfg.auth.mode, AuthMode::Nostr);
         assert!(!cfg.auth.session_secret.as_ref().unwrap().is_empty());
@@ -498,16 +506,16 @@ mod tests {
         let file = dir.join("allow.txt");
         std::fs::write(&file, format!("{file_hex}\n")).unwrap();
 
-        std::env::set_var("SURMOUNT_AUTH_MODE", "nostr");
-        std::env::set_var("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
-        std::env::set_var("SURMOUNT_NOSTR_ALLOWLIST_FILE", file.to_str().unwrap());
+        set_env("SURMOUNT_AUTH_MODE", "nostr");
+        set_env("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
+        set_env("SURMOUNT_NOSTR_ALLOWLIST_FILE", file.to_str().unwrap());
         let cfg = AppConfig::from_env().unwrap();
         assert!(
             allowlist_contains(&cfg.auth.allowlist, &file_hex),
             "file allowlist should load when env empty"
         );
 
-        std::env::set_var("SURMOUNT_NOSTR_ALLOWLIST", &env_hex);
+        set_env("SURMOUNT_NOSTR_ALLOWLIST", &env_hex);
         let cfg2 = AppConfig::from_env().unwrap();
         assert!(
             allowlist_contains(&cfg2.auth.allowlist, &env_hex),
@@ -532,16 +540,17 @@ mod tests {
         assert!(!cfg.https_allow_cleartext_escape);
         assert!(cfg.rate_limiter().is_some());
         assert_eq!(cfg.ban.enforcement, BanEnforcement::Off);
-        assert!(cfg
-            .redirect_allowed_hosts
-            .iter()
-            .any(|h| h == "services.surmount.systems"));
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "services.surmount.systems")
+        );
     }
 
     #[test]
     fn ban_invalid_enforcement_is_config_error() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_BAN_ENFORCEMENT", "sometimes");
+        set_env("SURMOUNT_BAN_ENFORCEMENT", "sometimes");
         let err = AppConfig::from_env().unwrap_err();
         assert!(err.contains("SURMOUNT_BAN_ENFORCEMENT"), "{err}");
     }
@@ -549,9 +558,9 @@ mod tests {
     #[test]
     fn ban_enforce_nft_exec_without_bin_is_config_error() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_BAN_ENFORCEMENT", "enforce");
-        std::env::set_var("SURMOUNT_BAN_BACKEND", "nft");
-        std::env::set_var("SURMOUNT_BAN_NFT_EXEC", "1");
+        set_env("SURMOUNT_BAN_ENFORCEMENT", "enforce");
+        set_env("SURMOUNT_BAN_BACKEND", "nft");
+        set_env("SURMOUNT_BAN_NFT_EXEC", "1");
         let err = AppConfig::from_env().unwrap_err();
         assert!(
             err.contains("fail-closed") || err.contains("NFT_BIN"),
@@ -562,7 +571,7 @@ mod tests {
     #[test]
     fn ban_invalid_nft_exec_is_config_error() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_BAN_NFT_EXEC", "maybe");
+        set_env("SURMOUNT_BAN_NFT_EXEC", "maybe");
         let err = AppConfig::from_env().unwrap_err();
         assert!(err.contains("SURMOUNT_BAN_NFT_EXEC"), "{err}");
     }
@@ -570,7 +579,7 @@ mod tests {
     #[test]
     fn https_mode_requires_tls_paths() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN_MODE", "https");
+        set_env("SURMOUNT_LISTEN_MODE", "https");
         let err = AppConfig::from_env().unwrap_err();
         assert!(err.contains("SURMOUNT_TLS_CERT"), "{err}");
     }
@@ -578,11 +587,11 @@ mod tests {
     #[test]
     fn https_mode_loads_tls_paths() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN_MODE", "https");
-        std::env::set_var("SURMOUNT_TLS_CERT", "/run/surmount-secrets/tls/cert.pem");
-        std::env::set_var("SURMOUNT_TLS_KEY", "/run/surmount-secrets/tls/key.pem");
-        std::env::set_var("SURMOUNT_REDIRECT_HTTP_TO_HTTPS", "true");
-        std::env::set_var("SURMOUNT_HTTP_REDIRECT_LISTEN", "127.0.0.1:8080");
+        set_env("SURMOUNT_LISTEN_MODE", "https");
+        set_env("SURMOUNT_TLS_CERT", "/run/surmount-secrets/tls/cert.pem");
+        set_env("SURMOUNT_TLS_KEY", "/run/surmount-secrets/tls/key.pem");
+        set_env("SURMOUNT_REDIRECT_HTTP_TO_HTTPS", "true");
+        set_env("SURMOUNT_HTTP_REDIRECT_LISTEN", "127.0.0.1:8080");
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.listen_mode.is_https());
         assert!(cfg.redirect_http_to_https);
@@ -595,7 +604,7 @@ mod tests {
     #[test]
     fn rate_limit_zero_disables_limiter() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_RATE_LIMIT_MAX", "0");
+        set_env("SURMOUNT_RATE_LIMIT_MAX", "0");
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.rate_limiter().is_none());
     }
@@ -604,15 +613,15 @@ mod tests {
     fn cleartext_escape_env_defaults_off() {
         let _g = EnvGuard::acquire();
         assert!(!AppConfig::from_env().unwrap().https_allow_cleartext_escape);
-        std::env::set_var("SURMOUNT_HTTPS_ALLOW_CLEARTEXT_ESCAPE", "1");
+        set_env("SURMOUNT_HTTPS_ALLOW_CLEARTEXT_ESCAPE", "1");
         assert!(AppConfig::from_env().unwrap().https_allow_cleartext_escape);
     }
 
     #[test]
     fn invalid_http_redirect_listen_is_config_error() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_REDIRECT_HTTP_TO_HTTPS", "true");
-        std::env::set_var("SURMOUNT_HTTP_REDIRECT_LISTEN", "not-a-socket");
+        set_env("SURMOUNT_REDIRECT_HTTP_TO_HTTPS", "true");
+        set_env("SURMOUNT_HTTP_REDIRECT_LISTEN", "not-a-socket");
         let err = AppConfig::from_env().unwrap_err();
         assert!(
             err.contains("SURMOUNT_HTTP_REDIRECT_LISTEN") && err.contains("not-a-socket"),
@@ -623,7 +632,7 @@ mod tests {
     #[test]
     fn empty_http_redirect_listen_is_none() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_HTTP_REDIRECT_LISTEN", "   ");
+        set_env("SURMOUNT_HTTP_REDIRECT_LISTEN", "   ");
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.http_redirect_listen.is_none());
     }
@@ -631,8 +640,8 @@ mod tests {
     #[test]
     fn local_cleartext_listen_parses_loopback() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN", "0.0.0.0:443");
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
+        set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         assert_eq!(
             cfg.local_cleartext_listen.unwrap().to_string(),
@@ -644,7 +653,7 @@ mod tests {
     #[test]
     fn local_cleartext_empty_is_none() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "  ");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "  ");
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.local_cleartext_listen.is_none());
     }
@@ -652,7 +661,7 @@ mod tests {
     #[test]
     fn local_cleartext_invalid_is_config_error() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "not-a-socket");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "not-a-socket");
         let err = AppConfig::from_env().unwrap_err();
         assert!(
             err.contains("SURMOUNT_LOCAL_CLEARTEXT_LISTEN") && err.contains("not-a-socket"),
@@ -663,8 +672,8 @@ mod tests {
     #[test]
     fn local_cleartext_must_be_loopback() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN", "127.0.0.1:443");
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "0.0.0.0:8090");
+        set_env("SURMOUNT_LISTEN", "127.0.0.1:443");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "0.0.0.0:8090");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
         assert!(err.contains("loopback"), "{err}");
@@ -673,8 +682,8 @@ mod tests {
     #[test]
     fn local_cleartext_must_differ_from_primary() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN", "127.0.0.1:8090");
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
+        set_env("SURMOUNT_LISTEN", "127.0.0.1:8090");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
         assert!(err.contains("differ") && err.contains("LISTEN"), "{err}");
@@ -685,8 +694,8 @@ mod tests {
         // 0.0.0.0:8090 + 127.0.0.1:8090 looks like different SocketAddrs but
         // Linux bind collides. Fail closed at validate (not only at bind).
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN", "0.0.0.0:8090");
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
+        set_env("SURMOUNT_LISTEN", "0.0.0.0:8090");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
         assert!(err.contains("port") && err.contains("8090"), "{err}");
@@ -695,9 +704,9 @@ mod tests {
     #[test]
     fn local_cleartext_must_differ_from_redirect() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN", "0.0.0.0:443");
-        std::env::set_var("SURMOUNT_HTTP_REDIRECT_LISTEN", "127.0.0.1:8080");
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8080");
+        set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        set_env("SURMOUNT_HTTP_REDIRECT_LISTEN", "127.0.0.1:8080");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8080");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
         assert!(err.contains("differ") && err.contains("REDIRECT"), "{err}");
@@ -706,9 +715,9 @@ mod tests {
     #[test]
     fn local_cleartext_must_differ_port_from_redirect() {
         let _g = EnvGuard::acquire();
-        std::env::set_var("SURMOUNT_LISTEN", "0.0.0.0:443");
-        std::env::set_var("SURMOUNT_HTTP_REDIRECT_LISTEN", "0.0.0.0:8090");
-        std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
+        set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        set_env("SURMOUNT_HTTP_REDIRECT_LISTEN", "0.0.0.0:8090");
+        set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
         assert!(err.contains("port") && err.contains("REDIRECT"), "{err}");
@@ -742,8 +751,8 @@ mod tests {
         let file_onion = "b".repeat(56);
         let env_onion = "a".repeat(56);
         std::fs::write(&file, format!("{file_onion}.onion\n")).unwrap();
-        std::env::set_var("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
-        std::env::set_var("SURMOUNT_ONION_URL", format!("{env_onion}.onion"));
+        set_env("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
+        set_env("SURMOUNT_ONION_URL", format!("{env_onion}.onion"));
         let cfg = AppConfig::from_env().unwrap();
         let expected = format!("http://{env_onion}.onion");
         assert_eq!(cfg.onion_url.as_deref(), Some(expected.as_str()));
@@ -758,7 +767,7 @@ mod tests {
         let file = dir.join("hostname");
         let file_onion = "c".repeat(56);
         std::fs::write(&file, format!("{file_onion}.onion\n")).unwrap();
-        std::env::set_var("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
+        set_env("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
         let cfg = AppConfig::from_env().unwrap();
         let expected = format!("http://{file_onion}.onion");
         assert_eq!(cfg.onion_url.as_deref(), Some(expected.as_str()));
@@ -783,7 +792,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let file = dir.join("hostname");
         std::fs::write(&file, "   \n\n").unwrap();
-        std::env::set_var("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
+        set_env("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.onion_url.is_none());
         let _ = std::fs::remove_dir_all(&dir);

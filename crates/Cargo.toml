@@ -6,8 +6,9 @@ members = [
 ]
 
 [workspace.package]
-edition = "2021"
-license = "MIT"
+edition = "2024"
+# SPDX: https://spdx.org/licenses/Unlicense.html
+license = "Unlicense"
 repository = "https://github.com/SurmountSystems/surmount-server"
 
 [workspace.dependencies]

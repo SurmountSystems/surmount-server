@@ -5,14 +5,14 @@
 
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::config::AppConfig;
 use crate::AppState;
+use crate::config::AppConfig;
 
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -144,7 +144,7 @@ pub async fn create_account_via_directory(
     state: &AppState,
     body: CreateAccountBody,
 ) -> (StatusCode, Json<Value>) {
-    use crate::directory::{require_mutation_auth_coupling, CreateAccountInput};
+    use crate::directory::{CreateAccountInput, require_mutation_auth_coupling};
 
     if let Err(msg) = require_mutation_auth_coupling(
         state.config.auth.mode,
@@ -173,7 +173,7 @@ pub async fn update_account_via_directory(
     id: String,
     body: UpdateAccountBody,
 ) -> (StatusCode, Json<Value>) {
-    use crate::directory::{require_mutation_auth_coupling, UpdateAccountInput};
+    use crate::directory::{UpdateAccountInput, require_mutation_auth_coupling};
 
     if let Err(msg) = require_mutation_auth_coupling(
         state.config.auth.mode,
@@ -409,10 +409,11 @@ mod tests {
         assert_eq!(inv.source, "config");
         assert_eq!(inv.domains.len(), 3);
         assert!(inv.domains.iter().any(|d| d.role == "primary"));
-        assert!(inv
-            .domains
-            .iter()
-            .any(|d| d.name == "services.example.test"));
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.name == "services.example.test")
+        );
     }
 
     /// Named contract: system status exposes onion only when configured.

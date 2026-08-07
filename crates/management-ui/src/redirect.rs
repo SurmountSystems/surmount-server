@@ -34,14 +34,15 @@ pub fn host_without_port(host: &str) -> &str {
         return host;
     }
     // hostname:port or ipv4:port — only split on last colon if it looks like port
-    if let Some((name, maybe_port)) = host.rsplit_once(':') {
-        if maybe_port.chars().all(|c| c.is_ascii_digit()) && !maybe_port.is_empty() {
-            // Avoid treating bare IPv6 without brackets as host:port (multiple colons).
-            if name.contains(':') {
-                return host;
-            }
-            return name;
+    if let Some((name, maybe_port)) = host.rsplit_once(':')
+        && maybe_port.chars().all(|c| c.is_ascii_digit())
+        && !maybe_port.is_empty()
+    {
+        // Avoid treating bare IPv6 without brackets as host:port (multiple colons).
+        if name.contains(':') {
+            return host;
         }
+        return name;
     }
     host
 }
@@ -70,10 +71,10 @@ pub fn host_is_allowlisted(host_header: &str, allowed: &[String]) -> bool {
             return true;
         }
         // Canonical IP compare when both parse as IPs.
-        if let (Ok(c), Ok(al)) = (candidate.parse::<IpAddr>(), allow.parse::<IpAddr>()) {
-            if c == al {
-                return true;
-            }
+        if let (Ok(c), Ok(al)) = (candidate.parse::<IpAddr>(), allow.parse::<IpAddr>())
+            && c == al
+        {
+            return true;
         }
     }
     false

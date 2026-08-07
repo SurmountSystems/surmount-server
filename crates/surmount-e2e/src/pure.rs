@@ -66,11 +66,7 @@ pub fn host_runner_exit_code(host_on: bool, fail_rows: u32) -> i32 {
     if !host_on {
         return 2;
     }
-    if fail_rows > 0 {
-        1
-    } else {
-        0
-    }
+    if fail_rows > 0 { 1 } else { 0 }
 }
 
 /// BASE_URL empty while host mode is on is a FAIL row (not silent SKIP).

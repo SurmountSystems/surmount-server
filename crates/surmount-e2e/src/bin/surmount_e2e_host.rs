@@ -17,11 +17,12 @@ use std::env;
 use std::process::{Command, Stdio};
 
 use surmount_e2e::pure::{
-    base_url_missing_is_fail, cap_string_has_net_admin, host_mode_enabled, host_runner_exit_code,
-    hostport_from_base_url, lab_ip_ban_precheck, mdwe_row, LabIpBanPrecheck, MdweRow,
+    LabIpBanPrecheck, MdweRow, base_url_missing_is_fail, cap_string_has_net_admin,
+    host_mode_enabled, host_runner_exit_code, hostport_from_base_url, lab_ip_ban_precheck,
+    mdwe_row,
 };
 use surmount_e2e::report::{Counters, Status};
-use surmount_e2e::tls_check::{check_tls, TlsCheckError};
+use surmount_e2e::tls_check::{TlsCheckError, check_tls};
 
 fn main() {
     let code = run();

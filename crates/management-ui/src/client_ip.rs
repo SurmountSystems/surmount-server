@@ -18,10 +18,10 @@ pub fn client_ip_for_rate_limit(
     x_real_ip: Option<&str>,
     _x_forwarded_for: Option<&str>,
 ) -> String {
-    if peer.is_loopback() {
-        if let Some(ip) = x_real_ip.and_then(parse_single_ip) {
-            return ip.to_string();
-        }
+    if peer.is_loopback()
+        && let Some(ip) = x_real_ip.and_then(parse_single_ip)
+    {
+        return ip.to_string();
     }
     peer.to_string()
 }

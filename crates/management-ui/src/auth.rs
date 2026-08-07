@@ -17,8 +17,8 @@ use std::fmt;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
+use base64::engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use nostr::nips::nip19::ToBech32;
 pub use nostr::nips::nip98::{HttpData, HttpMethod};
@@ -554,10 +554,10 @@ impl CspNonce {
 pub fn cookie_value<'a>(cookie_header: &'a str, name: &str) -> Option<&'a str> {
     for part in cookie_header.split(';') {
         let part = part.trim();
-        if let Some(rest) = part.strip_prefix(name) {
-            if let Some(v) = rest.strip_prefix('=') {
-                return Some(v);
-            }
+        if let Some(rest) = part.strip_prefix(name)
+            && let Some(v) = rest.strip_prefix('=')
+        {
+            return Some(v);
         }
     }
     None

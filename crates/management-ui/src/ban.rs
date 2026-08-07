@@ -303,27 +303,27 @@ impl MemoryInner {
             whitelist_last_used: HashMap::new(),
             state_path: state_path.clone(),
         };
-        if let Some(path) = state_path {
-            if path.exists() {
-                let raw = std::fs::read_to_string(&path)
-                    .map_err(|e| format!("read ban state {}: {e}", path.display()))?;
-                let file: BanStateFile = serde_json::from_str(&raw).map_err(|e| {
-                    format!("ban state {} is corrupt (fail-closed): {e}", path.display())
+        if let Some(path) = state_path
+            && path.exists()
+        {
+            let raw = std::fs::read_to_string(&path)
+                .map_err(|e| format!("read ban state {}: {e}", path.display()))?;
+            let file: BanStateFile = serde_json::from_str(&raw).map_err(|e| {
+                format!("ban state {} is corrupt (fail-closed): {e}", path.display())
+            })?;
+            for (k, rec) in file.bans {
+                let ip: IpAddr = k
+                    .parse()
+                    .map_err(|e| format!("ban state {} bad ban key {k:?}: {e}", path.display()))?;
+                inner.bans.insert(ip, rec);
+            }
+            for (k, secs) in file.whitelist_last_used {
+                let ip: IpAddr = k.parse().map_err(|e| {
+                    format!("ban state {} bad whitelist key {k:?}: {e}", path.display())
                 })?;
-                for (k, rec) in file.bans {
-                    let ip: IpAddr = k.parse().map_err(|e| {
-                        format!("ban state {} bad ban key {k:?}: {e}", path.display())
-                    })?;
-                    inner.bans.insert(ip, rec);
-                }
-                for (k, secs) in file.whitelist_last_used {
-                    let ip: IpAddr = k.parse().map_err(|e| {
-                        format!("ban state {} bad whitelist key {k:?}: {e}", path.display())
-                    })?;
-                    inner
-                        .whitelist_last_used
-                        .insert(ip, unix_to_system_time(secs));
-                }
+                inner
+                    .whitelist_last_used
+                    .insert(ip, unix_to_system_time(secs));
             }
         }
         Ok(inner)
@@ -690,13 +690,12 @@ impl BanConfig {
         }
 
         if helper {
-            if let Some(s) = &self.nft_helper_sock {
-                if s.as_os_str().is_empty() || !s.is_absolute() {
-                    return Err(
-                        "SURMOUNT_BAN_NFT_HELPER_SOCK must be an absolute path (fail-closed)"
-                            .into(),
-                    );
-                }
+            if let Some(s) = &self.nft_helper_sock
+                && (s.as_os_str().is_empty() || !s.is_absolute())
+            {
+                return Err(
+                    "SURMOUNT_BAN_NFT_HELPER_SOCK must be an absolute path (fail-closed)".into(),
+                );
             }
             if let Some(h) = &self.nft_helper_bin {
                 if h.as_os_str().is_empty() || !h.is_absolute() {

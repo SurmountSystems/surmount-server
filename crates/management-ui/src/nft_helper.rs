@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ban::{nft_add_ban_args, nft_remove_ban_args, NftExec};
+use crate::ban::{NftExec, nft_add_ban_args, nft_remove_ban_args};
 
 /// Wire op name accepted by the helper binary.
 pub const OP_ADD_BAN: &str = "add_ban";
@@ -592,7 +592,7 @@ pub fn helper_nft_bin_from_env(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ban::{RecordingNftExec, NFT_SET_BAN4, NFT_SET_BAN6, NFT_TABLE};
+    use crate::ban::{NFT_SET_BAN4, NFT_SET_BAN6, NFT_TABLE, RecordingNftExec};
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::sync::Arc;
 

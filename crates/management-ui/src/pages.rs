@@ -19,12 +19,12 @@ use axum::extract::{Extension, State};
 use axum::response::Html;
 use leptos::prelude::*;
 
+use crate::AppState;
 use crate::api::{
-    domains_inventory, probe_stalwart, AccountsInventory, DomainsInventory, StalwartStatus,
+    AccountsInventory, DomainsInventory, StalwartStatus, domains_inventory, probe_stalwart,
 };
 use crate::config::AppConfig;
 use crate::tls::ListenMode;
-use crate::AppState;
 use surmount_management_ui::auth::CspNonce;
 use surmount_management_ui::ban::BanEnforcement;
 
@@ -62,11 +62,7 @@ pub enum StalwartChip {
 
 impl StalwartChip {
     pub fn from_status(s: &StalwartStatus) -> Self {
-        if s.reachable {
-            Self::Ok
-        } else {
-            Self::Fail
-        }
+        if s.reachable { Self::Ok } else { Self::Fail }
     }
 
     fn class(self) -> &'static str {
@@ -1311,7 +1307,7 @@ SURMOUNT_SESSION_SECRET."
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{accounts_inventory, DomainEntry};
+    use crate::api::{DomainEntry, accounts_inventory};
 
     /// Surmount DOGE v1.0.0 pure 3-bit RGB (exactly eight colors).
     /// Spec: https://github.com/SurmountSystems/specs/blob/main/0001_DOGE.md
