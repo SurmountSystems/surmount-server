@@ -546,18 +546,17 @@ ports; docs lag is called out per row where it matters.
 
 ## 23. Hosting preference: operator-chosen VPS, PTR control, LUKS install path
 
-- **Claim the tree currently implies:** **Operator-chosen VPS** (not
-  Hetzner-as-default); operator-controlled **PTR/rDNS**; install path that
-  can do **LUKS2** via disko + nixos-anywhere when possible. Sample host uses
-  qemu-guest profile and labeled ext4 root (placeholder). **Size/plan open
-  (Q-HOST-1)**; public docs must not invent RAM/disk/core/SKU numbers.
+- **Claim the tree currently implies:** **Operator-chosen VPS**;
+  operator-controlled **PTR/rDNS**; install path that can do **LUKS2** via
+  disko + nixos-anywhere when possible. Sample host uses qemu-guest profile
+  and labeled ext4 root (placeholder). **Size/plan open (Q-HOST-1)**; public
+  docs must not invent provider names or RAM/disk/core/SKU numbers.
 - **Where it lives:** `README.md` (Hosting), `docs/SECURITY.md`,
   `docs/operator-direction.md`, `hosts/mail-vps/configuration.nix`.
 - **Why someone might have put it there:** Mail-friendly VPS + rDNS; FDE when
   greenfield install allows.
-- **Status:** **operator direction** for "operator-chosen / not Hetzner
-  default"; size remains open. Historical CX-class framing scrubbed from
-  living docs (2026-08-07).
+- **Status:** **operator direction** for operator-chosen host; size remains
+  open. Invented brand/SKU hosting copy scrubbed from living docs (2026-08-07).
 - **Open question for operator:** Which provider and plan is production
   (**Q-HOST-1**), and will first install be LUKS or interim plain disk
   (**Q-HOST-2**)?

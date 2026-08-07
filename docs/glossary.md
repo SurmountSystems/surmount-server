@@ -326,8 +326,8 @@ deploy secrets for NixOS activation.
 
 **VPS**
 Virtual private server. Surmount mail host is an **operator-chosen VPS**
-(size/plan open; **Q-HOST-1**; do not invent RAM/disk/core/SKU numbers). Not a
-default "must be Hetzner" preference.
+(size/plan open; **Q-HOST-1**; do not invent provider names or
+RAM/disk/core/SKU numbers).
 
 ---
 

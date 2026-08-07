@@ -63,7 +63,7 @@ reload: [COMPACTION-PIN.md](COMPACTION-PIN.md).
 
   Optional static vhosts (legacy sites): edge serves files only
   Disk: prefer LUKS2 root (FDE) when install allows; see SECURITY.md
-  Host: operator-chosen VPS (not Hetzner-as-default)
+  Host: operator-chosen VPS (size/plan open; no invented provider SKUs)
 ```
 
 ## Ownership

@@ -72,8 +72,8 @@ Product detail lives under `docs/`. This file is standing law only.
   [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md) section 7 and
   [docs/research/arti-and-secrets-manager.md](docs/research/arti-and-secrets-manager.md).
 - First-class spam detection, lock-down, integrity.
-- Host: **operator-chosen VPS** (not Hetzner-as-default). Size/plan open
-  (Q-HOST-1); do **not** invent or publish RAM/disk/core/SKU numbers.
+- Host: **operator-chosen VPS**. Size/plan open (Q-HOST-1); do **not** invent
+  or publish provider names, RAM/disk/core counts, or plan SKUs.
 - No Cloudflare products as critical path (research cites OK).
 
 ## Evidence before "unsafe"

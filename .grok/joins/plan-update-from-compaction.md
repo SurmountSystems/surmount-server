@@ -23,7 +23,7 @@ Plan author: read this join + COMPACTION-PIN section headers; open one child doc
 
 ## Product identity (1 para)
 
-**Surmount Server** is a hermetic **NixOS + Nix + Rust** mail and web stack that replaces an offline Synology DiskStation (MailPlus + static sites) with a rebuildable flake-owned single VPS. Primary domain `surmount.systems`; management UI `services.surmount.systems`; MX `mail.surmount.systems`. **Stalwart** (overlay pin **0.16.15** binary FOD) owns SMTP/submission/IMAP/ManageSieve/JMAP, spam path, and message store (**RocksDB** all-role co-location fine for now; internal FTS good enough now). Surmount owns product admin then v1 webmail (**Axum + Leptos SSR** path; embedded HTML bridge today), **Nostr** product auth, **Axum-first** HTTPS edge (nginx transitional-to-delete), deploy secrets at activation, planned **Vaultwarden** for humans, **LUKS2** disk posture, and **Arti HS required** alongside clearnet. No Cloudflare products on critical path. Tree is public-domain aware: zero secrets in git. Form factor: one operator-chosen VPS (~16 GB / 2 TB NVMe / 16 cores) until the operator says otherwise. Naming ladder: Facta Non Verba / Fix / FixOS / upstream nixpkgs / Surmount package overlay / future fixpkgs (not shipping yet).
+**Surmount Server** is a hermetic **NixOS + Nix + Rust** mail and web stack that replaces an offline Synology DiskStation (MailPlus + static sites) with a rebuildable flake-owned single VPS. Primary domain `surmount.systems`; management UI `services.surmount.systems`; MX `mail.surmount.systems`. **Stalwart** (overlay pin **0.16.15** binary FOD) owns SMTP/submission/IMAP/ManageSieve/JMAP, spam path, and message store (**RocksDB** all-role co-location fine for now; internal FTS good enough now). Surmount owns product admin then v1 webmail (**Axum + Leptos SSR** path; embedded HTML bridge today), **Nostr** product auth, **Axum-first** HTTPS edge (nginx transitional-to-delete), deploy secrets at activation, planned **Vaultwarden** for humans, **LUKS2** disk posture, and **Arti HS required** alongside clearnet. No Cloudflare products on critical path. Tree is public-domain aware: zero secrets in git. Form factor: one operator-chosen VPS (size/plan open; Q-HOST-1) until the operator says otherwise. Naming ladder: Facta Non Verba / Fix / FixOS / upstream nixpkgs / Surmount package overlay / future fixpkgs (not shipping yet).
 
 ---
 
@@ -45,7 +45,7 @@ Plan author: read this join + COMPACTION-PIN section headers; open one child doc
 
 | Topic | Pin | Doc ref |
 |-------|-----|---------|
-| Host form | Single operator-chosen VPS; ~16 GB / 2 TB NVMe / 16 cores; not Hetzner-as-default; do not invent provider | COMPACTION-PIN s4; operator-direction s1 |
+| Host form | Single operator-chosen VPS; size/plan open (Q-HOST-1); do not invent provider name or SKUs | COMPACTION-PIN s4; operator-direction s1 |
 | Topology end | When operator says; no invented scale-out | STACK; operator-direction s1 |
 | Mail engine | Stalwart; no parallel MTA/mailbox corpus | STACK ownership; open-choices |
 | Stores now | RocksDB all-roles co-located OK | operator-direction s2; DATASTORES |

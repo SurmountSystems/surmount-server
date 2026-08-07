@@ -236,7 +236,7 @@ paths and operator-managed secret stores outside the public tree.
 - First-class **spam detection**, lock-down, integrity.
 - Backups (`backups.nix`) before clever automation (clever RPO/RTO later).
 - Prefer an **operator-chosen VPS** you control (size/plan open; do not invent
-  RAM/disk/core/SKU numbers); not Hetzner-as-default copy. Prefer **LUKS2** when
+  provider names or RAM/disk/core/SKU numbers). Prefer **LUKS2** when
   install path allows.
 - Self-ops: journald, health endpoints, `scripts/` checks
   ([OPS.md](OPS.md)). No required third-party WAF.
@@ -276,7 +276,7 @@ paths and operator-managed secret stores outside the public tree.
 | Invent multi-node mail triggers | Single VPS until operator says |
 | Call notes "ADRs" | Plain open choices |
 | Stay on old engine "because nixpkgs" | Prefer current; Surmount package overlay OK |
-| Default hosting copy to Hetzner only | Operator-chosen VPS |
+| Invented default hosting brand or plan SKU | Operator-chosen VPS; size open (Q-HOST-1) |
 | Scare about unsafe without evidence | Measure first |
 | Agent git commit/push on stalwart fork | Operator-managed consume only |
 | Add Python or NPM as product deps | Nix + Rust; fill gaps in-house |

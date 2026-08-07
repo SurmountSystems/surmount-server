@@ -100,9 +100,8 @@ direction and open choices live in `docs/`.
 
 ## Hosting
 
-- **Operator-chosen VPS** (not a default Hetzner preference). Do **not**
-  invent RAM, disk, core counts, or provider plan SKUs in public docs
-  (**Q-HOST-1**).
+- **Operator-chosen VPS**. Do **not** invent provider names, RAM, disk, core
+  counts, or plan SKUs in public docs (**Q-HOST-1**).
 - Prefer a provider where you control **PTR/rDNS** on the sending IP.
 - Prefer install paths that allow **LUKS2** root (disko + nixos-anywhere);
   see [docs/SECURITY.md](docs/SECURITY.md) and operator-direction.md.

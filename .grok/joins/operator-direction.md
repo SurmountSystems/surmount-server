@@ -53,10 +53,10 @@
 
 ## Key pins (one screen)
 
-- Host: operator-chosen VPS, ~16 GB / 2 TB NVMe / 16 cores; not Hetzner-as-default
+- Host: operator-chosen VPS; size/plan open (Q-HOST-1); no invented provider SKUs
 - RocksDB all-role co-location: fine for now
 - Internal FTS: good enough; Surmount search product later
 - Edge: no nginx product; prefer Rust + UDS; Caddy not preferred target
 - Auth: Nostr keys; Vaultwarden for human/mail cred UX; deploy seal still needed
 - Packages: Surmount overlay today; SurmountSystems/stalwart fork when patches; agents never git fork
-- blobSize omit; bufferSize omit or 256 MiB optional; poolWorkers omit (=16) or 8
+- blobSize omit; bufferSize omit or 256 MiB optional; poolWorkers omit (logical CPUs)

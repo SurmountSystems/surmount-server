@@ -8,11 +8,11 @@ noted below for Fix/FixOS.
 ## Superseded on host sizing and RocksDB OK-for-now (2026-07-30)
 
 Operator direction the same day updates several assumptions this review
-still documents as open or CX-class small-VPS framed:
+still documents as open or as invented host-SKU framed:
 
 | Topic | This review (historical peer frame) | Operator direction 2026-07-30 |
 |-------|-------------------------------------|------------------------------|
-| Host size / provider | Hetzner/OVH-class, CX22-ish framing in places | **Operator-chosen VPS**; size/plan open (Q-HOST-1); not Hetzner-as-default; no invented SKUs |
+| Host size / provider | Invented provider/plan SKUs in older prose | **Operator-chosen VPS**; size/plan open (Q-HOST-1); no invented names or SKUs |
 | All-RocksDB co-location | Scaffold with heavy exit gates / open pressure | **RocksDB fine for now**; all-role co-location OK this phase |
 | Internal FTS | Open vs external FTS pressure | **Good enough for now**; Surmount builds own search product later |
 | In-memory on RocksDB | Open | **Fine for now** |

@@ -32,7 +32,7 @@ Summaries only. Detail and wording of record: operator-direction.md.
 
 | Topic | Direction (2026-07-30 + follow-up) |
 |-------|-------------------------------------|
-| Host | Operator-chosen VPS; size/plan open (Q-HOST-1); not Hetzner-as-default; do not invent provider name or RAM/disk/core/SKU numbers; assume NixOS allowed |
+| Host | Operator-chosen VPS; size/plan open (Q-HOST-1); do not invent provider name or RAM/disk/core/SKU numbers; assume NixOS allowed |
 | RocksDB | Fine for now; all-role co-location OK |
 | Internal FTS | Good enough for now; Surmount own search product later |
 | In-memory store | Fine on RocksDB for now |
@@ -362,11 +362,11 @@ separate services.
 
 ## Host provider and disk encryption
 
-**Directed shape:** operator-chosen VPS; not Hetzner-as-default preference
-text. **Do not invent or publish RAM, disk, core counts, or plan SKUs.**
-Operator will ask the provider about NixOS + LUKS2. Assume NixOS is allowed.
-Do not invent a provider name. `poolWorkers` defaults to logical CPU count on
-whatever host is bought (leave default unless measured need to cap).
+**Directed shape:** operator-chosen VPS. **Do not invent or publish provider
+names, RAM, disk, core counts, or plan SKUs.** Operator will ask the provider
+about NixOS + LUKS2. Assume NixOS is allowed. `poolWorkers` defaults to
+logical CPU count on whatever host is bought (leave default unless measured
+need to cap).
 
 **Still open:**
 

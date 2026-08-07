@@ -101,7 +101,7 @@ nixpkgs lag is not a reason to stay old on engines we own.
 | Item | Direction |
 |------|-----------|
 | Size / plan | **Open (Q-HOST-1).** Do not invent or publish RAM, disk, core counts, or provider SKUs as product law. |
-| Provider | **Operator-chosen VPS**, not Hetzner-as-default. **Do not invent a provider name.** Assume NixOS allowed; operator confirms NixOS + LUKS2 with provider. |
+| Provider | **Operator-chosen VPS**. **Do not invent a provider name.** Assume NixOS allowed; operator confirms NixOS + LUKS2 with provider. |
 | Topology | **Single VPS** until operator says otherwise. No invented scale-out triggers. |
 | Disk | **LUKS2** first-class. Unlock: passphrase / initrd SSH / TPM. |
 | sops vs LUKS | **sops-nix does NOT unlock LUKS.** Activation is after root is up. Unlock material **never in git**. [research/luks2-and-deploy-secrets.md](research/luks2-and-deploy-secrets.md). |

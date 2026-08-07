@@ -171,10 +171,9 @@ Nix+Rust.)
 
 ## 8. Single operator-chosen VPS (for now)
 
-- Host is an **operator-chosen VPS** (not a default Hetzner preference). Do
-  not invent a provider name or publish assumed RAM/disk/core/SKU numbers
-  (**Q-HOST-1**). Assume NixOS is allowed; operator will confirm NixOS + LUKS2
-  with the provider.
+- Host is an **operator-chosen VPS**. Do not invent a provider name or publish
+  assumed RAM/disk/core/SKU numbers (**Q-HOST-1**). Assume NixOS is allowed;
+  operator will confirm NixOS + LUKS2 with the provider.
 - Minimize idle load; use cores when useful (FTS, compaction, builds).
   `poolWorkers` defaults to logical CPU count on whatever machine the
   operator chose (leave default unless oversubscription is measured).

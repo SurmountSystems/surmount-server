@@ -48,7 +48,7 @@ DNS: `docs/DNS.md`
 Maildir import: `docs/MIGRATION.md`
 Secrets: `secrets/README.md`
 
-Hosting prefs: Hetzner CX22/CX32 or OVH with PTR control.
+Hosting: operator-chosen VPS with PTR control; size/plan open (Q-HOST-1).
 
 ## Commands run and results
 

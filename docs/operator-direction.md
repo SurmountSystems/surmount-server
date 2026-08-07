@@ -13,8 +13,8 @@ context loss).
 [STACK.md](STACK.md), [SECRETS.md](SECRETS.md), [EDGE_AND_TLS.md](EDGE_AND_TLS.md).
 
 When this file and older scaffold docs disagree, update the living docs and
-mark scaffold pieces transitional. Do not silently keep Hetzner-default or
-"Caddy target" copy if the operator restated otherwise.
+mark scaffold pieces transitional. Do not silently keep invented provider
+defaults or "Caddy target" copy if the operator restated otherwise.
 
 ---
 
@@ -24,7 +24,7 @@ mark scaffold pieces transitional. Do not silently keep Hetzner-default or
 |------|-----------|
 | Form factor | Single **operator-chosen VPS** |
 | Size / plan | **Open (Q-HOST-1).** Do **not** invent or publish RAM, disk, core counts, or provider SKUs as product law. Operator picks the machine. |
-| Provider default | **Not Hetzner as default preference.** Say operator-chosen VPS. Prefer a provider where PTR/rDNS and LUKS install path are workable. **Do not invent a provider name.** Operator will ask the chosen provider about NixOS + LUKS2 recommendations. **Assume** the provider allows NixOS. |
+| Provider | **Operator-chosen VPS.** Prefer a provider where PTR/rDNS and LUKS install path are workable. **Do not invent a provider name.** Operator will ask the chosen provider about NixOS + LUKS2 recommendations. **Assume** the provider allows NixOS. |
 | Load | Minimize idle load on the node; use cores when useful (compaction, FTS, builds, spam). Do not run extra always-on agents "because cores exist." |
 | Topology end | Single VPS ends **when the operator says**. Do not invent scale-out triggers. Do not cite other projects as exit criteria. |
 
@@ -255,12 +255,12 @@ Full write-up: [SECRETS.md](SECRETS.md). Hygiene top rule: [hygiene.md](hygiene.
 
 | Older claim | Now |
 |-------------|-----|
-| Hetzner CX22/CX32 as default hosting preference | Operator-chosen VPS; size/plan open (Q-HOST-1); no invented SKUs |
+| Invented default hosting brand or plan SKU | Operator-chosen VPS; size/plan open (Q-HOST-1); no invented names |
 | "Caddy is the target edge default" | **Axum-first** HTTPS edge preferred; nginx transitional-to-delete; separate proxy products only if measured need |
 | All-RocksDB only as fragile scaffold with heavy "open" pressure | **RocksDB fine for now**; co-location OK this phase |
 | External FTS as near-term open pressure | Internal FTS **good enough for now**; own search product later |
 | RPO/RTO as near-term backup design work | **Later, not now** |
-| architecture-review sizing/host rows that assume small CX-class boxes | Superseded on host sizing and RocksDB OK-for-now; see banner on that file |
+| architecture-review sizing/host rows that invent host SKUs | Superseded: size open (Q-HOST-1); RocksDB OK-for-now; see banner on that file |
 | "Seal" as primary secrets vocabulary | Prefer **deploy secrets** / activation wording (see SECRETS.md) |
 
 ---
