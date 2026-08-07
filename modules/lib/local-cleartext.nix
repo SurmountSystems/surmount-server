@@ -18,8 +18,7 @@
 let
   inherit (lib) hasPrefix;
 
-  isLoopbackListenAddr =
-    a: a == "127.0.0.1" || a == "::1" || a == "localhost" || hasPrefix "127." a;
+  isLoopbackListenAddr = a: a == "127.0.0.1" || a == "::1" || a == "localhost" || hasPrefix "127." a;
 
   # Explicit operator override (non-empty string).
   explicitLocalCleartext =
@@ -115,11 +114,7 @@ let
   # Local cleartext must stay loopback-only (never public cleartext API).
   # Numeric literals only: Rust parse::<SocketAddr> does not resolve "localhost".
   isLoopbackCleartextTarget =
-    s:
-    s == null
-    || s == ""
-    || hasPrefix "127.0.0.1:" s
-    || hasPrefix "[::1]:" s;
+    s: s == null || s == "" || hasPrefix "127.0.0.1:" s || hasPrefix "[::1]:" s;
 
   # True when local cleartext port collides with primary or redirect port
   # (even if host strings differ: 0.0.0.0:P vs 127.0.0.1:P).
@@ -132,10 +127,7 @@ let
       lp = listenPort localListen;
       rp = activeRedirectPort ui;
     in
-    lp != null
-    && (
-      lp == ui.port || (rp != null && lp == rp)
-    );
+    lp != null && (lp == ui.port || (rp != null && lp == rp));
 in
 {
   inherit

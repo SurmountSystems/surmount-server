@@ -336,6 +336,193 @@ in
         default = 50000;
         description = "Cap on distinct rate-limit keys retained in memory.";
       };
+
+      # Operator-published onion for admin UI display (never invent a live onion).
+      onionUrl = mkOption {
+        type = types.str;
+        default = "";
+        # v3 onion labels are 56 base32 chars (placeholder x's, not a live address).
+        example = "http://xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.onion";
+        description = ''
+          Optional operator-published onion URL for the management console
+          (SURMOUNT_ONION_URL). Bare .onion hostnames are fine; the binary
+          normalizes to http:// for display links. Empty = unset. Wins over
+          onionHostnameFile when non-empty. Do not invent an address; set only
+          after Arti has published on the host.
+        '';
+      };
+
+      onionHostnameFile = mkOption {
+        type = types.str;
+        default = "";
+        example = "/run/surmount-secrets/arti/onion-service/hostname";
+        description = ''
+          Optional host path to a file containing a bare .onion hostname
+          (SURMOUNT_ONION_HOSTNAME_FILE). Read when onionUrl is empty.
+          Empty file or unreadable path = unset. Example location may match
+          Arti HS identity layout; operator must place material on host.
+        '';
+      };
+
+      # Nostr auth scaffold (default off). Q-AUTH-1 residual: key-loss, durable
+      # session store, first-operator bootstrap product UX. Session secret is a
+      # host deploy secret (never in git). Empty allowlist + mode=nostr = fail-closed.
+      authMode = mkOption {
+        type = types.enum [
+          "off"
+          "nostr"
+        ];
+        default = "off";
+        description = ''
+          SURMOUNT_AUTH_MODE. off = open console (local/dev default; not
+          public-safe alone). nostr = gate admin HTML + JSON APIs behind
+          session cookie or valid NIP-98 (rust-nostr; not JS NDK). Requires
+          non-empty sessionSecret when nostr.
+        '';
+      };
+
+      nostrAllowlist = mkOption {
+        type = types.str;
+        default = "";
+        example = "npub1...,hex...";
+        description = ''
+          SURMOUNT_NOSTR_ALLOWLIST: comma/space separated bech32 npub or hex
+          pubkeys. Scaffold bootstrap allowlist (Q-AUTH-1 first-operator UX
+          still open). Empty with authMode=nostr means nobody authenticates
+          (fail-closed) unless nostrAllowlistFile supplies keys. Non-empty
+          env/string wins over the file path.
+        '';
+      };
+
+      nostrAllowlistFile = mkOption {
+        type = types.str;
+        default = "";
+        example = "/run/surmount-secrets/ui/nostr-allowlist";
+        description = ''
+          Optional host path for SURMOUNT_NOSTR_ALLOWLIST_FILE. Same token
+          rules as nostrAllowlist (npub/hex, whitespace/comma separated).
+          Used when nostrAllowlist is empty. Unreadable file fails closed at
+          process start. Prefer host-only file for longer lists; never commit
+          allowlist secrets if treated as sensitive.
+        '';
+      };
+
+      sessionSecretPath = mkOption {
+        type = types.str;
+        default = "";
+        example = "/run/surmount-secrets/ui/session-secret";
+        description = ''
+          Host path to a systemd EnvironmentFile that sets
+          SURMOUNT_SESSION_SECRET=... (KEY=value lines). Loaded when non-empty.
+          Prefer deploy-secrets path; never commit. Empty = unset (required
+          when authMode=nostr unless sessionSecretEnv is set for lab only).
+        '';
+      };
+
+      sessionSecretEnv = mkOption {
+        type = types.str;
+        default = "";
+        description = ''
+          Optional raw SURMOUNT_SESSION_SECRET value for lab only. Prefer
+          sessionSecretPath. Empty string ignored. Do not put production
+          secrets in Nix config that lands in the public tree.
+        '';
+      };
+
+      sessionTtlSecs = mkOption {
+        type = types.ints.positive;
+        default = 86400;
+        description = "SURMOUNT_SESSION_TTL_SECS for signed session cookie Max-Age.";
+      };
+
+      publicBaseUrl = mkOption {
+        type = types.str;
+        default = "";
+        example = "https://services.surmount.systems";
+        description = ''
+          SURMOUNT_PUBLIC_BASE_URL for NIP-98 u-tag matching when behind a
+          reverse proxy (optional). Empty = build from request Host + scheme.
+        '';
+      };
+
+      nip98MaxSkewSecs = mkOption {
+        type = types.ints.positive;
+        default = 300;
+        description = "SURMOUNT_NIP98_MAX_SKEW_SECS: |now - created_at| window for kind 27235.";
+      };
+
+      # Account directory strategy (default honest empty; live Stalwart is explicit).
+      directory = mkOption {
+        type = types.enum [
+          "unavailable"
+          "mock"
+          "stalwart"
+        ];
+        default = "unavailable";
+        description = ''
+          SURMOUNT_DIRECTORY. unavailable (default) = honest empty accounts API
+          (no invented live mailboxes). mock = hermetic fixture only (lab/tests;
+          never production default). stalwart = live management JMAP client
+          (x:Account/query + get) against SURMOUNT_STALWART_URL; requires a host
+          token via stalwartTokenPath (production) or lab inline token with
+          allowLabInlineStalwartToken. Live directory also requires
+          authMode=nostr unless allowDirectoryUnauthenticated (lab). Misconfig
+          fails closed at process start (not silent skip). Live list failures
+          stay empty + status-code error note (source still "stalwart"; no
+          invented rows; no upstream body reflection).
+        '';
+      };
+
+      stalwartTokenPath = mkOption {
+        type = types.str;
+        default = "";
+        example = "/run/surmount-secrets/ui/stalwart-api-token";
+        description = ''
+          Host path to a raw API token file (SURMOUNT_STALWART_TOKEN_FILE).
+          First non-empty non-# line is the Bearer token for Stalwart management
+          JMAP. File must be non-empty (comments alone fail closed), a regular
+          file, and owner-only readable (mode not group/world, e.g. 0600;
+          binary fail-closed). Readable by the UI user. Host-only deploy
+          secret; never commit. Empty = unset. Required when directory=stalwart
+          unless lab inline token is allowed. Module adds the path to
+          ReadOnlyPaths + ConditionPathExists when path-only so a missing file
+          yields inactive unit (not restart thrash). Present-but-bad content
+          still fails at process start under Restart=on-failure (burst capped).
+        '';
+      };
+
+      stalwartTokenEnv = mkOption {
+        type = types.str;
+        default = "";
+        description = ''
+          Optional raw SURMOUNT_STALWART_TOKEN for lab only. Production must use
+          stalwartTokenPath (host file). Non-empty requires
+          allowLabInlineStalwartToken = true (eval fail-closed otherwise) so a
+          secret is not interpolated into the Nix store via Environment=.
+          Empty string ignored.
+        '';
+      };
+
+      allowLabInlineStalwartToken = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Lab only: permit non-empty stalwartTokenEnv. Default false so
+          production cannot silently put a Bearer token into unit Environment=
+          (and thus the store). Prefer stalwartTokenPath.
+        '';
+      };
+
+      allowDirectoryUnauthenticated = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Lab only: allow directory=stalwart while authMode=off (sets
+          SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED=1). Default false: live
+          directory requires authMode=nostr so principal inventory is not open
+          on the UI bind. Binary also fail-closes the same coupling.
+        '';
+      };
     };
 
     # Arti onion / hidden service (REQUIRED product surface).

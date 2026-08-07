@@ -67,6 +67,26 @@ let
   ++ optional ui.allowCleartextHttpsEscape "SURMOUNT_HTTPS_ALLOW_CLEARTEXT_ESCAPE=1"
   ++ optional redirectListenActive "SURMOUNT_HTTP_REDIRECT_LISTEN=${ui.httpRedirectListen}"
   ++ optional localCleartextActive "SURMOUNT_LOCAL_CLEARTEXT_LISTEN=${effectiveLocalCleartext}"
+  ++ optional (ui.onionUrl != "") "SURMOUNT_ONION_URL=${ui.onionUrl}"
+  ++ optional (ui.onionHostnameFile != "") "SURMOUNT_ONION_HOSTNAME_FILE=${ui.onionHostnameFile}"
+  ++ [
+    "SURMOUNT_AUTH_MODE=${ui.authMode}"
+    "SURMOUNT_SESSION_TTL_SECS=${toString ui.sessionTtlSecs}"
+    "SURMOUNT_NIP98_MAX_SKEW_SECS=${toString ui.nip98MaxSkewSecs}"
+  ]
+  ++ optional (ui.nostrAllowlist != "") "SURMOUNT_NOSTR_ALLOWLIST=${ui.nostrAllowlist}"
+  ++ optional (ui.nostrAllowlistFile != "") "SURMOUNT_NOSTR_ALLOWLIST_FILE=${ui.nostrAllowlistFile}"
+  ++ optional (ui.publicBaseUrl != "") "SURMOUNT_PUBLIC_BASE_URL=${ui.publicBaseUrl}"
+  # Lab-only inline secret; prefer sessionSecretPath + EnvironmentFile.
+  ++ optional (ui.sessionSecretEnv != "") "SURMOUNT_SESSION_SECRET=${ui.sessionSecretEnv}"
+  # Directory: default unavailable (honest empty). mock/stalwart only when set.
+  # Never default-on live or mock (no fake production accounts).
+  ++ optional (ui.directory != "unavailable") "SURMOUNT_DIRECTORY=${ui.directory}"
+  ++ optional (
+    ui.stalwartTokenEnv != "" && ui.allowLabInlineStalwartToken
+  ) "SURMOUNT_STALWART_TOKEN=${ui.stalwartTokenEnv}"
+  ++ optional (ui.stalwartTokenPath != "") "SURMOUNT_STALWART_TOKEN_FILE=${ui.stalwartTokenPath}"
+  ++ optional ui.allowDirectoryUnauthenticated "SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED=1"
   ++ lib.optionals ac.enable (
     [
       "SURMOUNT_BAN_ENFORCEMENT=${ac.enforcement}"
@@ -86,7 +106,14 @@ let
   tlsReadPaths = lib.filter (p: p != null && p != "") [
     ui.tlsCertPath
     ui.tlsKeyPath
+    ui.onionHostnameFile
+    ui.sessionSecretPath
+    ui.stalwartTokenPath
   ];
+
+  # EnvironmentFile expects KEY=value lines (e.g. SURMOUNT_SESSION_SECRET=...).
+  # Host-only deploy secret; never in git. Empty path skips.
+  sessionSecretEnvFiles = lib.optional (ui.sessionSecretPath != "") ui.sessionSecretPath;
 
   # Real TLS path (not cleartext escape): gate unit start on PEM files so a
   # missing deploy secret yields inactive (dead), not Restart=on-failure thrash.
@@ -95,6 +122,29 @@ let
     && !ui.allowCleartextHttpsEscape
     && ui.tlsCertPath != ""
     && ui.tlsKeyPath != "";
+
+  # Live directory needs a host token file when path is set (lab may use
+  # allowed inline env only). Missing path would fail-closed at process start
+  # and Restart=on-failure thrash; ConditionPathExists keeps the unit inactive.
+  # Path gates existence only; file must still be non-empty raw token, owner-only
+  # mode (e.g. 0600), readable by surmount-ui (binary enforces mode + content).
+  directoryNeedsTokenFile =
+    ui.directory == "stalwart"
+    && ui.stalwartTokenPath != ""
+    && !(ui.stalwartTokenEnv != "" && ui.allowLabInlineStalwartToken);
+
+  # Eval fail-closed: stalwart mode without any allowed token source is misconfig.
+  directoryStalwartTokenOk =
+    ui.directory != "stalwart"
+    || ui.stalwartTokenPath != ""
+    || (ui.stalwartTokenEnv != "" && ui.allowLabInlineStalwartToken);
+
+  # Live directory + open auth is a footgun; require nostr or lab escape.
+  directoryStalwartAuthOk =
+    ui.directory != "stalwart" || ui.authMode == "nostr" || ui.allowDirectoryUnauthenticated;
+
+  # Inline token via Nix Environment= only with explicit lab flag.
+  directoryLabInlineTokenOk = ui.stalwartTokenEnv == "" || ui.allowLabInlineStalwartToken;
 
   isLoopbackListenAddr = localCleartext.isLoopbackListenAddr ui.listenAddress;
 
@@ -122,12 +172,9 @@ let
     !localCleartextActive || localCleartext.isLoopbackCleartextTarget effectiveLocalCleartext;
 
   primaryListen = "${ui.listenAddress}:${toString ui.port}";
-  localCleartextDiffersPrimary =
-    !localCleartextActive || effectiveLocalCleartext != primaryListen;
+  localCleartextDiffersPrimary = !localCleartextActive || effectiveLocalCleartext != primaryListen;
   localCleartextDiffersRedirect =
-    !localCleartextActive
-    || !redirectListenActive
-    || effectiveLocalCleartext != ui.httpRedirectListen;
+    !localCleartextActive || !redirectListenActive || effectiveLocalCleartext != ui.httpRedirectListen;
   # Linux: 0.0.0.0:P and 127.0.0.1:P cannot both bind. Port-level collision
   # must fail closed even when host strings differ.
   localCleartextPortCollision =
@@ -174,26 +221,34 @@ let
   serviceConfig =
     serviceConfigBase
     // lib.optionalAttrs (tlsReadPaths != [ ]) {
-      # Host deploy-secret PEMs (operator-placed; never in git).
+      # Host deploy-secret PEMs / session EnvironmentFile (operator-placed; never in git).
       ReadOnlyPaths = tlsReadPaths;
+    }
+    // lib.optionalAttrs (sessionSecretEnvFiles != [ ]) {
+      EnvironmentFile = sessionSecretEnvFiles;
     }
     // lib.optionalAttrs needsNetBindService {
       AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
       CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
     };
 
+  unitConditionPaths =
+    (lib.optionals httpsNeedsHostPems [
+      ui.tlsCertPath
+      ui.tlsKeyPath
+    ])
+    ++ (lib.optionals directoryNeedsTokenFile [ ui.stalwartTokenPath ]);
+
   unitConfig = {
     # Cap restart storms when binary fail-closes (bad PEMs, wrong key mode,
-    # redirect bind refuse). Mirrors surmount-arti-hidden-service; missing PEMs
-    # also use ConditionPathExists below so multi-user is not wedged forever.
+    # redirect bind refuse, incomplete directory token). Mirrors
+    # surmount-arti-hidden-service; missing PEMs/token file also use
+    # ConditionPathExists below so multi-user is not wedged forever.
     StartLimitIntervalSec = 300;
     StartLimitBurst = 5;
   }
-  // lib.optionalAttrs httpsNeedsHostPems {
-    ConditionPathExists = [
-      ui.tlsCertPath
-      ui.tlsKeyPath
-    ];
+  // lib.optionalAttrs (unitConditionPaths != [ ]) {
+    ConditionPathExists = unitConditionPaths;
   };
 in
 {
@@ -315,7 +370,50 @@ in
           Got local=${toString effectiveLocalCleartext}.
         '';
       }
+      {
+        assertion = directoryStalwartTokenOk;
+        message = ''
+          surmount.managementUi.directory is "stalwart" but no allowed token
+          source is set. Prefer stalwartTokenPath (host file, non-empty raw
+          token, mode 0600, readable by surmount-ui). Lab-only:
+          stalwartTokenEnv + allowLabInlineStalwartToken = true. Leave
+          directory = "unavailable" (default) for honest empty accounts.
+        '';
+      }
+      {
+        assertion = directoryStalwartAuthOk;
+        message = ''
+          surmount.managementUi.directory is "stalwart" but authMode is not
+          "nostr". Live principal list must not be open on an unauthenticated
+          bind. Set authMode = "nostr" (with session secret + allowlist), or
+          lab-only allowDirectoryUnauthenticated = true.
+        '';
+      }
+      {
+        assertion = directoryLabInlineTokenOk;
+        message = ''
+          surmount.managementUi.stalwartTokenEnv is set but
+          allowLabInlineStalwartToken is false. Inline tokens go into unit
+          Environment= and can land in the Nix store. Production: use
+          stalwartTokenPath only. Lab: set allowLabInlineStalwartToken = true.
+        '';
+      }
+      {
+        assertion = hostPaths.optionalStrictHostPath ui.stalwartTokenPath;
+        message = ''
+          surmount.managementUi.stalwartTokenPath must be empty or a strict
+          absolute host path (no .. segments; charset limited). Host-only
+          deploy secret; never in git. File must be non-empty raw token
+          (not comments only), regular file, mode not group/world readable.
+        '';
+      }
     ];
+
+    warnings = lib.optional (ui.stalwartTokenEnv != "" && ui.allowLabInlineStalwartToken) ''
+      surmount.managementUi.stalwartTokenEnv is set (lab inline Bearer). Prefer
+      stalwartTokenPath for production so the secret stays a host file and out
+      of the Nix store / unit Environment=.
+    '';
 
     users.groups.surmount-ui = { };
     users.users.surmount-ui = {

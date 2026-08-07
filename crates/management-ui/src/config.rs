@@ -2,9 +2,11 @@
 
 use std::env;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::time::Duration;
 
 use crate::tls::{ListenMode, TlsPaths};
+use surmount_management_ui::auth::{resolve_allowlist, AuthConfig, AuthMode};
 use surmount_management_ui::ban::{ban_config_from_env, BanConfig};
 use surmount_management_ui::rate_limit::{FixedWindowRateLimiter, DEFAULT_MAX_KEYS};
 
@@ -29,12 +31,98 @@ pub struct AppConfig {
     pub mail_hostname: String,
     pub services_hostname: String,
     pub stalwart_url: String,
+    /// Operator-published onion URL for display (env or hostname file). Never invented.
+    /// Normalized to `http://….onion` when a bare hostname is provided.
+    pub onion_url: Option<String>,
     /// Max requests per client key per window (0 disables limiter).
     pub rate_limit_max_requests: u32,
     pub rate_limit_window: Duration,
     pub rate_limit_max_keys: usize,
     /// Ban/whitelist subsystem (default enforcement off; lean private).
     pub ban: BanConfig,
+    /// Nostr auth scaffold (default off for local `just dev`).
+    pub auth: AuthConfig,
+    /// Lab escape: when true, live directory list/mutations may run with
+    /// `auth_mode=off`. Never production default. Env
+    /// `SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED`.
+    pub allow_directory_unauthenticated: bool,
+}
+
+/// Normalize an operator onion string for display and links.
+///
+/// Accepts `http://….onion`, bare `….onion`, or whitespace-padded forms.
+/// Empty / whitespace-only -> `None`. Bare hostname becomes `http://…`.
+pub fn normalize_onion_url(raw: &str) -> Option<String> {
+    let t = raw.trim().trim_end_matches('/').trim();
+    if t.is_empty() {
+        return None;
+    }
+    if t.starts_with("http://") || t.starts_with("https://") {
+        return Some(t.to_string());
+    }
+    // Bare hostname (or path-less host). Prefer http:// for Tor Browser links.
+    Some(format!("http://{t}"))
+}
+
+/// Read onion from a host file (first non-empty line, trimmed). Empty file = unset.
+pub fn onion_url_from_file(path: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let line = contents
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    normalize_onion_url(line)
+}
+
+/// Resolve onion URL: `SURMOUNT_ONION_URL` wins when non-empty; else readable
+/// non-empty `SURMOUNT_ONION_HOSTNAME_FILE`. Unreadable file = unset.
+pub fn resolve_onion_url_from_env() -> Option<String> {
+    if let Ok(v) = env::var("SURMOUNT_ONION_URL") {
+        if let Some(n) = normalize_onion_url(&v) {
+            return Some(n);
+        }
+    }
+    match env::var("SURMOUNT_ONION_HOSTNAME_FILE") {
+        Ok(p) => {
+            let p = p.trim();
+            if p.is_empty() {
+                None
+            } else {
+                onion_url_from_file(Path::new(p))
+            }
+        }
+        Err(_) => None,
+    }
+}
+
+/// Redact v3 (56) / legacy (16) onion labels in log or error text.
+/// Mirrors `surmount-e2e` failure-tail redaction: never print full addresses.
+/// Scans the whole string: non-label `.onion` substrings are left as-is and
+/// the scan continues so later real labels are still redacted.
+pub fn redact_onion_in_text(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(rel) = rest.find(".onion") {
+        let end_rel = rel + ".onion".len();
+        let before = &rest[..rel];
+        let start_rel = before
+            .rfind(|c: char| !matches!(c, 'a'..='z' | '2'..='7' | 'A'..='Z'))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let candidate = &before[start_rel..];
+        if candidate.len() == 56 || candidate.len() == 16 {
+            out.push_str(&rest[..start_rel]);
+            out.push_str("<onion-redacted>");
+            rest = &rest[end_rel..];
+        } else {
+            // Not a v3/legacy label: keep through this `.onion`, continue after.
+            out.push_str(&rest[..end_rel]);
+            rest = &rest[end_rel..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 impl AppConfig {
@@ -127,6 +215,16 @@ impl AppConfig {
         // Invalid ban env fails closed (not optional skip).
         let ban = ban_config_from_env(|k| env::var(k).ok())?;
 
+        // Onion: env wins; else hostname file. Never invent a live onion.
+        let onion_url = resolve_onion_url_from_env();
+
+        let auth = auth_config_from_env()?;
+        auth.validate()?;
+
+        // Single SoT with directory process-start coupling (same env + truthy parser).
+        let allow_directory_unauthenticated =
+            crate::directory::directory_allow_unauthenticated_from_env();
+
         Ok(Self {
             listen,
             http_redirect_listen,
@@ -140,10 +238,13 @@ impl AppConfig {
             services_hostname,
             stalwart_url: env::var("SURMOUNT_STALWART_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8081".into()),
+            onion_url,
             rate_limit_max_requests,
             rate_limit_window: Duration::from_secs(rate_limit_window_secs.max(1)),
             rate_limit_max_keys: rate_limit_max_keys.max(1),
             ban,
+            auth,
+            allow_directory_unauthenticated,
         })
     }
 
@@ -212,14 +313,76 @@ impl AppConfig {
     }
 }
 
+/// SoT for truthy env flags (`1` / `true` / `yes` / `on`, case-insensitive).
+///
+/// Used by [`env_bool`] and directory lab-escape
+/// (`SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED`) so config and process-start
+/// coupling never drift on accepted tokens.
+pub fn parse_env_flag_truthy(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn env_bool(key: &str, default: bool) -> bool {
     match env::var(key) {
-        Ok(v) => matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
+        Ok(v) => parse_env_flag_truthy(&v),
         Err(_) => default,
     }
+}
+
+/// Auth env surface (scaffold). Default mode off so `just dev` stays open.
+fn auth_config_from_env() -> Result<AuthConfig, String> {
+    let mode = match env::var("SURMOUNT_AUTH_MODE") {
+        Ok(v) => AuthMode::parse(&v)?,
+        Err(_) => AuthMode::Off,
+    };
+
+    // Env allowlist wins when non-empty; else optional file; empty = fail-closed.
+    let allowlist_raw = env::var("SURMOUNT_NOSTR_ALLOWLIST").unwrap_or_default();
+    let allowlist_file = env::var("SURMOUNT_NOSTR_ALLOWLIST_FILE").ok();
+    let allowlist = resolve_allowlist(&allowlist_raw, allowlist_file.as_deref())?;
+
+    let session_secret = match env::var("SURMOUNT_SESSION_SECRET") {
+        Ok(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                // Accept raw string or hex; store raw UTF-8 bytes of the env value
+                // (operator can use openssl rand -hex 32 as opaque key material).
+                Some(t.as_bytes().to_vec())
+            }
+        }
+        Err(_) => None,
+    };
+
+    let session_ttl_secs = env::var("SURMOUNT_SESSION_TTL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(86_400u64)
+        .max(60);
+
+    let public_base_url = env::var("SURMOUNT_PUBLIC_BASE_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let nip98_max_skew_secs = env::var("SURMOUNT_NIP98_MAX_SKEW_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300u64)
+        .max(1);
+
+    Ok(AuthConfig {
+        mode,
+        allowlist,
+        session_secret,
+        session_ttl_secs,
+        public_base_url,
+        nip98_max_skew_secs,
+    })
 }
 
 #[cfg(test)]
@@ -265,6 +428,8 @@ mod tests {
             "SURMOUNT_MAIL_HOSTNAME",
             "SURMOUNT_SERVICES_HOSTNAME",
             "SURMOUNT_STALWART_URL",
+            "SURMOUNT_ONION_URL",
+            "SURMOUNT_ONION_HOSTNAME_FILE",
             "SURMOUNT_RATE_LIMIT_MAX",
             "SURMOUNT_RATE_LIMIT_WINDOW_SECS",
             "SURMOUNT_RATE_LIMIT_MAX_KEYS",
@@ -276,9 +441,83 @@ mod tests {
             "SURMOUNT_BAN_NFT_BIN",
             "SURMOUNT_BAN_NFT_HELPER",
             "SURMOUNT_BAN_NFT_HELPER_SOCK",
+            "SURMOUNT_AUTH_MODE",
+            "SURMOUNT_NOSTR_ALLOWLIST",
+            "SURMOUNT_NOSTR_ALLOWLIST_FILE",
+            "SURMOUNT_SESSION_SECRET",
+            "SURMOUNT_SESSION_TTL_SECS",
+            "SURMOUNT_PUBLIC_BASE_URL",
+            "SURMOUNT_NIP98_MAX_SKEW_SECS",
         ] {
             std::env::remove_var(k);
         }
+    }
+
+    #[test]
+    fn auth_mode_default_off() {
+        let _g = EnvGuard::acquire();
+        let cfg = AppConfig::from_env().unwrap();
+        assert_eq!(cfg.auth.mode, AuthMode::Off);
+        assert!(cfg.auth.allowlist.is_empty());
+    }
+
+    #[test]
+    fn auth_mode_nostr_requires_session_secret() {
+        let _g = EnvGuard::acquire();
+        std::env::set_var("SURMOUNT_AUTH_MODE", "nostr");
+        let err = AppConfig::from_env().unwrap_err();
+        assert!(
+            err.contains("SESSION_SECRET") || err.contains("session"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn auth_mode_nostr_with_secret_ok() {
+        let _g = EnvGuard::acquire();
+        std::env::set_var("SURMOUNT_AUTH_MODE", "nostr");
+        std::env::set_var("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
+        let cfg = AppConfig::from_env().unwrap();
+        assert_eq!(cfg.auth.mode, AuthMode::Nostr);
+        assert!(!cfg.auth.session_secret.as_ref().unwrap().is_empty());
+    }
+
+    /// Named contract: allowlist file loads when env empty; env wins when set.
+    #[test]
+    fn nostr_allowlist_file_and_env_precedence() {
+        use surmount_management_ui::auth::allowlist_contains;
+
+        let _g = EnvGuard::acquire();
+        let keys = nostr::Keys::generate();
+        let file_hex = keys.public_key().to_hex();
+        let env_keys = nostr::Keys::generate();
+        let env_hex = env_keys.public_key().to_hex();
+        let dir =
+            std::env::temp_dir().join(format!("surmount-cfg-allowlist-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("allow.txt");
+        std::fs::write(&file, format!("{file_hex}\n")).unwrap();
+
+        std::env::set_var("SURMOUNT_AUTH_MODE", "nostr");
+        std::env::set_var("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
+        std::env::set_var("SURMOUNT_NOSTR_ALLOWLIST_FILE", file.to_str().unwrap());
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(
+            allowlist_contains(&cfg.auth.allowlist, &file_hex),
+            "file allowlist should load when env empty"
+        );
+
+        std::env::set_var("SURMOUNT_NOSTR_ALLOWLIST", &env_hex);
+        let cfg2 = AppConfig::from_env().unwrap();
+        assert!(
+            allowlist_contains(&cfg2.auth.allowlist, &env_hex),
+            "env must win over file"
+        );
+        assert!(
+            !allowlist_contains(&cfg2.auth.allowlist, &file_hex),
+            "file keys must not mix when env wins"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -450,10 +689,7 @@ mod tests {
         std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
-        assert!(
-            err.contains("port") && err.contains("8090"),
-            "{err}"
-        );
+        assert!(err.contains("port") && err.contains("8090"), "{err}");
     }
 
     #[test]
@@ -464,10 +700,7 @@ mod tests {
         std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8080");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
-        assert!(
-            err.contains("differ") && err.contains("REDIRECT"),
-            "{err}"
-        );
+        assert!(err.contains("differ") && err.contains("REDIRECT"), "{err}");
     }
 
     #[test]
@@ -478,9 +711,143 @@ mod tests {
         std::env::set_var("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
-        assert!(
-            err.contains("port") && err.contains("REDIRECT"),
-            "{err}"
+        assert!(err.contains("port") && err.contains("REDIRECT"), "{err}");
+    }
+
+    // v3 onion label length is 56 base32 chars (a-z, 2-7).
+    const SAMPLE_V3: &str = "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx";
+
+    /// Named contract: bare .onion becomes http:// link target; empty is unset.
+    #[test]
+    fn normalize_onion_url_bare_and_empty() {
+        assert_eq!(normalize_onion_url("  "), None);
+        let bare = format!("{SAMPLE_V3}.onion");
+        assert_eq!(
+            normalize_onion_url(&bare),
+            Some(format!("http://{SAMPLE_V3}.onion"))
         );
+        assert_eq!(
+            normalize_onion_url(&format!("http://{SAMPLE_V3}.onion/")),
+            Some(format!("http://{SAMPLE_V3}.onion"))
+        );
+    }
+
+    /// Named contract: SURMOUNT_ONION_URL wins; unset by default (no invented onion).
+    #[test]
+    fn onion_url_from_env_wins_over_file() {
+        let _g = EnvGuard::acquire();
+        let dir = std::env::temp_dir().join(format!("surmount-onion-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("hostname");
+        let file_onion = "b".repeat(56);
+        let env_onion = "a".repeat(56);
+        std::fs::write(&file, format!("{file_onion}.onion\n")).unwrap();
+        std::env::set_var("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
+        std::env::set_var("SURMOUNT_ONION_URL", format!("{env_onion}.onion"));
+        let cfg = AppConfig::from_env().unwrap();
+        let expected = format!("http://{env_onion}.onion");
+        assert_eq!(cfg.onion_url.as_deref(), Some(expected.as_str()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn onion_url_from_file_when_env_unset() {
+        let _g = EnvGuard::acquire();
+        let dir = std::env::temp_dir().join(format!("surmount-onion-file-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("hostname");
+        let file_onion = "c".repeat(56);
+        std::fs::write(&file, format!("{file_onion}.onion\n")).unwrap();
+        std::env::set_var("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
+        let cfg = AppConfig::from_env().unwrap();
+        let expected = format!("http://{file_onion}.onion");
+        assert_eq!(cfg.onion_url.as_deref(), Some(expected.as_str()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn onion_url_default_unset() {
+        let _g = EnvGuard::acquire();
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(
+            cfg.onion_url.is_none(),
+            "must not invent onion: {:?}",
+            cfg.onion_url
+        );
+    }
+
+    #[test]
+    fn empty_onion_file_is_unset() {
+        let _g = EnvGuard::acquire();
+        let dir = std::env::temp_dir().join(format!("surmount-onion-empty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let file = dir.join("hostname");
+        std::fs::write(&file, "   \n\n").unwrap();
+        std::env::set_var("SURMOUNT_ONION_HOSTNAME_FILE", file.to_str().unwrap());
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(cfg.onion_url.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Named contract: log/error tails must not print full onion labels.
+    #[test]
+    fn redact_onion_in_text_masks_v3() {
+        let onion = format!("{SAMPLE_V3}.onion");
+        let line = format!("fetch failed for http://{onion}/health");
+        let red = redact_onion_in_text(&line);
+        assert!(
+            red.contains("<onion-redacted>"),
+            "expected redaction marker: {red}"
+        );
+        assert!(
+            !red.contains("abcdefghijklmnopqrstuvwxyz234567"),
+            "must not leak onion body: {red}"
+        );
+    }
+
+    /// Named contract: continue past non-label `.onion` and redact later v3 labels.
+    #[test]
+    fn redact_onion_in_text_skips_non_label_and_masks_all_v3() {
+        let o1 = format!("{SAMPLE_V3}.onion");
+        let o2_label = "z".repeat(56);
+        let o2 = format!("{o2_label}.onion");
+        // "not.onion" is not 16/56 base32; must not stop the scan.
+        let line = format!("note not.onion then http://{o1}/a and {o2} end");
+        let red = redact_onion_in_text(&line);
+        assert!(
+            red.contains("not.onion"),
+            "non-label .onion should remain: {red}"
+        );
+        assert_eq!(
+            red.matches("<onion-redacted>").count(),
+            2,
+            "both v3 labels should redact: {red}"
+        );
+        assert!(
+            !red.contains(&SAMPLE_V3[..20]) && !red.contains(&o2_label[..20]),
+            "must not leak onion bodies: {red}"
+        );
+    }
+
+    #[test]
+    fn redact_onion_in_text_masks_legacy_16() {
+        let legacy = format!("{}.onion", "a".repeat(16));
+        let red = redact_onion_in_text(&format!("via {legacy}"));
+        assert!(red.contains("<onion-redacted>"), "{red}");
+        assert!(!red.contains(&"a".repeat(16)), "{red}");
+    }
+
+    /// Named contract: truthy flag SoT includes `on` (same set as historic env_bool).
+    #[test]
+    fn parse_env_flag_truthy_accepts_on_and_common_tokens() {
+        assert!(parse_env_flag_truthy("on"));
+        assert!(parse_env_flag_truthy("ON"));
+        assert!(parse_env_flag_truthy("1"));
+        assert!(parse_env_flag_truthy("true"));
+        assert!(parse_env_flag_truthy("yes"));
+        assert!(!parse_env_flag_truthy("off"));
+        assert!(!parse_env_flag_truthy("0"));
+        assert!(!parse_env_flag_truthy("false"));
+        assert!(!parse_env_flag_truthy(""));
     }
 }

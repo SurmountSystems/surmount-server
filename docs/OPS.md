@@ -4,8 +4,57 @@ How the Surmount mail VPS should be operated, observed, and checked
 end-to-end. Aligned with [hygiene.md](hygiene.md). Architecture:
 [STACK.md](STACK.md).
 
-**Last updated:** 2026-07-31
+**Last updated:** 2026-08-02
 **Design notes:** [open-choices.md](open-choices.md) (self-ops)
+
+## Day-one when the VPS is ready
+
+Ordered host bring-up. Local `just e2e` is **not** cutover. Host
+`ban_drop=UNPROVEN` is **not** live traffic drop.
+
+### Production networking assumption (operator 2026-08-02)
+
+On the production NixOS box, **TCP port 80 is free** so the product
+**redirect-only** listener can bind (`redirectHttpToHttps` +
+`httpRedirectListen`, default `0.0.0.0:80`). That port serves HTTP->HTTPS
+redirect/upgrade only. No cleartext management API on :80.
+
+| Assumption | Status |
+|------------|--------|
+| Free :80 for product redirect-only bind | **Operator-approved** for production day-one |
+| ACME HTTP-01 on product :80 | **Still parked** (Q-EDGE). Free :80 does **not** invent ACME-on-product-:80. Prefer external PEMs, DNS-01, or dual-run ACME until Q-EDGE answers |
+| Free :443 for product rustls HTTPS | Required for public cutover; place host PEMs first |
+
+Firewall still opens only required ports (`modules/networking.nix`). Dual-run
+escape (`surmount.web.enable = true`) owns :80 ACME/redirect while nginx is
+active; product redirect-only and dual-run nginx must not both claim :80
+(eval mutex). Detail: [EDGE_AND_TLS.md](EDGE_AND_TLS.md).
+
+### Bring-up order
+
+1. **Place TLS PEMs** on the host (deploy secrets; never in git). Paths match
+   `surmount.managementUi.tlsCertPath` / `tlsKeyPath` (see host
+   [configuration.nix](../hosts/mail-vps/configuration.nix),
+   [SECRETS.md](SECRETS.md), [EDGE_AND_TLS.md](EDGE_AND_TLS.md)).
+2. **HTTPS management UI** with `listenMode = "https"` and product
+   `web.enable = false` (Axum rustls edge). Enable redirect-only :80 when
+   ready (`redirectHttpToHttps`; free port assumption above). Rebuild/switch.
+3. **Rebuild and prove locally** first if needed (`just e2e`), then on host:
+   `SURMOUNT_E2E_HOST=1 SURMOUNT_E2E_BASE_URL=https://... just e2e-host`.
+   Require BASE_URL; lab ban needs `SURMOUNT_E2E_LAB_IP` unless
+   `SURMOUNT_E2E_SKIP_BAN=1`. Summary `ban_drop=UNPROVEN` means set membership
+   only, not proven live drop.
+4. **Arti HS keys** under `onionServiceStateDir` (owned by `surmount-arti`).
+   Start daemon when ready; unit active alone is not onion published. Optional:
+   set `managementUi.onionUrl` or `onionHostnameFile` so the console can show
+   the operator-published address ([RESIDUAL.md](../RESIDUAL.md)).
+5. **Optional ban lab** on host sets (`surmount-ban4` / `surmount-ban6`) via
+   e2e-host; cleanup with helper `remove-ban`.
+6. **DNS and mail** cutover when edge is healthy: [DNS.md](DNS.md), mail ports,
+   Stalwart principals via `stalwart-cli` / bootstrap admin.
+
+Host module entry: [hosts/mail-vps/configuration.nix](../hosts/mail-vps/configuration.nix).
+Open residual tracks: [RESIDUAL.md](../RESIDUAL.md).
 
 ## Intent
 
@@ -200,9 +249,74 @@ document the hygiene bar.
 
 ### Incident: cert expiry
 
-1. `security.acme` / edge renew logs
+1. `security.acme` / edge renew logs (dual-run path) or host PEM renew path
 2. `./scripts/check-tls.sh ...`
-3. Confirm port 80 open for HTTP-01
+3. If using ACME HTTP-01 on the **dual-run nginx** path, confirm port 80 is
+   reachable for challenges. Product :80 is **redirect-only** by default;
+   ACME HTTP-01 on product :80 remains **parked** (Q-EDGE). Free production
+   :80 is for redirect bind, not an ACME invent.
+
+## Local Nostr auth enable (`just dev`)
+
+Default local console is open: `SURMOUNT_AUTH_MODE=off` (see `justfile`
+`dev`). Foundation is rust-nostr NIP-98 + HMAC session cookie. **Not** JS NDK.
+nsec never goes on the server.
+
+To gate the local console with Nostr:
+
+```bash
+export SURMOUNT_AUTH_MODE=nostr
+export SURMOUNT_NOSTR_ALLOWLIST=npub1...   # or hex pubkey; empty + mode=nostr = fail-closed
+# optional file when env empty:
+# export SURMOUNT_NOSTR_ALLOWLIST_FILE=/path/to/allowlist.txt
+export SURMOUNT_SESSION_SECRET=$(openssl rand -hex 32)
+# optional:
+# export SURMOUNT_NIP98_MAX_SKEW_SECS=300
+# export SURMOUNT_SESSION_TTL_SECS=...
+just dev
+```
+
+Then open `http://127.0.0.1:8080/login` (or `SURMOUNT_LISTEN`). Use NIP-07 in
+a capable browser extension, or exchange a kind 27235 event against
+`POST /api/v1/auth/session`. Public always: `/health` and auth endpoints.
+
+| Env | Role |
+|-----|------|
+| `SURMOUNT_AUTH_MODE` | `off` (default) or `nostr` |
+| `SURMOUNT_NOSTR_ALLOWLIST` | Comma-separated npub/hex; env wins when non-empty |
+| `SURMOUNT_NOSTR_ALLOWLIST_FILE` | Optional host file (same parse); used when env empty; unreadable = fail-closed |
+| `SURMOUNT_SESSION_SECRET` | HMAC cookie signing; required when mode=nostr (lab: openssl; host: deploy secret / EnvironmentFile) |
+| `SURMOUNT_NIP98_MAX_SKEW_SECS` | Optional skew window (default 300) |
+
+Host Nix mirrors: `managementUi.authMode`, `nostrAllowlist`,
+`nostrAllowlistFile`, `sessionSecretPath` (prefer path over inline env for
+production). Auth-failure ban matrix: [SECURITY.md](SECURITY.md). Full product
+answers still open under **Q-AUTH-1** (key-loss, durable session store,
+first-operator bootstrap UX). Depth: [SEARCH_AND_UI.md](SEARCH_AND_UI.md),
+[SECURITY.md](SECURITY.md).
+
+Local green with mode=nostr is **not** public cutover and does not close
+Q-AUTH-1.
+
+## Live Stalwart directory list (optional)
+
+Default accounts API is honest empty (`SURMOUNT_DIRECTORY` unset /
+`unavailable`). Live list is **explicit opt-in** only.
+
+| Piece | Role |
+|-------|------|
+| `managementUi.directory = "stalwart"` | Enable live management JMAP list |
+| `managementUi.stalwartTokenPath` | Host path to **raw** API token file (preferred production) |
+| Token file content | First non-empty non-`#` line is the Bearer token. Comments-only or empty = **fail-closed** at process start. Must be a regular file, mode **not** group/world readable (e.g. **0600**), readable by `surmount-ui` |
+| `authMode = "nostr"` | **Required** with live directory (principal list must not be open). Lab escape: `allowDirectoryUnauthenticated = true` |
+| `stalwartTokenEnv` | Lab only; requires `allowLabInlineStalwartToken = true` (eval fail-closed otherwise). Prefer path so secrets stay off the Nix store |
+
+Module: missing token path uses `ConditionPathExists` (unit inactive, not
+restart thrash). Present-but-bad content still fails at binary start under
+`Restart=on-failure` (burst capped). List HTTP errors surface **status-code
+only** in UI notes (no upstream body reflection).
+
+Local green with live directory is **not** host cutover.
 
 ## Related modules
 

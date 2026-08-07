@@ -550,7 +550,7 @@ protects vault items; server still needs disk/restic hygiene (SECRETS.md).
 
 ### 7.2 Management UI / webmail state
 
-Skeleton: essentially stateless proxy. Future likely needs:
+Multi-page console is largely stateless today (SSR + inventory proxies). Future likely needs:
 
 - Session store (signed cookie and/or server-side sessions)
 - npub <-> account map

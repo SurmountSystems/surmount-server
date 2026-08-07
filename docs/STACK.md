@@ -147,8 +147,10 @@ No blob tiering/compliance split this phase. Clever RPO/RTO backup design later.
 
 ### Product / UI / other state
 
-- Management UI skeleton: little durable state; future sessions/npub map/
-  audit under `/var/lib/surmount` (inventory when added).
+- Management multi-page console: little durable state today; future
+  sessions/npub map/audit under `/var/lib/surmount` (inventory when added).
+  HTML routes `/`, `/domains`, `/accounts`, `/system`, `/mail`; honest JSON
+  inventories; JMAP proxy remains 501 residual.
 - Never a second mailbox corpus in Surmount code.
 - Vaultwarden (planned): own data dir; **SQLite recommended** on single VPS.
 - Full table (ACME, sops age keys, journald, fail2ban, restic, LUKS, SSH
@@ -208,7 +210,7 @@ Firewall set in `modules/networking.nix`.
 JMAP clients should eventually hit either:
 
 1. Edge path that proxies to Stalwart HTTP with proper auth, or
-2. Management-ui JMAP proxy (`POST /api/v1/jmap`, currently 501 skeleton)
+2. Management-ui JMAP proxy (`POST /api/v1/jmap`, currently 501 residual)
 
 Prefer talking to Stalwart over JMAP/management APIs rather than reading
 RocksDB ourselves.

@@ -1,8 +1,9 @@
 # Residual (open work after Phases A-D foundation + review fix rounds)
 
-**Last updated:** 2026-07-31 (e2e SoT: flake apps `nix run .#e2e` /
-`nix run .#e2e-host` via Rust `crates/surmount-e2e`; bash harness retired;
-no staging/VPS in environment)
+**Last updated:** 2026-08-07 (account mutation e2e hermetic anchors shipped;
+mutations + structured request logging already in tree; prior: JMAP 501
+honesty; live Stalwart directory + wire-mock; production :80 free pin; e2e
+Nostr + onion anchors; e2e SoT Rust `crates/surmount-e2e`; no staging/VPS)
 **Status:** living residual after nginx default-off cutover wiring + prior
 foundation. Not operator acceptance of unfinished host items. **No cutover
 claimed.**
@@ -17,16 +18,24 @@ kernel firewall drop. Host proof is `nix run .#e2e-host` / `just e2e-host` with
 host (`SURMOUNT_E2E_*` unset; no active UI unit; `arti` not on PATH; `tor`
 present only). Agent work below does **not** soft-elevate host rows.
 
+**Production :80 (operator 2026-08-02):** assume TCP **port 80 is free** on the
+NixOS box for the product **redirect-only** listener. That is **not** ACME
+HTTP-01 on product :80 (still parked; Q-EDGE). Ops day-one:
+[docs/OPS.md](docs/OPS.md); edge detail: [docs/EDGE_AND_TLS.md](docs/EDGE_AND_TLS.md).
+
 ---
 
 ## Validation SoT (developer / CI)
 
 | Entry | What |
 |-------|------|
-| **`just check`** | Same as `nix build .#checks.<system>.ci` (CI quality bar; does **not** hard-depend on Tor deep row or host e2e) |
+| **`just check`** | Host CI-style bar: `fmt` (check-only, errors if dirty) then `clippy` (`-D warnings`) then `test` (all workspace cargo tests). Does **not** write format fixes. Does **not** hard-depend on Tor deep row or host e2e |
+| **`just check-ci`** | Same as `nix build .#checks.<system>.ci` (full flake CI aggregate) |
 | **`checks.*.ci`** | management-ui build + cargo fmt/clippy/test, **e2e-pure-test** (Rust pure helpers + host-gate contracts), one full module-eval, thin pure deploy/arti path contracts, arti-onion-package eval (features/passthru, no cargo build), nixfmt. **Does not** run host probes or optional Tor deep row |
+| **`just fmt`** | Format **check** only (`cargo fmt --check` + flake nixfmt `--check`); use `just fmt-write` to apply |
 | **`just test`** | Host `cargo test` only (fast loop) |
-| **`nix run .#e2e`** / **`just e2e`** | **Local comprehensive end-to-end** (SoT flake app; Rust `packages.e2e` / `surmount-e2e`). No NixOS, no root, no secrets in git: one hermetic `cargo test -p surmount-management-ui` plus named critical test anchors (health/TLS self-signed PEMs, https+local cleartext dual bind, rate-limit, ban/helper + remove_ban, surface audit 404/501, SSR, unauthorized stub) and `cargo test -p surmount-e2e --lib`. Not five independent cargo filters. Optional Tor publish+fetch when service-capable arti + Tor client present (`SURMOUNT_E2E_TOR=0` force-skip). Self-signed is correct for local HTTPS. |
+| **`just clippy`** | Host `cargo clippy --all-targets -- -D warnings` |
+| **`nix run .#e2e`** / **`just e2e`** | **Local comprehensive end-to-end** (SoT flake app; Rust `packages.e2e` / `surmount-e2e`). No NixOS, no root, no secrets in git: one hermetic `cargo test -p surmount-management-ui` plus named critical test anchors (health/TLS self-signed PEMs, https+local cleartext dual bind, rate-limit, ban/helper + remove_ban, surface audit 404/501, **Nostr auth off/gate/NIP-98 session**, onion unset residual, directory list + **account create auth-off/CSRF/lab-escape/503**, SSR, unauthorized stub) and `cargo test -p surmount-e2e --lib`. Not five independent cargo filters. Optional Tor publish+fetch when service-capable arti + Tor client present (`SURMOUNT_E2E_TOR=0` force-skip). Self-signed is correct for local HTTPS. |
 | **`nix run .#e2e-host`** / **`just e2e-host`** | **Host end-to-end** (SoT flake app; Rust `packages.e2e-host` / `surmount-e2e-host`). **Never** a flake check. Requires `SURMOUNT_E2E_HOST=1` or exits **2**. Also requires `SURMOUNT_E2E_BASE_URL` (health FAIL if unset, not silent SKIP). Ban track requires `SURMOUNT_E2E_LAB_IP` membership in `surmount-ban4` unless `SURMOUNT_E2E_SKIP_BAN=1`. Summary `ban_drop=UNPROVEN` (set existence / membership is not live traffic drop). Probes: HTTPS health, MemoryDenyWriteExecute (no writable+executable memory), UI no CAP_NET_ADMIN (ambient+bounding), Arti unit, ban helper + set preflight. |
 | **`just check-heavy`** | Optional mail-vm (not in ci) |
 
@@ -35,6 +44,15 @@ Heavy (not in ci): `mail-vm-test`, `mail-vps-eval` toplevel, `stalwart-mail` FOD
 CI note: only `module-eval-contract` runs full `nixosSystem`. Deploy-secrets and
 arti-module flake checks are pure charset/path-shape only (no triple eval).
 Module-eval is **not** a substitute for process end-to-end.
+
+**E2E vs CI (product choice, not a law of nature):** Today `checks.*.ci` keeps
+**reproducible tree checks** (including `e2e-pure-test` lib contracts) and
+leaves the full hermetic anchor harness at `just e2e` / `nix run .#e2e`. Putting
+**only** that hermetic path (anchors + cargo tests; `SURMOUNT_E2E_TOR=0` or no
+Tor tools) into a flake check is a deliberate cost-vs-safety choice if we want
+e2e always inside CI. **Tor deep row and host e2e stay out of CI either way** so
+green CI never soft-elevates to "cutover done." Local temp Tor keys and
+self-signed PEMs are not host ownership or public cutover.
 
 ---
 
@@ -80,9 +98,24 @@ Module-eval is **not** a substitute for process end-to-end.
   kernel sets in CI.
   **Auth-failure BanCandidate stub shipped:** `BanGuard::signal_unauthorized` /
   `decide_ban_signal` + main request-context adapter; Off/DryRun/Enforce
-  consistent; whitelist immune. **Surface audit locked:** routes do not
-  auto-ban on 404/501; hook exists unused by handlers (Q-ACL-1 open). **Not**
-  live host drop / full Q-ACL surface list / Nostr auth (Q-AUTH-1 parked).
+  consistent; whitelist immune. **Surface audit + ban matrix locked:** routes
+  do not auto-ban on 404/501; session exchange fail and bad presented NIP-98
+  may signal once; missing cookie does not. Table dual-pinned in
+  [docs/SECURITY.md](docs/SECURITY.md). Full Q-ACL surface list still open.
+  **Not** live host drop.
+- **Nostr auth foundation (2026-08-01; polish 2026-08-02):** rust-nostr NIP-98
+  (kind 27235) + HMAC session cookie scaffold; `SURMOUNT_AUTH_MODE` off
+  (default) / nostr; env allowlist + optional `SURMOUNT_NOSTR_ALLOWLIST_FILE`
+  (env wins; empty fail-closed); challenge/session/logout/me + `/login`.
+  **Not JS NDK.** UI honesty: auth-mode banners, `/login` when nostr, no
+  create-mailbox forms. Q-AUTH-1 residual: key-loss, durable session store,
+  first-operator bootstrap UX (do not invent). nsec never on server.
+- **Security headers + CSRF logout (2026-08-01):** management router baseline
+  CSP (lean SSR; per-request nonce for `/login` NIP-07 script), nosniff,
+  Referrer-Policy no-referrer, X-Frame-Options DENY + CSP frame-ancestors
+  none. Double-submit CSRF cookie on session create; enforced on
+  `POST /api/v1/auth/logout`. Session cookie HttpOnly + SameSite=Lax;
+  Secure when HTTPS listen.
 - TLS private key must not be group/world readable (`mode & 0o077 == 0`)
 - Redirect helpers + host allowlist + IPv6 Host parse
 - **Local cleartext full API** (`SURMOUNT_LOCAL_CLEARTEXT_LISTEN`): loopback
@@ -92,13 +125,29 @@ Module-eval is **not** a substitute for process end-to-end.
 - **`surmount.web.enable` default false** (nginx not product edge); dual-run
   escape `web.enable = true` still wires nginx + ACME; module-eval asserts
   web-off / https-ui / dual-run-on paths (no secrets in tree)
-- **Leptos SSR admin shell scaffold:** `pages.rs` renders `GET /` via Leptos
-  `view!` + `.to_html()` (ssr feature only). Shared `build_router` keeps
-  rate-limit / ban middleware. Hermetic tests cover SSR markers + `/health`.
-  No NPM. Crane toolchain: nixpkgs `rustPackages_1_88` (Leptos MSRV).
+- **Leptos SSR multi-page management console:** `pages.rs` renders
+  `GET /`, `/domains`, `/accounts`, `/system`, `/mail`, `/login` via Leptos
+  `view!` + `.to_html()` (ssr feature only; plain `<a href>` nav, no WASM).
+  Shared `build_router` keeps rate-limit / ban / auth middleware. Honest accounts
+  inventory (empty + `source: unavailable`; no fake `admin@`). Domains from
+  config labeled as inventory, not Stalwart directory. Live Stalwart probe on
+  overview/mail. Hermetic tests: SSR markers, DOGE palette, nav, no skeleton,
+  accounts honesty, `/health`. No NPM. Crane: nixpkgs `rustPackages_1_88`.
   **DOGE theme (2026-08-01):** pure 3-bit RGB eight-color palette only
   (`data-theme="doge"`, `color-scheme: only dark`); no grays / no light
   media queries. Spec SurmountSystems/specs `0001_DOGE.md` v1.0.0.
+  **Directory trait + hermetic mock + live Stalwart client shipped
+  (2026-08-01 mock; 2026-08-07 live):** `directory.rs` strategy on `AppState`
+  (`UnavailableDirectory` default; `MockDirectory` via constructor or
+  explicit `SURMOUNT_DIRECTORY=mock` only, never default-on;
+  `StalwartDirectory` via `SURMOUNT_DIRECTORY=stalwart` + host Bearer token
+  env/file, fail-closed misconfig, list fail-closed empty on HTTP error;
+  management JMAP `x:Account/query` + `get`). API + SSR list through directory.
+  **Mutations shipped (2026-08-07):** create/update via trait +
+  `POST/PATCH /api/v1/accounts`; mock + `x:Account/set` wire-mock; auth gate
+  (nostr or lab escape) + CSRF on cookie POSTs; no HTML form; no password/nsec.
+  **Structured request logging shipped:** onion-redacted path, no secret headers.
+  Nix: `managementUi.directory` / `stalwartTokenPath` (default unavailable).
 
 **Arti HS**
 
@@ -147,12 +196,12 @@ Module-eval is **not** a substitute for process end-to-end.
 |-------|----------|
 | **Public HTTPS host cutover** | Tree default is nginx off + https UI path; **operator host** still must place certificate/key files (PEMs), bind public :443, confirm MemoryDenyWriteExecute hardening (no writable+executable memory) via `just e2e-host`, choose cert path (Q-EDGE-1 / Q-CA-*). Do not claim live public cutover from eval or local e2e alone |
 | **nginx module delete from tree** | Dual-run escape still ships (`web.enable = true`). Unused-detection checklist: [docs/OPS.md](docs/OPS.md). Delete module file only after operators no longer need it **and** explicit operator OK |
-| **:80 redirect listener** | **Wired** in tree (flag + listen + allowlist; dual-run mutex; redirect-only). Host public proof still residual. **ACME HTTP-01 on product :80 parked** (Q-EDGE) |
-| **Arti live HS** | Live Tor verify on operator host; operator HS keys/ownership for surmount-arti; hardening after real `arti proxy`; admin/JMAP stanzas if ever wanted. **Package currency shipped:** Surmount-owned Arti **2.5.0** source + `onion-service-service` (`artiOnionService`; not nixpkgs 1.4.2 lag). **Tree cleartext local backend for https+Arti auto-path shipped** (loopback API + onion target; host still must place HS keys and prove Tor). Local temp-key publish (optional `just e2e` row) != host ownership. Do not invent Q-ARTI-2/3 answers. **When host Arti HS actually publishes:** surface the onion URL to the operator (admin UI status and/or documented path). Do **not** invent a live onion in the tree; do **not** log onion addresses in failure tails |
-| **Merciless ban product** | **First path + helper scaffold shipped:** Rust decide + memory/file; optional kernel firewall sync via Unix-socket helper oneshot or unsupported direct exec; Nix `accessControl` + sets; `nftHelper` requires `backend=nft` (fail-closed); UI no CAP_NET_ADMIN; EEXIST/already-present treated as apply ok for crash-window re-signal; **`remove_ban` / lab unban shipped** (hermetic delete-element + absent=ok). **Auth-failure BanCandidate stub shipped** + surface audit (404/501 do not auto-ban). **Still residual:** Q-ACL-1..6 (which surfaces call the hook); Q-AUTH-1 Nostr parked; live host helper + sets drop (`just e2e-host`); fail2ban SSH transitional. **Not** live host drop / full unauthorized auto-ban product |
-| **Admin Leptos SSR** | **Scaffold + DOGE theme shipped:** `GET /` is Leptos SSR (`data-surmount-ssr="leptos"`, `data-theme="doge"`) via shared Axum router. **Surmount DOGE** v1.0.0 palette only (pure 3-bit RGB eight colors; dark-only; no grays / no light media queries). Spec: https://github.com/SurmountSystems/specs/blob/main/0001_DOGE.md. SSR-only (no WASM hydrate / cargo-leptos / NPM). Crane uses rustc 1.88 for Leptos MSRV. **Still residual:** hydrate islands, richer admin pages, Nostr auth, JMAP/webmail UI; onion URL surface once Arti live works (see Arti row) |
-| **Nostr E2E auth** | Q-AUTH-1 (parked; do not invent) |
-| **JMAP proxy + v1 webmail** | Beyond 501 (parked) |
+| **:80 redirect listener** | **Wired** in tree (flag + listen + allowlist; dual-run mutex; redirect-only). **Operator assumption (2026-08-02):** production port 80 is **free** for that bind. Host public proof still residual. **ACME HTTP-01 on product :80 parked** (Q-EDGE; free :80 does not invent ACME) |
+| **Arti live HS** | Live Tor verify on operator host; operator HS keys/ownership for surmount-arti; hardening after real `arti proxy`; admin/JMAP stanzas if ever wanted. **Package currency shipped:** Surmount-owned Arti **2.5.0** source + `onion-service-service` (`artiOnionService`; not nixpkgs 1.4.2 lag). **Tree cleartext local backend for https+Arti auto-path shipped** (loopback API + onion target; host still must place HS keys and prove Tor). Local temp-key publish (optional `just e2e` row) != host ownership. Do not invent Q-ARTI-2/3 answers. **Onion URL surface (read-path) shipped (2026-08-01):** optional `SURMOUNT_ONION_URL` / `SURMOUNT_ONION_HOSTNAME_FILE` + Nix options; console system/overview + `GET /api/v1/system` show operator-published address only when set; redaction helper for logs. Still residual: host publish proof, HS keys, live Tor verify. Do **not** invent a live onion in the tree; do **not** log full onion addresses in failure tails |
+| **Merciless ban product** | **First path + helper scaffold shipped:** Rust decide + memory/file; optional kernel firewall sync via Unix-socket helper oneshot or unsupported direct exec; Nix `accessControl` + sets; `nftHelper` requires `backend=nft` (fail-closed); UI no CAP_NET_ADMIN; EEXIST/already-present treated as apply ok for crash-window re-signal; **`remove_ban` / lab unban shipped** (hermetic delete-element + absent=ok). **Auth-failure BanCandidate stub shipped** + surface audit (404/501 do not auto-ban); bad NIP-98 / session exchange may call `signal_unauthorized` once (missing cookie does not). **Still residual:** Q-ACL-1..6 (which surfaces call the hook); live host helper + sets drop (`just e2e-host`); fail2ban SSH transitional. **Not** live host drop / full unauthorized auto-ban product |
+| **Admin Leptos SSR** | **Multi-page console + UI depth (2026-08-01):** SSR `/`, `/domains`, `/accounts`, `/system`, `/mail`, `/login` with DOGE chrome, status chips (UI / Stalwart / onion configured marker), inventory cards, definition-list system page, mail probe card. No skeleton branding. Accounts honest empty (`source: unavailable`) by default; domains config inventory only. **Directory trait + hermetic mock + live client shipped (2026-08-07):** `AppState.directory` (`unavailable` default; labeled `mock` fixture; live `stalwart` management JMAP with host token, never default-on; list fail-closed empty). **Account create/update mutations shipped (2026-08-07):** `Directory::create_account` / `update_account`; `POST /api/v1/accounts` + `PATCH /api/v1/accounts/{id}`; mock + live `x:Account/set` wire-mock; fail-closed when `auth_mode=off` unless lab `SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED`; double-submit CSRF when session cookie present (same helper as logout). No HTML create form; no password/nsec on wire. Docs scrub: README/STACK describe real console; Stalwart admin = bootstrap fallback. Directory research: [docs/research/stalwart-directory-api.md](docs/research/stalwart-directory-api.md). Day-one host order in [docs/OPS.md](docs/OPS.md). **Still residual:** hydrate islands only if clear SSR gap (parked); full Q-AUTH-1 product answers; JMAP proxy + webmail **beyond** thin 501 (501 honesty locked); **host cutover / hardware deploy still open for operator**; host must place Stalwart API token when enabling live directory |
+| **Nostr E2E auth** | **Foundation shipped (2026-08-01):** `SURMOUNT_AUTH_MODE` off (default) / nostr; rust-nostr NIP-98 verify (kind 27235); env allowlist fail-closed when empty; HMAC session cookie scaffold; challenge/session/logout/me + `/login`. **Not JS NDK.** **Security headers + CSRF logout shipped (2026-08-01):** baseline CSP (nonce for login script) / nosniff / Referrer-Policy / frame denial on management router; double-submit CSRF on `POST /api/v1/auth/logout` (session cookie remains HttpOnly + SameSite=Lax; Secure when HTTPS). **CSRF on account mutation POSTs shipped (2026-08-07)** (cookie session requires `X-CSRF-Token` / body `csrf`). **Structured request logging shipped (2026-08-07):** method/path/status/latency; onion-redacted path; no Authorization/Cookie/bodies. **Q-AUTH-1 residual (do not invent):** key-loss recovery; durable server session store choice; first-operator bootstrap product UX. nsec never on server. Full webmail CSP still residual. |
+| **JMAP proxy + v1 webmail** | **Thin 501 boundary shipped / locked:** `POST /api/v1/jmap` returns honest 501 (`error: jmap_proxy_not_implemented`), mail SSR documents residual, `/webmail` is 404 (no fake UI), surface audit no auto-ban on 501. Hermetic: `jmap_proxy_returns_honest_501_body` + `mail_page_documents_jmap_proxy_501_residual` + surface audit. **Beyond 501 (real authenticated proxy + v1 webmail UI) parked** offline-capable; do not invent. |
 | **Vaultwarden / LUKS live / PQConnect / migration / UDS Stalwart / search / multi-host** | As before |
 
 ---
@@ -163,8 +212,30 @@ Shipped in tree (do **not** re-list as next work): in-process rustls HTTPS,
 Arti HS management-publish + package overlay, **https+Arti auto local
 cleartext backend**, nginx default-off / dual-run escape, :80 redirect-only
 bind, ban decision first path + helper `add_ban`/`remove_ban`/`ping`, Leptos
-SSR admin shell scaffold, surface audit (no auto-ban on 404/501), hermetic
-e2e-host pure helpers. Details under **What shipped**.
+SSR **multi-page management console** (not skeleton), surface audit (no
+auto-ban on 404/501), **live Stalwart directory client** (explicit opt-in),
+**JMAP thin 501 honesty contracts**, **account create/update mutations**
+(auth + CSRF), **structured request logging**, hermetic e2e-host pure helpers.
+Details under **What shipped**.
+
+**Ranking (2026-08-07) while VPS pending:**
+
+| Bucket | Highest-value next for parallel agents |
+|--------|----------------------------------------|
+| **Ship (offline)** | **Empty for product code** after mutation e2e anchors. Optional: CSP/hardening depth only if operator asks; do not invent Q-AUTH-1 or principal fields |
+| **Park (offline)** | Full JMAP proxy + v1 webmail UI beyond 501; hydrate islands without a clear SSR gap; inventing any Q-* |
+| **Host-gated (highest value now)** | Public HTTPS cutover + `just e2e-host`; Arti HS keys + live Tor verify; ban enforce lab drop proof; live directory token + mutation proof on host |
+| **Operator handoff** | Stage/commit untracked `auth.rs` + `directory.rs` so flake `just check-ci` is green (agents never stage). Host `just check` still sees the working tree |
+
+**Shipped offline this slice (2026-08-07):** account create/update mutations
+(directory trait + mock + Stalwart `x:Account/set` wire-mock; auth gate + lab
+escape; CSRF on cookie POSTs); structured `http_request` logging with onion
+redaction (no secret paths/tokens/nsec). **Mutation e2e hermetic anchors** in
+`HERMETIC_ANCHORS`: `account_create_auth_off_fail_closed_without_lab_escape`,
+`account_create_cookie_auth_requires_csrf` (also covers PATCH+CSRF),
+`account_create_lab_escape_mock_succeeds`,
+`account_create_unavailable_directory_service_unavailable`. Local green !=
+public cutover / host Arti / live ban drop.
 
 ### 1. Public HTTPS host cutover + MemoryDenyWriteExecute (operator)
 
@@ -178,6 +249,8 @@ Acceptance (host; automate via
 or `SKIP_BAN=1` when omitting ban track):
 
 - [ ] Public :443 happy path on operator VPS without `surmount.web.enable`
+- [ ] Free production :80 binds product **redirect-only** listener when enabled
+      (operator free-:80 assumption; not ACME-on-product-:80)
 - [ ] Certificate and key files on host only; key mode not group/world
       readable; never in git
 - [ ] `systemctl show surmount-management-ui -p MemoryDenyWriteExecute` => yes
@@ -236,11 +309,26 @@ Still residual (not claimed done; host `just e2e-host`):
       tree audit only: 404/501 do **not** auto-call the hook today
 - [ ] Replace transitional fail2ban sshd when Rust path covers SSH
 
-### 4. Richer admin UI / auth / mail UI (parked product)
+### 4. Admin UI depth / auth / mail UI (residual after multi-page console)
 
-- [ ] Leptos hydrate islands / richer admin pages (SSR shell already shipped)
-- [ ] Nostr E2E auth (Q-AUTH-1 parked; do not invent)
-- [ ] JMAP proxy + v1 webmail beyond 501
+- [x] Multi-page SSR console: overview, domains, accounts, system, mail
+      (DOGE; honest empty accounts; config domain inventory; live Stalwart probe)
+- [x] Directory trait + hermetic mock (`source: unavailable` default;
+      labeled `mock` fixture for tests / `SURMOUNT_DIRECTORY=mock` only)
+- [x] Live Stalwart directory client (2026-08-07): `SURMOUNT_DIRECTORY=stalwart`
+      + host token (`SURMOUNT_STALWART_TOKEN` / `TOKEN_FILE`); management JMAP
+      `x:Account/query`+`get`; hermetic wire-mock + fail-closed empty on error;
+      Nix `managementUi.directory` / `stalwartTokenPath` (default unavailable;
+      no default-on fake accounts). Domains stay config inventory.
+- [ ] Leptos hydrate islands only where a clear SSR gap needs them (none forced
+      this pass; DOGE SSR primary; no NPM)
+- [x] Nostr auth foundation (mode/allowlist/NIP-98/session cookie; rust-nostr);
+      e2e hermetic anchors shipped for off/gate/NIP-98 session + surface audit
+- [ ] Q-AUTH-1 residual: key-loss, durable session store, first-operator bootstrap UX (do not invent)
+- [x] JMAP thin 501 honesty + hermetic route contracts (2026-08-07): body code,
+      no invented methodResponses, mail SSR residual copy, no `/webmail` product
+- [ ] JMAP authenticated proxy + v1 webmail UI beyond 501 (parked depth)
+- [ ] Hardware / host deploy next (operator; not invented here)
 
 ---
 
@@ -256,19 +344,47 @@ Still residual (not claimed done; host `just e2e-host`):
 
 ---
 
-## Highest-value next (after this tree pass)
+## Ranking while VPS is pending (offline vs host)
 
-**Operator-gated (host; still residual; not done by agents without a VPS):**
+**Local green is never cutover.** Keep offline agent work and host-gated work
+in separate buckets. Do not soft-elevate host rows from hermetic e2e.
 
-1. **Operator public HTTPS cutover + `just e2e-host`** (PEMs, MDWE, :443)
-2. **Operator Arti HS keys + live Tor verify** (unit active != published)
-3. **Operator ban enforce lab** (sets + membership + traffic drop proof;
-   cleanup via `surmount-nft-ban-helper remove-ban <ip>`)
-4. Parked product only after host cutover: Q-ACL surfaces, Nostr, JMAP UI;
-   delete `web.nix` only when dual-run unused **and** operator OK
-   (checklist: [docs/OPS.md](docs/OPS.md) nginx dual-run unused detection)
+### Offline / agentable without a VPS
 
-**Agent-done this pass (2026-07-31; packaging + docs; no cutover):**
+Shipped or shippable on the developer machine / CI. Prove with `just e2e` /
+`just check` / hermetic cargo. Examples:
+
+| Slice | Status |
+|-------|--------|
+| Nostr auth foundation + hermetic e2e anchors (off/gate/NIP-98 session) | **Shipped** (Q-AUTH-1 product answers still open) |
+| Directory trait + hermetic mock | **Shipped** |
+| Live Stalwart directory client (JMAP + hermetic wire-mock + Nix opts) | **Shipped 2026-08-07** (default still unavailable; host token when enabling live; no cutover claim) |
+| :80 redirect-only wiring + dual-run mutex | **Shipped** (host public bind still residual) |
+| Production free-:80 docs pin (redirect-only; not ACME invent) | **Pinned 2026-08-02** |
+| CSP / CSRF / session hardening beyond scaffold | Residual product when other agents touch auth/UI; not host-gated |
+| JMAP thin 501 honesty + route contracts | **Shipped / locked 2026-08-07** (not full proxy) |
+| JMAP authenticated proxy + v1 webmail UI beyond 501 | Residual offline-capable (**parked** depth; do not invent) |
+| Hydrate islands | **Parked** until a clear SSR gap; DOGE SSR primary; no NPM |
+| Optional local Tor deep row when arti + Tor client on PATH | Local only; != host `surmount-arti` ownership |
+| Q-AUTH-1 / Q-ACL / Q-ARTI / Q-EDGE answers | **Do not invent**; park |
+| Untracked module sources in dirty tree (`auth.rs`, `directory.rs`) | **Operator stage/commit handoff** so flake `just check-ci` sees them (agents never stage). Host `just check` / `cargo test` use the working tree |
+
+### Host-gated (when the VPS arrives)
+
+Require real deploy + `SURMOUNT_E2E_HOST=1` / operator secrets. Agents without
+a host **stop** at docs, tree wiring, and local e2e.
+
+1. **Public HTTPS cutover + `just e2e-host`** (PEMs, MemoryDenyWriteExecute,
+   public :443; free :80 redirect-only bind when enabled)
+2. **Arti HS keys + live Tor verify** (unit active != published)
+3. **Ban enforce lab** (sets + membership + traffic drop proof; cleanup via
+   `surmount-nft-ban-helper remove-ban <ip>`)
+4. Cert renew path for chosen CA flow (Q-EDGE-1 / Q-CA-*); ACME-on-product-:80
+   still parked
+5. Delete `web.nix` only when dual-run unused **and** explicit operator OK
+   (checklist: [docs/OPS.md](docs/OPS.md))
+
+### Agent-done earlier (packaging + docs; no cutover)
 
 - [x] Version currency audit vs network latest (Stalwart family at tip;
       crane rustc 1.88 vs stable 1.97.1 noted). See
@@ -286,6 +402,7 @@ Still residual (not claimed done; host `just e2e-host`):
       `cargo test -p surmount-e2e --lib`; host e2e without env expected exit 2
 - [x] E2E SoT rewrite: Rust `crates/surmount-e2e` + flake `apps.e2e` /
       `apps.e2e-host`; bash `scripts/e2e-*.sh` pure lib retired
+- [x] Production free-:80 pin (docs dual-pin 2026-08-02; redirect-only)
 - [ ] Optional local Tor deep row: still residual until built `arti` on PATH
       + Tor client + live verify (do not fake host ownership)
 
@@ -302,6 +419,9 @@ nix run .#e2e
 # local comprehensive end-to-end (hermetic); optional Tor when tools present
 
 just check
+# exit 0  -> host fmt --check + clippy -D warnings + cargo test
+
+just check-ci
 # exit 0  -> checks.<system>.ci (may be slow; includes e2e-pure-test, not host e2e)
 
 # host only (exit 2 if SURMOUNT_E2E_HOST unset; BASE_URL required; LAB_IP unless SKIP_BAN):

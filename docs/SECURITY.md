@@ -4,7 +4,7 @@ Defense-in-depth notes for the Surmount mail VPS. Design notes:
 [open-choices.md](open-choices.md). Secrets detail: [SECRETS.md](SECRETS.md).
 Data plane: [DATASTORES.md](DATASTORES.md). Ops: [OPS.md](OPS.md).
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-02
 
 This document is posture and design, not a penetration-test report. Open
 implementation details are marked honestly. Not operator-accepted unless you
@@ -86,6 +86,13 @@ Proposed direction (open-choices).
   kind `27235`, tags `u` (absolute URL) and `method`, optional `payload`
   SHA-256, short `created_at` window; header
   `Authorization: Nostr <base64(event)>`.
+- **Foundation (2026-08-01):** management-ui verifies NIP-98 with **rust-nostr**
+  (`nostr` crate; not JS NDK). Scaffold session is an HMAC-signed HttpOnly
+  cookie (`SURMOUNT_SESSION_SECRET` host-only). Allowlist via
+  `SURMOUNT_NOSTR_ALLOWLIST` (env) or optional `SURMOUNT_NOSTR_ALLOWLIST_FILE`
+  (same parse rules; **env wins** when non-empty). Empty allowlist is
+  fail-closed. Mode `off` default for local dev. Full Q-AUTH-1 (durable store,
+  bootstrap UX, key-loss) still residual (do not invent product answers here).
 - After login, **sessions** (cookie or server-side) are expected so SSR pages
   are usable without signing every GET (exact design open).
 - **[NIP-42](https://nips.nostr.com/42)** is relay AUTH; relevant if we speak
@@ -194,12 +201,54 @@ exfil scenarios when the volume is locked.
 **Does not:** stop root on a running system, malicious host ops with memory
 access, ransomware already executing as root, or replace application auth.
 
+## Auth failure to ban matrix (management-ui)
+
+Accurate to code in `crates/management-ui/src/main.rs` (not aspirational
+Q-ACL-1 surface answers). Enforcement still depends on
+`SURMOUNT_BAN_ENFORCEMENT` (`off` = signal ignored, `dry-run`/`enforce` =
+record; whitelist never banned). Hermetic tests:
+`surface_audit_404_and_501_do_not_auto_ban`,
+`auth_failure_ban_matrix_signals_and_skips`.
+
+| Surface | Condition | Calls `signal_unauthorized`? |
+|---------|-----------|------------------------------|
+| `POST /api/v1/auth/session` | Event parse fail (missing/malformed body or Authorization) | **Yes** |
+| `POST /api/v1/auth/session` | NIP-98 verify fail (sig, allowlist, skew, `u`, method) | **Yes** |
+| Protected HTML/API (mode=nostr) | Missing session cookie and no `Authorization: Nostr` | **No** (gate only: redirect `/login` or 401) |
+| Protected path | `Authorization: Nostr` present and error is BadSignature, NotAllowlisted, WrongKind, Skew, UrlMismatch, or MethodMismatch | **Yes** |
+| Protected path | `Authorization: Nostr` present but unparseable (Malformed) | **No** (log gate only; not in ban match list) |
+| Unknown HTML path | mode=nostr: temporary redirect to `/login` (gate); mode=off: 404 | **No** |
+| Unknown `/api/...` path | mode=nostr without credentials: 401 gate | **No** |
+| `POST /api/v1/jmap` | 501 when reached (auth off or authenticated); under mode=nostr without credentials the gate returns 401 first | **No** ban either way |
+| `GET /health` | Always public | **No** |
+
+Structured logs on auth fail use surface + `auth_error_kind` only (no cookie,
+nsec, Authorization, or event JSON). Full Q-ACL-1 (which other mail/HTTP
+surfaces must raise the hook) remains open.
+
 ## Application hardening (product UI / webmail)
 
 - Nostr auth + short-lived NIP-98 windows; bind session to expectations
   (HTTPS, Secure cookies, sensible SameSite) when sessions exist.
-- CSRF protection on state-changing routes once cookies are used.
-- CSP and careful HTML escaping in Leptos SSR; treat email HTML as hostile.
+- **Session cookie (shipped scaffold):** `surmount_session` is **HttpOnly**,
+  **SameSite=Lax**, **Path=/**; **Secure** is set when listen mode is HTTPS
+  (`secure_cookies` from `listen_mode.is_https()`). SameSite=Lax already
+  blocks most cross-site POSTs from carrying the cookie.
+- **CSRF (shipped):** cookie-authenticated mutations use **double-submit**.
+  Session exchange sets non-HttpOnly `surmount_csrf` (SameSite=Lax, Secure
+  when HTTPS) and returns `csrf` in the JSON body. `POST /api/v1/auth/logout`
+  always requires cookie value to match `X-CSRF-Token` (or JSON body field
+  `csrf`); mismatch or missing token is **403**. Account mutations
+  (`POST /api/v1/accounts`, `PATCH /api/v1/accounts/{id}`) require the same
+  when a session cookie is present (NIP-98-only or lab auth-off escape skips
+  CSRF). Shared helper `require_csrf_double_submit`.
+- **Baseline security headers (shipped on management router):**
+  `Content-Security-Policy` lean for SSR admin (`default-src 'self'`, no
+  third-party hosts; `script-src` with per-request nonce for `/login`
+  NIP-07 inline script; `style-src 'self' 'unsafe-inline'` for DOGE CSS;
+  `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
+- Full webmail CSP / attachment sandbox remains residual (hostile email HTML).
 - Rate-limit auth endpoints at edge and app.
 - Do not expose Stalwart admin on the public internet long-term.
 - Attachments: size limits, content-type caution, no drive-by exec paths.

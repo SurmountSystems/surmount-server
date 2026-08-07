@@ -38,6 +38,31 @@ const HERMETIC_ANCHORS: &[&str] = &[
     "middleware_whitelist_bypasses_rate_limit_and_touches_last_used",
     "signal_unauthorized_hook_whitelist_and_enforce_record",
     "surface_audit_404_and_501_do_not_auto_ban",
+    // Honest JMAP proxy boundary (501 body + no webmail route).
+    "jmap_proxy_returns_honest_501_body",
+    // Nostr auth foundation (management-ui bin/lib contracts).
+    "auth_mode_off_root_ok_without_cookie",
+    "auth_mode_nostr_gates_without_cookie",
+    "auth_session_from_nip98_then_me_and_root",
+    // Onion display: unset must not invent an address.
+    "system_status_onion_null_when_unset",
+    "onion_unset_shows_residual_not_invented",
+    // Directory honesty: unavailable default, mock label, live wire-mock + fail-closed.
+    "unavailable_directory_is_honest_empty",
+    "mock_directory_returns_labeled_non_empty_not_stalwart",
+    "stalwart_directory_lists_from_jmap_wire_mock",
+    "stalwart_directory_fail_closed_empty_on_server_error",
+    "stalwart_directory_fail_closed_empty_when_unreachable",
+    "accounts_api_respects_live_stalwart_directory",
+    "accounts_api_live_directory_unreachable_is_empty_not_invented",
+    "auth_mode_nostr_gates_accounts_api_with_directory_injected",
+    // Account create/update mutations (shared build_router; auth + CSRF + 503).
+    "account_create_auth_off_fail_closed_without_lab_escape",
+    "account_create_cookie_auth_requires_csrf",
+    "account_create_lab_escape_mock_succeeds",
+    "account_create_unavailable_directory_service_unavailable",
+    "token_from_file_comment_only_fail_closed",
+    "truncate_for_note_utf8_safe_mid_codepoint",
     "admin_shell_ssr_and_health_via_shared_router",
     "helper_client_unix_socket_roundtrip",
     "enforce_helper_refuse_leaves_memory_unbanned",
@@ -143,8 +168,9 @@ fn run() -> i32 {
                 println!(
                     "          rate-limit/X-Real-IP, ban/helper UDS + remove_ban, surface audit"
                 );
+                println!("          (404/501 no auto-ban), Nostr auth off/gate/NIP-98 session,");
                 println!(
-                    "          (404/501 no auto-ban), unauthorized BanCandidate stub, Leptos SSR"
+                    "          onion unset residual, unauthorized BanCandidate stub, Leptos SSR"
                 );
                 println!(
                     "  E preflight (Nix Arti config shape) stays under just check / module-eval"

@@ -4,6 +4,7 @@
 //! firewall ban helper is `surmount-nft-ban-helper` (no CAP_NET_ADMIN on the UI
 //! process; helper applies set membership over a Unix socket).
 
+pub mod auth;
 pub mod ban;
 pub mod nft_helper;
 pub mod rate_limit;

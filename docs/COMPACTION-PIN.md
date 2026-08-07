@@ -4,7 +4,7 @@
 Read this first, then follow links into child docs. Do not invent product
 scope from memory alone.
 
-**Last updated:** 2026-07-31
+**Last updated:** 2026-08-07
 **Status:** living direction pin (operator direction + tree facts). Not every
 line is eternal law. Prefer **operator direction YYYY-MM-DD**, **proposed**,
 **scaffold default**, **research finding**, or **open** labels. Do not say
@@ -132,7 +132,7 @@ Depth: [DATASTORES.md](DATASTORES.md),
 | Item | Direction |
 |------|-----------|
 | Clearnet HTTPS | **Axum-first** edge (in-process or small `surmount-edge` crate). nginx delete path. |
-| :80 | Redirect/upgrade to :443 (ACME HTTP-01 may share :80) |
+| :80 | Redirect/upgrade to :443. **Production (operator 2026-08-02):** port 80 is **free** for product **redirect-only** bind. **ACME HTTP-01 on product :80 parked** (Q-EDGE; free :80 does not invent ACME). Dual-run nginx may still use :80 for ACME while escape is on. |
 | TLS | No SSLv3/1.0/1.1; **prefer TLS 1.3**; hybrid **PQ KEX** on rustls/aws-lc-rs (e.g. X25519MLKEM768) **first-class** |
 | PQConnect | **Separate** path-layer PQ between supporting peers; evaluate/plan; not a substitute for TLS hybrid alone |
 | Local IPC | Prefer **Unix domain sockets**. Stalwart HTTP today is IP:port (UDS gap; loopback scaffold). |
@@ -191,7 +191,7 @@ Full: [SECRETS.md](SECRETS.md), [SECURITY.md](SECURITY.md).
 
 | Item | Direction |
 |------|-----------|
-| Stack | **Axum + Leptos SSR** (invested); admin `GET /` is Leptos SSR scaffold (ssr-only); hydrate/webmail residual |
+| Stack | **Axum + Leptos SSR** (invested); multi-page admin console (`/`, `/domains`, `/accounts`, `/system`, `/mail`) SSR-only; hydrate/webmail residual |
 | Phase order | **Admin console first**, then **real webmail in v1** via JMAP |
 | Legacy sites | **Static files only**, no exceptions (no PHP/Node for old Synology apps) |
 | Longer-term clients | Desktop / local-first preference noted as complementary; does not cancel v1 webmail |
@@ -301,11 +301,11 @@ Honest gaps. Do not claim these are shipping code:
 
 | Gap | Reality today |
 |-----|----------------|
-| **Arti live Tor publish** | Module generates **management-publish** `arti.toml` (onion + rproxy, no keys in tree); Surmount `artiOnionService` is owned **2.5.0** source + `onion-service-service` (not nixpkgs 1.4.2 lag); stock path fail-closed. **Local cleartext full API for https+Arti auto-path shipped** (loopback `SURMOUNT_LOCAL_CLEARTEXT_LISTEN` + Arti backend target; lean onion backend is cleartext HTTP or UDS). Local optional Tor row (`just e2e`) may use temp keys when arti present. Still residual: **live Tor verify on host**, operator HS keys/ownership under `surmount-arti`, hardening after real `arti proxy`. Do **not** claim onion published from unit active alone; local temp-key green != host ownership. Do not invent Q-ARTI-2/3 answers |
-| **Axum HTTPS public cutover / nginx delete** | In-process rustls TLS 1.3 acceptor wired (host PEMs, fail-closed key mode). **`surmount.web.enable` default false** (nginx not product edge). Dual-run escape: `web.enable = true`. Module/nginx code still in tree. **:80 redirect-only bind wired** when `redirectHttpToHttps` + listen (dual-run mutex at eval; no cleartext API on :80). **ACME HTTP-01 on product :80 parked** (Q-EDGE; do not invent ACME-on-product-:80). Local e2e covers HTTPS with **self-signed** temp PEMs (`just e2e`). Host public :443 + MemoryDenyWriteExecute (no writable+executable memory) + cert path still operator residual (`just e2e-host`). Do not claim live public cutover, live onion, host MemoryDenyWriteExecute hardening done, or "nginx deleted from repo" without host proof. Dual-run unused checklist: [OPS.md](OPS.md) (nginx dual-run unused detection); **do not delete `modules/web.nix` without operator OK** |
-| **Merciless ban + whitelist** | First path + helper scaffold: Rust ban decide + memory/file; optional kernel firewall sync via **socket-activated** `surmount-nft-ban-helper@` (Unix socket `SURMOUNT_BAN_NFT_HELPER_SOCK`; CAP_NET_ADMIN on helper unit only) or unsupported direct `nftExec`; UI keeps NNP and **no** CAP_NET_ADMIN (child setcap spawn is not the product path). DryRun does not mutate sets; Enforce apply-then-durable. Hermetic mock/tests under `just e2e`. **`remove_ban` / lab unban shipped** (helper `remove_ban` / CLI `remove-ban`; delete-element; absent element = ok). **Auth-failure BanCandidate stub shipped** (`decide_ban_signal` / `BanGuard::signal_unauthorized` + request-context hook; whitelist immune; Off/DryRun/Enforce). **Not** live host bans / Q-ACL-1..6 surface answers / Nostr auth (Q-AUTH-1 parked; do not invent). Live drop: `just e2e-host` + sets `surmount-ban4`/`surmount-ban6`. fail2ban sshd still transitional sketch |
-| **Leptos SSR admin/webmail** | **Admin shell scaffold landed:** `GET /` is Leptos SSR (ssr-only, no hydrate/WASM/NPM) through shared Axum stack. Richer admin pages, hydrate, Nostr auth, JMAP/webmail UI still residual. Crane rustc 1.88 for Leptos MSRV |
-| **Nostr auth end-to-end** | Direction; product verify/session not complete (Q-AUTH-1 parked) |
+| **Arti live Tor publish** | Module generates **management-publish** `arti.toml` (onion + rproxy, no keys in tree); Surmount `artiOnionService` is owned **2.5.0** source + `onion-service-service` (not nixpkgs 1.4.2 lag); stock path fail-closed. **Local cleartext full API for https+Arti auto-path shipped** (loopback `SURMOUNT_LOCAL_CLEARTEXT_LISTEN` + Arti backend target; lean onion backend is cleartext HTTP or UDS). **Onion URL surface read-path shipped (2026-08-01):** `SURMOUNT_ONION_URL` / `SURMOUNT_ONION_HOSTNAME_FILE` (+ Nix `managementUi.onionUrl` / `onionHostnameFile`); SSR + `GET /api/v1/system` show address only when set; log redaction helper. Local optional Tor row (`just e2e`) may use temp keys when arti present. Still residual: **live Tor verify on host**, operator HS keys/ownership under `surmount-arti`, hardening after real `arti proxy`. Do **not** claim onion published from unit active alone; local temp-key green != host ownership. Do not invent Q-ARTI-2/3 answers |
+| **Axum HTTPS public cutover / nginx delete** | In-process rustls TLS 1.3 acceptor wired (host PEMs, fail-closed key mode). **`surmount.web.enable` default false** (nginx not product edge). Dual-run escape: `web.enable = true`. Module/nginx code still in tree. **:80 redirect-only bind wired** when `redirectHttpToHttps` + listen (dual-run mutex at eval; no cleartext API on :80). **Operator 2026-08-02:** production port 80 is **free** for that redirect-only path. **ACME HTTP-01 on product :80 parked** (Q-EDGE; do not invent ACME-on-product-:80). Local e2e covers HTTPS with **self-signed** temp PEMs (`just e2e`). Host public :443 + MemoryDenyWriteExecute (no writable+executable memory) + cert path still operator residual (`just e2e-host`). Day-one host order: [OPS.md](OPS.md). Do not claim live public cutover, live onion, host MemoryDenyWriteExecute hardening done, or "nginx deleted from repo" without host proof. Dual-run unused checklist: [OPS.md](OPS.md) (nginx dual-run unused detection); **do not delete `modules/web.nix` without operator OK** |
+| **Merciless ban + whitelist** | First path + helper scaffold: Rust ban decide + memory/file; optional kernel firewall sync via **socket-activated** `surmount-nft-ban-helper@` (Unix socket `SURMOUNT_BAN_NFT_HELPER_SOCK`; CAP_NET_ADMIN on helper unit only) or unsupported direct `nftExec`; UI keeps NNP and **no** CAP_NET_ADMIN (child setcap spawn is not the product path). DryRun does not mutate sets; Enforce apply-then-durable. Hermetic mock/tests under `just e2e`. **`remove_ban` / lab unban shipped** (helper `remove_ban` / CLI `remove-ban`; delete-element; absent element = ok). **Auth-failure BanCandidate + matrix shipped** (`decide_ban_signal` / `BanGuard::signal_unauthorized` + request-context hook; whitelist immune; Off/DryRun/Enforce). Session exchange fail and bad presented NIP-98 may signal once; missing cookie does not; 404/501 still do not auto-ban. Table: [SECURITY.md](SECURITY.md). **Not** live host bans / full Q-ACL-1..6 surface answers. Live drop: `just e2e-host` + sets `surmount-ban4`/`surmount-ban6`. fail2ban sshd still transitional sketch |
+| **Leptos SSR admin/webmail** | **Multi-page console + UI depth (2026-08-01; directory live 2026-08-07):** SSR `/`, `/domains`, `/accounts`, `/system`, `/mail`, `/login` (DOGE only; no skeleton). Inventory cards, onion chip, system definition table, mail probe card. Accounts honest empty by default; domains config inventory. **Directory trait + hermetic mock + live Stalwart client shipped** (`AppState.directory`; `unavailable` default; labeled `mock` never default-on; `stalwart` = management JMAP `x:Account/query`+`get` via Bearer token, explicit `SURMOUNT_DIRECTORY=stalwart` + host token only; list fail-closed empty). **JMAP thin 501 boundary locked (2026-08-07):** `POST /api/v1/jmap` honest 501 (`jmap_proxy_not_implemented`); mail SSR residual copy; no `/webmail` product route; hermetic anchors. Directory research: [research/stalwart-directory-api.md](research/stalwart-directory-api.md). **Account create/update API mutations shipped (2026-08-07)** (`POST/PATCH /api/v1/accounts`; auth gate + CSRF; mock + `x:Account/set` wire-mock; no HTML form). **Structured request logging shipped.** Still residual: hydrate islands only if clear SSR gap (parked), full Q-AUTH-1, JMAP proxy + webmail **beyond** 501, **host cutover**. Crane rustc 1.88 for Leptos MSRV |
+| **Nostr auth end-to-end** | **Foundation shipped (2026-08-01; polish 2026-08-02):** rust-nostr NIP-98 + HMAC session cookie scaffold; `SURMOUNT_AUTH_MODE` off/nostr; env allowlist + optional allowlist file (env wins; empty fail-closed); challenge/session/me/logout + login page. **Not JS NDK.** UI honesty (auth-mode banners, `/login` when nostr). Hermetic e2e anchors list off/gate/NIP-98 session + surface audit + ban matrix (and onion unset residual). CSRF on account mutations + structured request logging shipped (2026-08-07). **Account mutation e2e hermetic anchors shipped (2026-08-07):** auth-off fail-closed, cookie CSRF (incl. PATCH), lab escape mock, unavailable 503. Q-AUTH-1 residual: key-loss, durable session store, first-operator bootstrap UX (do not invent). nsec never on server. |
 | **Vaultwarden module** | Planned; not wired as Surmount product module |
 | **LUKS install on live VPS** | Posture docs; provider + install path open |
 | **Stalwart flake input to fork** | Pattern documented; binary FOD path still primary |
@@ -321,16 +321,20 @@ transitional nginx web module (default off; dual-run escape), management-ui
 Axum edge (rustls HTTPS acceptor + TLS path config, rate limit, ban decide
 layer default off, **local cleartext full API** for https+Arti, redirect
 helpers + optional redirect-only :80 bind; ACME-on-:80 parked; **Leptos SSR
-admin shell** on `GET /`; **nft ban helper scaffold** UDS + socket-activated
-oneshot with `add_ban` / `remove_ban` / `ping`), Arti HS management-publish
-module (config + optional daemon; auto cleartext backend when UI https),
+multi-page management console** (`/`, `/domains`, `/accounts`, `/system`,
+`/mail`); **nft ban helper scaffold** UDS + socket-activated oneshot with
+`add_ban` / `remove_ban` / `ping`), Arti HS management-publish module
+(config + optional daemon; auto cleartext backend when UI https),
 deploy-secrets fail-loud options, hardening/networking + optional
 accessControl nft sets, docs, scripts, local/host end-to-end harnesses
 (`nix run .#e2e` / `nix run .#e2e-host`, thin `just e2e` / `just e2e-host`),
 VM and pure contract checks. Crane management-ui uses rustc 1.88 (not channel
 default 1.86) for Leptos. E2E SoT is flake apps + Rust `crates/surmount-e2e`
-(not free-floating bash). Host e2e is never in `checks.*.ci`.
-Validation SoT: [RESIDUAL.md](../RESIDUAL.md).
+(not free-floating bash). Host e2e is never in `checks.*.ci`. Tor deep row is
+optional on local `just e2e` only (not CI). Full hermetic anchors live outside
+the aggregate today; folding **hermetic-only** into a flake check is a product
+choice (cost vs safety), not required by physics. Never treat green CI as host
+cutover or live onion. Validation SoT: [RESIDUAL.md](../RESIDUAL.md).
 
 ---
 

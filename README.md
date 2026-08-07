@@ -111,16 +111,54 @@ direction and open choices live in `docs/`.
 ### Develop locally
 
 ```bash
-nix develop
-just check                             # CI quality bar (flake checks.ci)
+nix develop                            # puts nixfmt, just, rustc, … on PATH
+just dev                               # local management console → http://127.0.0.1:8080/
+just check                             # CI-style host bar: fmt --check, clippy, test
+just check-ci                          # full flake checks.<system>.ci aggregate
+just fmt                               # format check only (errors if dirty; no write)
+just fmt-write                         # apply cargo fmt + flake nixfmt
 just test                              # cargo test only
-cargo run -p surmount-management-ui
+just clippy                            # clippy -D warnings
+just e2e                               # local comprehensive end-to-end (hermetic)
 nix build .#management-ui
 ```
 
-**CI entry:** `just check` builds `checks.<system>.ci` (Rust fmt/clippy/test,
-module-eval contracts, nixfmt). Heavy mail VM / Stalwart FOD / full host toplevel
-are separate (`just check-heavy`, optional flake checks).
+`just dev` runs the multi-page console with demo hostnames. No VPS or Stalwart
+required (Stalwart chip stays down until something answers `SURMOUNT_STALWART_URL`).
+Ctrl-C stops it. Override any `SURMOUNT_*` env before invoking.
+
+**nixfmt (Nix formatter):** the flake already ships `nixfmt-rfc-style` as
+`packages.nixfmt`, `formatter`, and in `devShells.default`. Prefer the flake
+over a distro package so CI and laptop match.
+
+```bash
+# one-shot (no install)
+nix run .#nixfmt -- --check flake.nix
+# or use the formatter output:
+nix run .#formatter -- flake.nix
+# temporary shell with nixfmt on PATH
+nix shell .#nixfmt
+# durable shell with full tooling
+nix develop
+# optional: pin into your user profile
+nix profile install .#nixfmt
+```
+
+On Arch, you do **not** need a pacman/AUR package for day-to-day work if you
+use the flake above. If you still want a system package for other repos:
+
+```bash
+# AUR (names vary; check with paru/yay search)
+paru -S nixfmt          # or nixfmt-bin / nixfmt-git, depending on AUR
+# or always-nix from nixpkgs (same RFC style as this flake):
+nix profile install nixpkgs#nixfmt-rfc-style
+```
+
+**Host quality bar:** `just check` runs format check (no write), clippy with
+warnings denied, then `cargo test` (same order as typical CI gates). **Full
+flake CI:** `just check-ci` builds `checks.<system>.ci` (crane fmt/clippy/test,
+module-eval contracts, nixfmt, …). Heavy mail VM / Stalwart FOD / full host
+toplevel stay separate (`just check-heavy`, optional flake checks).
 
 ### Build the NixOS system (no deploy)
 
@@ -184,9 +222,10 @@ surmount-mail-import-maildir you@surmount.systems \
 Legacy **web sites** from Synology are expected to be **static files only**
 (no app-server migration; no exceptions).
 
-## Stalwart admin fallback
+## Stalwart admin bootstrap fallback
 
-While the Rust UI is a skeleton, use Stalwart's own admin:
+The Surmount multi-page console is the operator surface. Use Stalwart's own
+admin as a **bootstrap fallback** only (directory create, first-boot):
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 mail-vps
@@ -204,15 +243,27 @@ HTTP split is documented in architecture-review).
 
 ## Management UI
 
+Multi-page **Leptos SSR** operator console (Axum edge + DOGE dark theme):
+
+| Surface | Routes |
+|---------|--------|
+| HTML | `/`, `/domains`, `/accounts`, `/system`, `/mail` |
+| JSON | `/health`, `/api/v1/system`, `/api/v1/domains`, `/api/v1/accounts`, `/api/v1/stalwart/status` |
+| Residual | `POST /api/v1/jmap` (501 honest proxy boundary); full webmail UI parked |
+
 - Package: `nix build .#management-ui`
-- Service: `surmount-management-ui.service` (local only; UDS preferred later)
-- Proxy: `https://services.surmount.systems/`
+- Service: `surmount-management-ui.service`
+- Public: `https://services.surmount.systems/` (product edge is Axum HTTPS when
+  `web.enable = false`)
+- Optional onion display: `SURMOUNT_ONION_URL` or `SURMOUNT_ONION_HOSTNAME_FILE`
+  (never invent a live onion in tree)
+- Directory: default honest empty (`source: unavailable`); hermetic `mock` or
+  live `stalwart` only when explicitly configured + host token (never
+  default-on)
 
-Skeleton routes: `/health`, `/api/v1/domains`, `/api/v1/accounts`,
-`/api/v1/stalwart/status`, `POST /api/v1/jmap` (501).
-
-**Direction:** **Leptos SSR** admin first (Nostr auth), then **real webmail
-in v1** via JMAP; phases in [docs/SEARCH_AND_UI.md](docs/SEARCH_AND_UI.md).
+Honest residual: Q-AUTH-1 product answers; JMAP proxy beyond 501; v1 webmail
+UI; host cutover. Day-one host order: [docs/OPS.md](docs/OPS.md). Phases:
+[docs/SEARCH_AND_UI.md](docs/SEARCH_AND_UI.md).
 
 ## Operator smoke scripts
 

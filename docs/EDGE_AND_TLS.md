@@ -4,7 +4,7 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-02
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
 - No nginx as product edge
@@ -26,7 +26,7 @@ protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 | Reverse proxy / routing | To Axum/Leptos UI; optional Stalwart HTTP path |
 | Local IPC | Prefer **Unix domain sockets** to backends, not TCP localhost |
 | Certificates | Automated public CA is common today; **not** locked to ACME-only (TLS research) |
-| HTTP :80 | Automatically and gracefully upgrade/redirect to :443 (ACME HTTP-01 may share :80) |
+| HTTP :80 | Automatically and gracefully upgrade/redirect to :443. Production: **port 80 free** for product redirect-only bind (operator 2026-08-02). ACME HTTP-01 on product :80 **parked** (Q-EDGE); dual-run nginx may still use :80 for ACME |
 | TLS versions | No SSLv3, no TLS 1.0/1.1; **prefer TLS 1.3** (1.2 only if measured client need) |
 | PQ where supported | Enable hybrid PQ KEX (e.g. X25519MLKEM768) when rustls/aws-lc-rs path allows; see PQC research |
 | Rate limiting | Request flood protection at edge and/or app (tower-governor or equivalent) |
@@ -123,6 +123,10 @@ nginx features. Module file remains until operators no longer need dual-run.
   `web.enable` (nginx dual-run owns :80 ACME/redirect). **ACME HTTP-01 on
   product :80 is parked** (Q-EDGE; external certs / DNS-01 / dual-run ACME).
   See RESIDUAL.md §4.
+- **Production assumption (operator 2026-08-02):** TCP **port 80 is free** on
+  the NixOS box so the product redirect-only listener can bind. That free
+  :80 is for **redirect/upgrade only**, not an invent of ACME-on-product-:80.
+  Day-one ops: [OPS.md](OPS.md).
 - Fixed-window rate limit; when peer is loopback, trust **X-Real-IP only**
   (useful behind dual-run nginx). X-Forwarded-For is ignored for rate-limit
   keys (leftmost XFF is spoofable). Never trust forwarding headers from
@@ -259,6 +263,7 @@ Stalwart HTTP without evidence.
 |---------|--------|
 | **Now (tree default)** | **Axum-first** management-ui rustls (`listenMode=https` + host PEMs); `surmount.web.enable` default **false** |
 | **Dual-run escape** | `surmount.web.enable = true` + UI `listenMode=http` loopback; nginx + `security.acme` (**transitional-to-delete**) |
+| **Production :80** | **Free** for product **redirect-only** bind (operator 2026-08-02). Not ACME-on-product-:80 (parked; Q-EDGE) |
 | **Host residual** | Public :443 + MemoryDenyWriteExecute (no writable+executable memory) + cert path (Q-EDGE-1 / Q-CA-*); see RESIDUAL.md host tracks. Not claimed done from eval or local e2e alone |
 | **Local backends** | Move UI (and proxied Stalwart HTTP when possible) toward **Unix domain sockets** |
 | **Not target** | Caddy/Sozu/nginx as product identity |
@@ -353,7 +358,7 @@ Ids: **Q-CA-1**, **Q-CA-2** in [research/pqconnect-and-pqc.md](research/pqconnec
 
 | Rule | Lean |
 |------|------|
-| :80 -> :443 | Graceful redirect/upgrade; share :80 with ACME HTTP-01 when used |
+| :80 -> :443 | Graceful redirect/upgrade on free production :80 (redirect-only product path). ACME HTTP-01 may share :80 only on dual-run nginx or a future Q-EDGE answer; **not** invent ACME-on-product-:80 |
 | Insecure protocols | Disabled: SSLv3, TLS 1.0, TLS 1.1 |
 | Prefer | TLS 1.3 |
 | PQ KEX on Axum/rustls | **First-class:** prefer **aws-lc-rs** provider; enable hybrid groups such as **X25519MLKEM768** when wiring the edge (rustls 0.23.x documents these groups) |
@@ -397,11 +402,13 @@ Layers (defense in depth):
 2. **Edge rate limit:** fixed-window per client IP key (in-memory).
 3. **Edge ban decide:** same IP key; enforce mode returns 403 for banned;
    default enforcement **off**.
-4. **App (Axum):** auth throttles residual. Unauthorized -> ban is a **thin
-   BanCandidate hook** (`BanGuard::signal_unauthorized` + request-context
-   `signal_unauthorized`); records under DryRun/Enforce; whitelist never
-   banned. **Not** wired to product auth responses yet (no Nostr / Q-AUTH-1).
-   **Q-ACL-1** (which surfaces raise the signal) still open.
+4. **App (Axum):** Unauthorized -> ban is a **thin BanCandidate hook**
+   (`BanGuard::signal_unauthorized` + request-context `signal_unauthorized`);
+   records under DryRun/Enforce; whitelist never banned. **Wired** for
+   session-exchange parse/verify fail and bad presented NIP-98 on protected
+   paths (not missing cookie; not 404/501). Matrix: [SECURITY.md](SECURITY.md)
+   *Auth failure to ban matrix*. **Q-ACL-1** (full surface list beyond auth)
+   still open.
 5. **Stalwart:** built-in anti-abuse, greylisting, spam-filter (mail plane).
 6. **Ban policy (operator direction):** unauthorized access of intentional
    auth/probe class -> **immediate or near-immediate blacklist** on the box.

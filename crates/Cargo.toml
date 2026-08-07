@@ -33,3 +33,12 @@ leptos = { version = "0.8", default-features = false, features = ["ssr"] }
 rcgen = "=0.13.2"
 # Exact pin kept so `cargo update` cannot float time without editing here.
 time = { version = "=0.3.45", default-features = false }
+# Nostr NIP-98 verify (rust-nostr). Pin 0.43: 0.44.5+ pulls old getrandom that
+# conflicts with leptos wasm-bindgen via menhera-cooldown registry.
+nostr = { version = "0.43", default-features = false, features = ["std", "nip98"] }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+# CSRF tokens + CSP nonces (already in lock via other crates; direct dep for auth).
+getrandom = "0.2"
+

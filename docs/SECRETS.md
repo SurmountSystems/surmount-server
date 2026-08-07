@@ -154,7 +154,7 @@ Bootstrap steps: [`secrets/README.md`](../secrets/README.md).
 | `backups/restic_password` | `surmount.backups.passwordFile` |
 | `vaultwarden/admin_token` | Planned VW admin |
 | `vaultwarden/database_url` or DB password | If VW not on default SQLite path |
-| Session / cookie signing keys | Future Axum auth |
+| Session / cookie signing keys | `SURMOUNT_SESSION_SECRET` (host deploy secret; HMAC cookie scaffold) |
 
 Wire with `sops.secrets.<name>.path` and unit `LoadCredential` / env files as
 modules document. Prefer path references over embedding secret values in
@@ -261,8 +261,9 @@ users. See operator-direction and SECURITY.
 | Material | Where |
 |----------|-------|
 | **nsec** (private) | Client / OS key tools only; **never** server database; **never** git |
-| npub allowlist / role map | Config and/or Surmount state; may use deploy secrets if sensitive |
-| Session signing keys / cookie secrets | Deploy secrets when implemented |
+| npub allowlist / role map | `SURMOUNT_NOSTR_ALLOWLIST` or `SURMOUNT_NOSTR_ALLOWLIST_FILE` / Nix `managementUi.nostrAllowlist` + `nostrAllowlistFile` (scaffold; env wins; Q-AUTH-1 bootstrap UX open) |
+| Session signing keys / cookie secrets | Host-only `SURMOUNT_SESSION_SECRET` or EnvironmentFile via `managementUi.sessionSecretPath` (HMAC cookie scaffold; never git) |
+| Stalwart management API token (directory list) | Host-only `SURMOUNT_STALWART_TOKEN` or raw file `SURMOUNT_STALWART_TOKEN_FILE` / Nix `managementUi.stalwartTokenPath` (Bearer for management JMAP; never git). Required only when `directory=stalwart` |
 | Stalwart mail passwords / app passwords | Inside Stalwart directory (engine); human tracking in Vaultwarden |
 
 ---

@@ -33,6 +33,12 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 # SSR-only admin shell (no hydrate / WASM / NPM). MSRV 1.88; crane uses rust_1_88.
 leptos.workspace = true
+# rust-nostr: NIP-98 kind 27235 verify (not JS NDK / no NPM).
+nostr.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+base64.workspace = true
+getrandom.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true

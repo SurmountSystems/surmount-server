@@ -651,9 +651,10 @@ let
     assert lib.hasInfix "unix:/run/surmount/management-ui.sock" (
       builtins.readFile eUds.config.environment.etc."surmount/arti.toml".source
     );
-    assert !(builtins.any (
-      x: lib.hasPrefix "SURMOUNT_LOCAL_CLEARTEXT_LISTEN=" x
-    ) eUds.config.systemd.services.surmount-management-ui.serviceConfig.Environment);
+    assert
+      !(builtins.any (
+        x: lib.hasPrefix "SURMOUNT_LOCAL_CLEARTEXT_LISTEN=" x
+      ) eUds.config.systemd.services.surmount-management-ui.serviceConfig.Environment);
     "t6j2-arti-https-mismatch-suppressed-ok";
 
   # Explicit localCleartextListen override is honored for UI env + Arti target.
@@ -753,9 +754,7 @@ let
       failed = failedAssertions e;
     in
     assert failed != [ ];
-    assert builtins.any (
-      a: lib.hasInfix "collid" a.message || lib.hasInfix "port" a.message
-    ) failed;
+    assert builtins.any (a: lib.hasInfix "collid" a.message || lib.hasInfix "port" a.message) failed;
     "t6j7-explicit-same-port-collision-fail-closed-ok";
 
   t7-https-tls-paths-must-be-strict =

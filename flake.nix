@@ -5,7 +5,8 @@
 # decrypt only on the target host via sops-nix; never at eval time from
 # the public tree.
 #
-# CI entry: nix build .#checks.<system>.ci   (or: just check)
+# Host CI-style loop: just check  (fmt --check, clippy -D warnings, cargo test)
+# Full flake CI aggregate: just check-ci  (or: nix build .#checks.<system>.ci)
 # End-to-end: nix run .#e2e (local) / nix run .#e2e-host (env-gated; never in ci)
 # Heavy: mail-vm-test, mail-vps-eval, stalwart-mail package are optional.
 
@@ -185,6 +186,9 @@
           # End-to-end runners (Rust). Host app is never a flake check.
           e2e = e2ePkgs.e2e;
           e2e-host = e2ePkgs.e2e-host;
+          # RFC-style nixfmt (same as formatter / checks.ci / devShell).
+          # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt …
+          nixfmt = pkgs.nixfmt-rfc-style;
           default = self.packages.${system}.management-ui;
         }
       );
@@ -420,7 +424,10 @@
             RUST_LOG = "info,surmount_management_ui=debug";
             shellHook = ''
               echo "Surmount dev shell  -  crates/ for Rust, modules/ for NixOS"
-              echo "  just check          # CI quality bar (flake checks.ci)"
+              echo "  just dev            # local management console → http://127.0.0.1:8080/"
+              echo "  just check          # fmt --check + clippy + test (CI-style host bar)"
+              echo "  just check-ci       # full flake checks.<system>.ci aggregate"
+              echo "  just fmt-write      # apply cargo fmt + flake nixfmt"
               echo "  just e2e            # local hermetic end-to-end (nix run .#e2e)"
               echo "  just e2e-host       # host probes (needs SURMOUNT_E2E_HOST=1)"
               echo "  cargo test -p surmount-management-ui"
