@@ -1,0 +1,14 @@
+# Synthetic good sample for private-data detector (not a real host).
+# Mirrors allowlisted patterns only: TEST-NET + short SSH placeholder.
+
+networking.interfaces.eth0.ipv4.addresses = [{
+  address = "203.0.113.10";
+  prefixLength = 24;
+}];
+networking.defaultGateway = "203.0.113.1";
+# Also allowlisted shapes:
+# 127.0.0.1  10.0.0.1  192.168.1.1  172.16.0.1  198.51.100.1  192.0.2.1  0.0.0.0
+
+users.users.root.openssh.authorizedKeys.keys = [
+  # TODO: "ssh-ed25519 AAAA... you@workstation"
+];

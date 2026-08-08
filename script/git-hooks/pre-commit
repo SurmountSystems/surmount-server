@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Project pre-commit: private-data pattern scan on staged files.
+#
+# Invoked by the host global hook chain when core.hooksPath is ~/.git-hooks:
+#   $repo/script/git-hooks/pre-commit
+#
+# Patterns only. Never paste real IPs, keys, tokens, or screenshot contents
+# into the repo. See docs/hygiene.md and script/check-private-data.sh.
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "pre-commit: not inside a git work tree" >&2
+  exit 1
+}
+
+scanner="${repo_root}/script/check-private-data.sh"
+if [[ ! -x "${scanner}" ]]; then
+  echo "pre-commit: missing executable ${scanner}" >&2
+  exit 1
+fi
+
+exec "${scanner}" --staged

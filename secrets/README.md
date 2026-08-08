@@ -6,6 +6,11 @@ private keys. Not LUKS unlock material. This is a **public** tree.
 See standing law: [docs/hygiene.md](../docs/hygiene.md) (top rule),
 [docs/SECRETS.md](../docs/SECRETS.md).
 
+**Git admission:** `script/check-private-data.sh` (pre-commit + CI) blocks
+common secret basenames and content shapes. Do not add `secrets.yaml`, PEMs,
+or age keys here for commit. Detail: [docs/hygiene.md](../docs/hygiene.md)
+*Pre-commit private-data scan*.
+
 This directory is a **placeholder for layout documentation and empty
 scaffolding only**. Real secret files live **on the host** (or a private
 operator channel), never in the committed tree.

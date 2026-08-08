@@ -143,6 +143,9 @@
         surmount = self.nixosModules.default;
       };
 
+      # Primary sample host: mail-vps (nixos-26.05). Generic path only;
+      # operators set real hostname on the machine / local overlay.
+      # surmount-mail is a historical product alias (same config).
       nixosConfigurations = {
         mail-vps = nixpkgs.lib.nixosSystem {
           system = "x86_64-linux";
@@ -375,6 +378,7 @@
           stalwart-webui = self.packages.${system}.stalwart-webui;
           stalwart-spam-filter = self.packages.${system}.stalwart-spam-filter;
 
+          # Primary sample host toplevel eval (optional / heavy; not in ci).
           mail-vps-eval =
             if system == "x86_64-linux" then
               self.nixosConfigurations.mail-vps.config.system.build.toplevel

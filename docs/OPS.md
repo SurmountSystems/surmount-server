@@ -32,6 +32,13 @@ active; product redirect-only and dual-run nginx must not both claim :80
 
 ### Bring-up order
 
+**Private material stays on the host.** Paste SSH public keys, real public
+IPv4/IPv6, TLS PEMs, and age identities into **host** paths or the live
+machine config only. Do **not** commit them to this public tree. The
+pre-commit private-data scan (`script/check-private-data.sh`) blocks common
+accident classes; it is not a license to invent allowlists of real values.
+See [hygiene.md](hygiene.md) and [SECRETS.md](SECRETS.md).
+
 1. **Place TLS PEMs** on the host (deploy secrets; never in git). Paths match
    `surmount.managementUi.tlsCertPath` / `tlsKeyPath` (see host
    [configuration.nix](../hosts/mail-vps/configuration.nix),
@@ -53,7 +60,7 @@ active; product redirect-only and dual-run nginx must not both claim :80
 6. **DNS and mail** cutover when edge is healthy: [DNS.md](DNS.md), mail ports,
    Stalwart principals via `stalwart-cli` / bootstrap admin.
 
-Host module entry: [hosts/mail-vps/configuration.nix](../hosts/mail-vps/configuration.nix).
+Host module entry: [hosts/mail-vps/configuration.nix](../hosts/mail-vps/configuration.nix) (flake attr `#mail-vps`; alias `#surmount-mail`).
 Open residual tracks: [RESIDUAL.md](../RESIDUAL.md).
 
 ## Intent

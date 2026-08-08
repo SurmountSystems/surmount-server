@@ -42,6 +42,55 @@ If a scaffold or older doc still shows `secrets/*.yaml` as something you
 commit: treat that as **transitional bad pattern to delete**. Prefer host-local
 paths and operator-managed secret stores outside the public tree.
 
+### Pre-commit private-data scan
+
+Mechanical gate (patterns only) so accidental staging of private material fails
+before a commit object exists:
+
+| Piece | Path |
+|-------|------|
+| Shared scanner | `script/check-private-data.sh` (`--staged` / `--tree` / `--paths`) |
+| Project pre-commit | `script/git-hooks/pre-commit` (host `~/.git-hooks` chains here) |
+| Detector fixtures | `script/testdata/private-data/` (synthetic only; excluded from tree scan) |
+| Self-test | `script/test-check-private-data.sh` |
+
+**Classes (regex / path only; never real values in the tool):** PEM / OpenSSH
+private key blocks; `AGE-SECRET-KEY-1...`; common token shapes (`ghp_`,
+`github_pat_`, `AKIA...`, etc.); password/secret/token assignment heuristic;
+secret-like basenames (`.env`, `*.pem`, `id_ed25519`, `keys.txt`,
+`secrets.yaml`, ...); long SSH public keys under `hosts/` / `secrets/`;
+public-looking IPv4 under `hosts/**` except allowlisted private/docs ranges
+(loopback, RFC1918, TEST-NET, link-local, `0.0.0.0`).
+
+On hit the scanner prints **class + file path** only (not the secret line).
+Fix: unstage / remove material. Paste keys, PEMs, age identities, and real
+public host IPs **on the host only**, never into this public git tree.
+Provisioned-host UI screenshots must not be copied into the tree, residual,
+reports, or hooks.
+
+```bash
+script/check-private-data.sh --staged   # what pre-commit runs
+script/check-private-data.sh --tree     # full tracked tree (CI twin)
+script/test-check-private-data.sh       # red/green on synthetic fixtures
+```
+
+Requires `rg` (ripgrep) on PATH. CI runs `--tree` early. This gate is admission
+control only; it does not replace the standing never-secrets law above.
+
+### Host-specific identity stays off the public tree
+
+Same spirit as the private-data scan: **do not commit host-specific hostnames
+or flake attrs named after a real box.** The sample path is
+`hosts/mail-vps/` with generic flake attr `#mail-vps` and default
+`networking.hostName = lib.mkDefault "mail-vps"`. Operators set the real
+hostname on the machine (or a local overlay that never lands in this public
+repo). First-deploy box names are operator host identity, not living product
+path names.
+
+**Agent session notes** under `.agents/` are local only (gitignored). Do not
+stage or commit them: they are not product docs and may record private host
+work. Older commits may still contain some; do not grow that set.
+
 ---
 
 ## 0. No assumed architecture acceptance

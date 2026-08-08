@@ -37,6 +37,12 @@ modules only.
 Detail: [hygiene.md](hygiene.md) top rule;
 [research/luks2-and-deploy-secrets.md](research/luks2-and-deploy-secrets.md).
 
+**Pre-commit / CI gate:** `script/check-private-data.sh` scans staged (and in
+CI, tracked) files for private-data **pattern classes** via ripgrep. Patterns
+only; no real secrets live in the tool. Project hook:
+`script/git-hooks/pre-commit`. See [hygiene.md](hygiene.md) subsection
+*Pre-commit private-data scan*.
+
 ---
 
 ## 1. Two buckets (do not mash)

@@ -79,7 +79,7 @@ flake.nix                 # nixosConfigurations, packages, checks, devShells
 modules/                  # surmount.* NixOS modules
 crates/management-ui/     # Axum management UI (Leptos SSR next)
 nix/packages/             # Surmount package overlay (Stalwart FODs, UI)
-hosts/mail-vps/           # sample host
+hosts/mail-vps/           # sample host config (generic name only)
 docs/                     # architecture, security, secrets, migration, DNS, ops
 scripts/                  # operator DNS/TLS/mail smoke checks
 secrets/                  # docs/placeholder only (never commit secrets)
@@ -176,6 +176,7 @@ Payload is only `just ci` -> `checks.x86_64-linux.ci`.
 nixos-rebuild build --flake .#mail-vps
 # or
 nix build .#nixosConfigurations.mail-vps.config.system.build.toplevel
+# alias (same config): .#surmount-mail
 ```
 
 ### First install on a VPS
@@ -186,9 +187,10 @@ encryption keys (SECURITY.md). Then:
 
 1. Copy or generate `hardware-configuration.nix` into `hosts/mail-vps/`.
 2. Add SSH public keys in `hosts/mail-vps/configuration.nix`.
-3. Set DNS A/AAAA for `mail`, `services`, and apex (see [docs/DNS.md](docs/DNS.md)).
-4. Configure sops age keys ([secrets/README.md](secrets/README.md)).
-5. Switch:
+3. OS hostname defaults to sample `mail-vps` (`networking.hostName = lib.mkDefault`); set the real name on the host or local overlay.
+4. Set DNS A/AAAA for `mail`, `services`, and apex (see [docs/DNS.md](docs/DNS.md)).
+5. Configure sops age keys ([secrets/README.md](secrets/README.md)).
+6. Switch:
 
 ```bash
 nixos-rebuild switch --flake .#mail-vps

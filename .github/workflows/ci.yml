@@ -50,6 +50,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Private-data pattern scan (patterns only; no secret values in CI).
+      # Fail early before free-disk / Nix if someone pushed PEMs, tokens, etc.
+      - name: Private-data scan
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ripgrep
+          script/check-private-data.sh --tree
+
       # Free GHA images ship multi-GB toolchains we never use. Reclaim before
       # nix/crane so the store + cargo target do not ENOSPC mid-build.
       - name: Free disk space

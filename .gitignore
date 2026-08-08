@@ -8,6 +8,10 @@ crates/target/
 *~
 *.swp
 
+# Local agent session reports / plans (not product). May name private
+# host work; never part of the public commit surface.
+.agents/
+
 # Local secrets (never commit plaintext)
 secrets/**/*.decrypted.*
 .env

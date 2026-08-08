@@ -48,7 +48,7 @@ rsync -aH --numeric-ids \
 Stage on the new server (not auto-imported):
 
 ```bash
-# On mail-vps
+# On mail-vps (sample host name; use your real SSH host)
 mkdir -p /var/lib/surmount/import/maildir
 rsync -a backup-host:/data/mailplus-export/@local/ \
   /var/lib/surmount/import/maildir/
@@ -131,7 +131,7 @@ import the result. Do not install GUI-only converters on the mail VPS.
 ## Cutover sequence (recommended)
 
 1. Lower DNS TTLs (24-48h ahead).
-2. Build mail-vps; get TLS, auth, and a test account working.
+2. Build the sample host (`#mail-vps`); get TLS, auth, and a test account working.
 3. rsync Maildir; import into Stalwart; verify.
 4. Final rsync + incremental import (or brief dual-receive window).
 5. Flip MX / SPF / DKIM / DMARC (see `docs/DNS.md`).

@@ -52,6 +52,12 @@ Product detail lives under `docs/`. This file is standing law only.
 - Detail: [docs/hygiene.md](docs/hygiene.md) (top rule),
   [docs/SECRETS.md](docs/SECRETS.md),
   [docs/research/luks2-and-deploy-secrets.md](docs/research/luks2-and-deploy-secrets.md).
+- **Private-data pre-commit:** `script/git-hooks/pre-commit` runs
+  `script/check-private-data.sh --staged` (patterns only). Never paste
+  provisioned-host IPs, keys, tokens, or screenshot contents into the tree,
+  residual, reports, or fixtures. Synthetic detector samples only under
+  `script/testdata/private-data/`. Run `script/check-private-data.sh --tree`
+  before proposing commits that touch hosts/ or secrets layout.
 
 ## Stack language (operator direction 2026-07-30)
 
