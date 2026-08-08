@@ -1,12 +1,16 @@
 # Surmount Server developer tasks.
 # Host quality bar: just check = fmt (check-only) then clippy then test (CI-style).
-# Full flake CI aggregate: just check-ci (nix build checks.<system>.ci).
+# GitHub Actions / full flake aggregate: just ci (alias: just check-ci).
+#   -> nix build checks.<system>.ci
+# GHA job display name is `just ci` (branch-protection check context footgun;
+# see .github/workflows/ci.yml and grok-oss ci.yml).
 # End-to-end SoT: nix run .#e2e (local) and nix run .#e2e-host (env-gated host).
 # just e2e / e2e-host are thin wrappers. Host e2e is never in checks.ci.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-system := `nix eval --impure --raw --expr 'builtins.currentSystem'`
+# Prefer CI_SYSTEM when set (GHA); else host flake system.
+system := env_var_or_default("CI_SYSTEM", `nix eval --impure --raw --expr 'builtins.currentSystem'`)
 
 # List recipes (default).
 default:
@@ -15,14 +19,18 @@ default:
 # CI-style quality bar on the host (same order as typical CI gates):
 #   fmt check (error if dirty) -> clippy (-D warnings) -> cargo test.
 # Reverse of the common local loop (test, clippy, fmt). Does not write files.
-# Does not run module-eval / flake aggregate; use `just check-ci` for that.
+# Does not run module-eval / flake aggregate; use `just ci` for that.
 check: fmt clippy test
 
 # Full flake CI aggregate (management-ui + e2e pure + module-eval + nixfmt, etc.).
 # Same as: nix build .#checks.<system>.ci
 # Heavy mail-vm / stalwart FOD / full toplevel stay out (see check-heavy).
-check-ci:
+# GHA runs this recipe; job display name must stay `just ci`.
+ci:
     nix build --print-build-logs ".#checks.{{system}}.ci"
+
+# Alias kept so docs/muscle-memory (`just check-ci`) still work.
+check-ci: ci
 
 # Format check only (CI-style). Errors if Rust or Nix is not formatted.
 # Does not rewrite files. Use `just fmt-write` to apply formatting.
@@ -108,6 +116,6 @@ e2e:
 e2e-host:
     nix run ".#e2e-host"
 
-# Optional heavy checks (not in `just check` / `just check-ci`).
+# Optional heavy checks (not in `just check` / `just ci`).
 check-heavy:
     nix build --print-build-logs ".#checks.{{system}}.mail-vm-test"

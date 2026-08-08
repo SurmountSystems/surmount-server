@@ -152,7 +152,9 @@
 
   # ---- Base system ---------------------------------------------------------
   networking.hostName = "mail-vps";
-  system.stateVersion = "25.05";
+  # Sample host only. New installs track the flake host channel (26.05).
+  # Do not change stateVersion on a live box without reading NixOS release notes.
+  system.stateVersion = "26.05";
 
   boot.loader.grub = {
     # For cloud images / many VPS providers. Adjust for your hoster.

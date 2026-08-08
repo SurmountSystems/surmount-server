@@ -83,7 +83,7 @@ public core count in docs.
 | `bufferSize` | **omit (128 MiB)** initially; optional raise to **256 MiB** (`268435456`) if write-heavy import stalls and **measured** RAM headroom is clear | Upstream 128 MiB is a small write buffer vs whole-node RAM on a typical mail box. Do not jump to multi-GiB buffers without measurement; Stalwart has other caches too. |
 | `poolWorkers` | **omit (defaults to logical CPUs)** | Leave at default. Cap later only if oversubscription is measured. |
 
-Module today: `services.stalwart-mail.blobSize` / `bufferSize` in
+Module today: `services.stalwart.blobSize` / `bufferSize` in
 `modules/stalwart-service.nix` (null = omit from `config.json`).
 `poolWorkers` is not yet a first-class Nix option; add only if we later choose
 to pin it, or set via Stalwart apply/WebUI Day-2.

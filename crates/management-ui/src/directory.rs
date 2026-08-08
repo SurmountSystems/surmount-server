@@ -210,7 +210,7 @@ For tests and explicit SURMOUNT_DIRECTORY=mock only. Mutations available via API
                 };
             }
             // Mock-only address shape so rows never look like production inventory.
-            let id = format!("mock-{}", name);
+            let id = format!("mock-{name}");
             let address = format!("{name}@mock.surmount.test");
             let entry = AccountEntry {
                 id: id.clone(),

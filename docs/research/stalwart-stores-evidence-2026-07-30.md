@@ -3,23 +3,23 @@
 **Status:** **historical 0.11.8 evidence only.** Research finding; not
 operator-accepted architecture. **Date:** 2026-07-30
 
-**Context:** The scaffold briefly shipped nixpkgs `stalwart-mail` **0.11.8**
-from nixos-25.05. That was an accident of the channel pin, not a product
-choice. Stalwart is **being moved to current**. Re-gather store evidence after
-the package bump (`flake.nix`, `nix/packages/`, `modules/mail.nix`). Until
-then, treat numbers and paths below as a snapshot of the old package, not the
-target engine.
+**Context:** Early scaffold briefly used nixpkgs `stalwart-mail` **0.11.8**
+while the host channel was still **nixos-25.05**. That was channel lag, not a
+product pin. Living Surmount engine is **0.16.15** FODs; living host is
+**nixos-26.05**. Current store evidence:
+[stalwart-0.16.15-stores-evidence.md](stalwart-0.16.15-stores-evidence.md).
 
 This file pins **versions, paths, and source symbols** for the **0.11.8**
-store model only. Do not treat scaffold nixpkgs defaults as a Surmount product
-decision. Do not read this as "version skew is unsafe"; it is historical fact.
+store model only. Historical snapshot of the old package. Do not treat these
+defaults as living Surmount product law. Do not read this as "version skew is
+unsafe"; it is historical fact.
 
-## 1. What binary we actually build
+## 1. What binary the evidence date built
 
 | Item | Value | Where |
 |------|--------|--------|
-| nixpkgs channel (flake input) | `nixos-25.05` | `flake.nix` / `flake.lock` |
-| nixpkgs git rev (locked) | `ac62194c3917d5f474c1a844b6fd6da2db95077d` | `flake.lock` node `nixpkgs` |
+| nixpkgs channel (flake input then) | `nixos-25.05` | historical `flake.nix` / `flake.lock` (living host is 26.05) |
+| nixpkgs git rev (locked then) | `ac62194c3917d5f474c1a844b6fd6da2db95077d` | historical `flake.lock` node `nixpkgs` |
 | nixpkgs store path (this machine) | `/nix/store/hs7sfwdsiqcfrfaj620r8cjjnscb09k9-3p306srz83h9z9v0ma9xcxb8y8cdxkxj-source` | `nix eval ...pkgs.path` |
 | Package attr | `pkgs.stalwart-mail` | nixpkgs by-name |
 | Package name-version | `stalwart-mail-0.11.8` | `nix eval ...stalwart-mail.name` |
@@ -28,7 +28,7 @@ decision. Do not read this as "version skew is unsafe"; it is historical fact.
 | Is 0.11.8 latest? | **No.** About five minor lines behind latest tag. | |
 | Upstream repo | https://github.com/stalwartlabs/mail-server | |
 | License (community) | AGPL-3.0-only (+ optional enterprise SEL) | package.nix meta |
-| NixOS module option | `services.stalwart-mail` | module path below |
+| NixOS module option (at evidence date) | `services.stalwart-mail` (stock 0.11.8 module) | historical module path below. **Living Surmount option is `services.stalwart`** (unit stays `stalwart-mail.service`) |
 | Source tag fetched | `v0.11.8` | package.nix `fetchFromGitHub` |
 | Realized src store path | `/nix/store/0d0p9rj2gp5rjhcfq2vws9bw3b6q8r34-source` | `nix build ...stalwart-mail.src` |
 
@@ -55,10 +55,21 @@ decision. Do not read this as "version skew is unsafe"; it is historical fact.
   `storage.{data,fts,lookup,blob} = "db"`
 - Legacy (`stateVersion < 24.11`): sqlite data + filesystem blobs
 
-### Surmount wiring (this repo; not a product acceptance)
+### Surmount wiring at evidence date (not product acceptance)
 
-- `modules/mail.nix` enables `services.stalwart-mail` and overrides spam-filter FOD
-- Eval shows roles all pointing at id `db` (rocksdb). That is **module default inheritance**, not an approved Surmount datastore design unless you accept it.
+At the 2026-07-30 evidence date, early scaffold still used the stock
+**0.11.8-era** option path:
+
+- `modules/mail.nix` **then** enabled `services.stalwart-mail` and overrode the
+  spam-filter FOD under that option tree.
+- Flake eval **then** showed store roles all pointing at id `db` (rocksdb). That
+  was **module default inheritance**, not an approved Surmount datastore design.
+
+**Living tree (after 2026-08-07):** option is `services.stalwart` (Surmount
+module in `modules/stalwart-service.nix`); unit/state remain `stalwart-mail*`.
+Store surface is 0.16 `config.json`, not TOML `settings`. See
+[stalwart-0.16.15-stores-evidence.md](stalwart-0.16.15-stores-evidence.md) and
+[DATASTORES.md](../DATASTORES.md) section 5.
 
 ## 2. Upstream workspace (v0.11.8 source)
 
@@ -222,7 +233,10 @@ Config key: `storage.lookup`. Soft state (rate limits, tokens, etc.) per upstrea
 
 Mail account principals live in directory; with internal directory they sit in the **data** store backend.
 
-## 5. Scaffold config currently evaluated on mail-vps
+## 5. Scaffold config evaluated on mail-vps at evidence date (0.11.8 TOML)
+
+Historical snapshot only. On 2026-07-30 the scaffold still evaluated stock
+TOML-shaped `services.stalwart-mail.settings` (not living 0.16 config.json):
 
 ```text
 store.db.type = "rocksdb"
@@ -235,9 +249,12 @@ storage.lookup = "db"
 directory.internal.store = "db"
 ```
 
-Source of those defaults: nixpkgs `stalwart-mail.nix` lines setting `mkDefault`, plus Surmount `modules/mail.nix` not overriding store layout.
+Source of those defaults at the evidence date: nixpkgs `stalwart-mail.nix`
+`mkDefault` lines, plus then-current Surmount `modules/mail.nix` not overriding
+store layout under `services.stalwart-mail`.
 
-**This is not operator acceptance.**
+**This was not operator acceptance.** Living store wiring is Surmount
+`services.stalwart` + generated `config.json` (see DATASTORES section 5).
 
 ## 6. Historical package note (0.11.8 vs then-current upstream)
 
@@ -248,23 +265,55 @@ Source of those defaults: nixpkgs `stalwart-mail.nix` lines setting `mkDefault`,
 | Meilisearch | not in store Cargo.toml features | may exist on newer tags; verify on **current** package |
 | Upgrade | changing major store layout may need migration (see upstream UPGRADING.md) | |
 
-Surmount tracks **current** Stalwart (packaging bump in flight). nixpkgs lag is
-not a reason to stay on 0.11.8. This section is historical evidence only.
+At the evidence date Surmount was moving off channel 0.11.8 toward current
+upstream (FODs later landed at **0.16.15**). nixpkgs lag was never a reason to
+stay on 0.11.8. This section is historical evidence only.
 
-## 7. Open for operator (explicitly undecided)
+## 7. Open for operator (explicitly undecided at evidence date)
 
-1. Confirm live package after bump (**current**; not 0.11.8).
-2. Keep four roles co-located on one RocksDB vs split backends.
-3. FTS internal vs external after real search UX.
-4. Blob backend RocksDB vs filesystem vs S3.
-5. Any of the above as a **written** acceptance.
-6. New store evidence file after the package bump (this file stays historical).
+Status of each item as of later living tree (not re-deciding here):
 
-## 8. How to re-verify
+1. Live package after bump: **done** for packaging (Surmount FODs **0.16.15**).
+   Not eternal "accepted forever"; re-check on bumps.
+2. Keep four roles co-located on one RocksDB vs split backends (still design).
+3. FTS internal vs external after real search UX (still design).
+4. Blob backend RocksDB vs filesystem vs S3 (still design).
+5. Any of the above as a **written** operator acceptance (still open).
+6. New store evidence file after the package bump: **done**
+   ([stalwart-0.16.15-stores-evidence.md](stalwart-0.16.15-stores-evidence.md)).
+   This file stays historical 0.11.8 only.
+
+## 8. How this was verified (historical commands)
+
+Commands used on **2026-07-30** against the **0.11.8 / services.stalwart-mail**
+scaffold (do not treat as living product eval recipes):
 
 ```bash
+# Historical only: option path and TOML settings were evidence-date facts.
 nix eval --raw .#nixosConfigurations.mail-vps.pkgs.stalwart-mail.version
 nix eval --json .#nixosConfigurations.mail-vps.config.services.stalwart-mail.settings | jq .
 nix build --no-link --print-out-paths .#nixosConfigurations.mail-vps.pkgs.stalwart-mail.src
 # then rg in that store path under crates/store
 ```
+
+**Living tree (2026-08-07+):**
+
+| Item | Living fact |
+|------|-------------|
+| Host channel | `nixos-26.05` |
+| Engine | Surmount FODs **0.16.15** (`nix/packages/stalwart-mail.nix`) |
+| Option path | **`services.stalwart`** (`modules/stalwart-service.nix`) |
+| Unit / state | still `stalwart-mail.service`, `/var/lib/stalwart-mail`, user/group |
+| On-disk config | small **config.json** DataStore (not TOML `settings`) |
+| Store evidence | [stalwart-0.16.15-stores-evidence.md](stalwart-0.16.15-stores-evidence.md) |
+
+Example living eval shapes (not TOML settings):
+
+```bash
+nix eval --raw .#nixosConfigurations.mail-vps.pkgs.stalwart-mail.version
+nix eval .#nixosConfigurations.mail-vps.config.services.stalwart.storePath
+nix eval .#nixosConfigurations.mail-vps.config.services.stalwart.storeType
+# settings attr exists but is accepted-and-ignored for 0.16
+```
+
+This file remains **historical 0.11.8 evidence only**.

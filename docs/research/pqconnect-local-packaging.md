@@ -53,14 +53,17 @@ the human to stage and sign-commit.
 
 ---
 
-## Build evidence (2026-07-30)
+## Build evidence (2026-07-30; historical channel)
 
-Impure `nix-build` of the package set against `nixos-25.05`: **green**.
+Impure `nix-build` of the package set against **nixos-25.05** (Surmount host
+at that packaging day): **green**. Living Surmount host is **nixos-26.05**;
+re-build on the living channel before claiming product readiness.
 
 - Native: `libmceliece` (Debian orig 20260622), `libntruprime` (20260717)
 - App: `pqconnect-1.2.3` with import checks and `--help` on main bins
-- Vendored on 25.05: `pysodium`, `securestring` (present on unstable only)
-- nixpkgs already has: `lib25519`, `libcpucycles`, `librandombytes`,
+- Vendored on that 25.05 build: `pysodium`, `securestring` (present on
+  unstable only at the time)
+- nixpkgs already had: `lib25519`, `libcpucycles`, `librandombytes`,
   `nftables` (+ python), `libnetfilter_queue`, common Python deps
 
 Details and Surmount path-input instructions: sibling `README-NIX.md`.

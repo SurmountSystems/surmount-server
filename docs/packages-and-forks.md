@@ -13,7 +13,7 @@ want depth.
 
 | Name | What it is | Today? |
 |------|------------|--------|
-| **upstream nixpkgs** | Community package set and NixOS modules. Flake input `nixpkgs` (currently a nixos-25.05-class channel lock). | Yes. Base OS, kernel, many libraries, unrelated services. |
+| **upstream nixpkgs** | Community package set and NixOS modules. Flake input `nixpkgs` (currently **nixos-26.05**). | Yes. Base OS, kernel, many libraries, unrelated services. |
 | **Surmount package overlay** | Packages and modules **we own in this repo** so critical engines are not stuck on channel lag. Lives under `nix/packages/`, wired through `nix/overlays.nix` and `flake.nix`. | Yes. Stalwart pin, CLI, webui assets, spam-filter FODs, management-ui, custom Stalwart service module. |
 | **future fixpkgs channel** | A later shared Surmount package set/channel other repos can consume (same pins, one bump). | Not shipping as a separate product yet. Grow into it when multiple trees need the same overlay. |
 
@@ -46,17 +46,17 @@ package bumps in this repo.
 | `nix/packages/management-ui.nix` | Surmount Axum UI (crane) |
 | `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.5.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti` |
 | `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary) |
-| `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables nixpkgs TOML module) |
+| `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
 
-**Arti note:** stock nixpkgs `pkgs.arti` on nixos-25.05 is **1.4.2**
-client-default. Surmount owns a **current** Arti pin (`2.5.0` from GitLab
+**Arti note:** stock nixpkgs `pkgs.arti` often lags (client-default, not
+HS-capable). Surmount owns a **current** Arti pin (`2.5.0` from GitLab
 `arti-v2.5.0`) at `nix/packages/arti-onion-service.nix` with cargo feature
 `onion-service-service`, exposed as `pkgs.artiOnionService` /
 `packages.*.arti-onion-service` (does **not** replace `pkgs.arti`). rustc
-comes from flake input `nixpkgs-rust` (Arti MSRV 1.91 exceeds 25.05
-`rustPackages_*`). Vendor crates use matching `nixpkgs-rust` `arti.cargoDeps`
+comes from flake input `nixpkgs-rust` when Arti MSRV exceeds the host
+channel pin. Vendor crates use matching `nixpkgs-rust` `arti.cargoDeps`
 with a version assert (crates.io `fetch-cargo-vendor` 403 workaround); bump
 `nixpkgs-rust` until `pkgs.arti.version` matches, or restore plain `cargoHash`
 when crates.io vendor works again. Module `arti-hidden-service.nix` prefers
@@ -66,8 +66,9 @@ Live Tor publish remains residual (operator HS keys + network verify). No
 official multi-arch Arti release binaries, so this is source build not binary
 FOD.
 
-**Why own Stalwart here:** nixos-25.05 still had ancient 0.11.8. Greenfield
-wants **current** Stalwart. Channel lag is not a reason to ship old mail.
+**Why own Stalwart here:** older host channels shipped ancient 0.11.8.
+Greenfield wants **current** Stalwart. Channel lag is not a reason to ship
+old mail.
 
 **Why own Arti here:** same spirit. Channel 1.4.2 lag is not a reason to ship
 old Tor for the required HS surface.

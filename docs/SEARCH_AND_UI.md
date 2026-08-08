@@ -95,8 +95,8 @@ Browser (admin, then v1 webmail)          Desktop / MUA (always OK)
                      +-- Leptos SSR pages (target)
                      |     admin/*  then  mail/* (webmail)
                      |
-                     +-- JMAP proxy (future) ----> Stalwart :8081
-                     +-- status / admin APIs ----> Stalwart :8081
+                     +-- JMAP proxy (future) ----> Stalwart :8080
+                     +-- status / admin APIs ----> Stalwart :8080
 ```
 
 Stalwart webadmin (`/admin` on loopback, optional `/stalwart-admin/` via edge)

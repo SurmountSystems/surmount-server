@@ -114,7 +114,8 @@ direction and open choices live in `docs/`.
 nix develop                            # puts nixfmt, just, rustc, … on PATH
 just dev                               # local management console → http://127.0.0.1:8080/
 just check                             # CI-style host bar: fmt --check, clippy, test
-just check-ci                          # full flake checks.<system>.ci aggregate
+just ci                                # full flake checks.<system>.ci (GHA runs this)
+just check-ci                          # alias of just ci
 just fmt                               # format check only (errors if dirty; no write)
 just fmt-write                         # apply cargo fmt + flake nixfmt
 just test                              # cargo test only
@@ -155,10 +156,19 @@ nix profile install nixpkgs#nixfmt-rfc-style
 ```
 
 **Host quality bar:** `just check` runs format check (no write), clippy with
-warnings denied, then `cargo test` (same order as typical CI gates). **Full
-flake CI:** `just check-ci` builds `checks.<system>.ci` (crane fmt/clippy/test,
-module-eval contracts, nixfmt, …). Heavy mail VM / Stalwart FOD / full host
-toplevel stay separate (`just check-heavy`, optional flake checks).
+warnings denied, then `cargo test` (same order as typical local CI gates).
+**Full flake CI:** `just ci` (alias `just check-ci`) builds `checks.<system>.ci`
+(crane fmt/clippy/test, e2e pure lib, module-eval contracts, nixfmt, …). Heavy
+mail VM / Stalwart FOD / full host toplevel stay separate (`just check-heavy`,
+optional flake checks). Hermetic process e2e stays `just e2e` (not the
+aggregate). Host e2e / Tor never join green CI.
+
+**GitHub Actions:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+mirrors the Surmount [grok-oss CI](https://github.com/SurmountSystems/grok-oss/blob/main/.github/workflows/ci.yml)
+shape (least privilege, disk reclaim, swap, flake-pinned `just`, retry only
+cold flake eval). The quality job **display name is `just ci`** so a branch
+protection required check can match that exact string (do not rename casually).
+Payload is only `just ci` -> `checks.x86_64-linux.ci`.
 
 ### Build the NixOS system (no deploy)
 
@@ -237,8 +247,10 @@ Transitional nginx may also expose `/stalwart-admin/` on
 longer need it. Port numbers: confirm live defaults in modules (UI vs Stalwart
 HTTP split is documented in architecture-review).
 
-**NixOS option path:** Surmount-owned `services.stalwart-mail` module for
-0.16+ `config.json` (nixpkgs TOML module disabled). See
+**NixOS option path:** Surmount-owned `services.stalwart` module for
+0.16+ `config.json` (matches stock nixpkgs 26.05 option name; dual-disables
+stock `stalwart-mail.nix` and `stalwart.nix`; Surmount still owns config.json,
+not stock TOML). Unit remains `stalwart-mail.service`. See
 `modules/stalwart-service.nix` and `modules/mail.nix`.
 
 ## Management UI

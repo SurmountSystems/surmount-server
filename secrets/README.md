@@ -145,7 +145,7 @@ Hermetic pure contract tests: `tests/deploy-secrets.nix` (no secret files).
 | `backups/restic_password` | restic repo |
 | `vaultwarden/admin_token` | Vaultwarden admin (when enabled) |
 
-Wire paths into `services.stalwart-mail.credentials`,
+Wire paths into `services.stalwart.credentials`,
 `surmount.backups.passwordFile`, and (later) Vaultwarden env/secret files as
 shown in module comments.
 

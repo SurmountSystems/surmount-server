@@ -1,8 +1,10 @@
 # Surmount-controlled Stalwart Mail and Collaboration Server package.
 #
-# Why not pkgs.stalwart-mail from nixos-25.05?
-#   That channel packages 0.11.8 (scaffold accident). Upstream latest stable is
-#   far ahead. Greenfield Surmount pins the current engine here.
+# Why not pkgs.stalwart / pkgs.stalwart-mail from the host nixpkgs channel?
+#   Host channel is nixos-26.05; stock packages still lag Surmount's pin and
+#   stock modules still assume older config (TOML / rename path). Early scaffold
+#   on nixos-25.05 briefly saw channel 0.11.8; that was channel lag, not a
+#   product pin. Greenfield Surmount pins the engine here.
 #
 # Why not only pkgs.stalwart / stalwart_0_16 from unstable?
 #   Unstable lagged at 0.16.14 when checked, and services.stalwart still targets

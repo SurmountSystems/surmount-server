@@ -2,7 +2,7 @@
 # Needed for `stalwart-cli apply` / import / day-to-day admin on 0.16+.
 #
 # Packaging mode: pinned upstream release binary FODs. Source builds need a
-# newer rustc than nixos-25.05's 1.86 (unsigned_is_multiple_of, etc.).
+# newer rustc than older host channels' defaults (unsigned_is_multiple_of, etc.).
 #
 # Bump: set version, prefetch each arch tar.xz, paste hashes.
 

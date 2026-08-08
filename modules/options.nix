@@ -107,7 +107,7 @@ in
       type = types.path;
       default = "/var/lib/stalwart-mail";
       description = ''
-        Stalwart data directory (must match services.stalwart-mail.dataDir).
+        Stalwart data directory (must match services.stalwart.dataDir).
         Scaffold default: RocksDB at ''${mailDataDir}/db for all four store
         roles. Design, gates, and alternatives: docs/DATASTORES.md and
         docs/open-choices.md. Not "whatever nixpkgs defaulted to."

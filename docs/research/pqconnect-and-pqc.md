@@ -110,19 +110,23 @@ the crypto stack (see repo; not a pure Rust in-tree Surmount component today).
 
 ## Version table (measured 2026-07-30)
 
+Point-in-time packaging check. Living Surmount host is **nixos-26.05** (see
+[version-audit.md](version-audit.md)); re-eval attributes on the living lock
+before claiming channel packaging changed.
+
 | Source | Version / result | Notes |
 |--------|------------------|-------|
 | **Upstream latest release** | **1.2.1** (tag `1.2.1`, published 2024-12-27) | https://github.com/jedisct1/pqconnect/releases/tag/1.2.1 |
 | **Upstream tags** | `1.2.1` tip of listed tags | Repo still pushed (mirror activity into 2026) |
-| **Surmount flake nixpkgs** | rev `ac62194c3917...` (locked) | No `pqconnect` attribute |
-| **nixpkgs nixos-25.05** | `nix eval ...#pqconnect` **missing** | "Did you mean connect?" |
-| **nixpkgs nixos-unstable** | `nix eval ...#pqconnect` **missing** | Same |
-| **nixpkgs code search** | No package named pqconnect | False hits only (e.g. `PQconnectdb` in libgda) |
+| **Surmount flake nixpkgs (then)** | rev `ac62194c3917...` (**nixos-25.05** lock that day) | No `pqconnect` attribute |
+| **nixpkgs nixos-25.05 (then)** | `nix eval ...#pqconnect` **missing** | "Did you mean connect?" |
+| **nixpkgs nixos-unstable (then)** | `nix eval ...#pqconnect` **missing** | Same |
+| **nixpkgs code search (then)** | No package named pqconnect | False hits only (e.g. `PQconnectdb` in libgda) |
 
-**Conclusion:** PQConnect is **not packaged in nixpkgs** (25.05 or unstable)
-as of this check. Surmount would need a **Surmount package overlay** (FOD or
-source build) if we adopt it. Prefer current upstream; nixpkgs lag is not a
-reason to stay missing forever once we choose to package.
+**Conclusion (as of 2026-07-30 check):** PQConnect was **not packaged in
+nixpkgs** (25.05 or unstable). Surmount would need a **Surmount package
+overlay** (FOD or source build) if we adopt it. Prefer current upstream;
+nixpkgs lag is not a reason to stay missing forever once we choose to package.
 
 Re-validate versions when touching pins (principles.md).
 

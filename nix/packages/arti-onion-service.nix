@@ -1,6 +1,6 @@
 # Surmount-owned Arti with onion-service-service (hidden service publish).
 #
-# Why not stock pkgs.arti from nixos-25.05?
+# Why not stock pkgs.arti from the host nixpkgs channel?
 #   That channel packages Arti 1.4.2 (client-default features only). Upstream
 #   stable is far ahead (2.5.0 as of 2026-06-30). Greenfield Surmount pins the
 #   current engine here, same spirit as Stalwart: channel lag is not a reason
@@ -25,7 +25,7 @@
 #   works again, cargoHash can replace the artiUnstable.cargoDeps handoff.
 #
 # Toolchain:
-#   Arti 2.5.0 MSRV is 1.91. nixos-25.05 default rustc is 1.86 and
+#   Arti 2.5.0 MSRV is 1.91. Older host channels had rustc < 1.91 and
 #   rustPackages_* tops out at 1.89. The flake passes a rustPlatform whose
 #   rustc/cargo meet MSRV (from the nixpkgs-rust input), without rebasing
 #   the whole host OS channel.
@@ -151,7 +151,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
       Project GitLab (tag arti-v${finalAttrs.version}), with cargo feature
       onion-service-service so `arti proxy` can publish Tor onion/hidden
       services (tor-hsrproxy path). Distinct from stock pkgs.arti (client-
-      default and channel-lagged on nixos-25.05). Pair with Surmount module
+      default and often channel-lagged). Pair with Surmount module
       option packageIsOnionServiceCapable (auto when this package is selected
       via passthru.surmountOnionServiceCapable). Never contains HS private keys.
     '';

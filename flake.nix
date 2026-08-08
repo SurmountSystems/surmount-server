@@ -6,7 +6,8 @@
 # the public tree.
 #
 # Host CI-style loop: just check  (fmt --check, clippy -D warnings, cargo test)
-# Full flake CI aggregate: just check-ci  (or: nix build .#checks.<system>.ci)
+# Full flake CI aggregate: just ci  (alias check-ci; or: nix build .#checks.<system>.ci)
+# GHA: .github/workflows/ci.yml job display name is `just ci` (required-check footgun)
 # End-to-end: nix run .#e2e (local) / nix run .#e2e-host (env-gated; never in ci)
 # Heavy: mail-vm-test, mail-vps-eval, stalwart-mail package are optional.
 
@@ -15,15 +16,16 @@
 
   inputs = {
     # Prefer stable for a mail host. Bump deliberately after reading release notes.
-    # Stalwart engine is NOT taken from this channel (0.11.8). See
+    # Host channel: nixos-26.05 (crane wants >= 26.05; operator direction 2026-08-07).
+    # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
-    # Arti engine is NOT taken from this channel (1.4.2). See
+    # Arti engine is NOT taken from this channel. See
     # nix/packages/arti-onion-service.nix (Surmount-owned 2.5.0 source build).
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # Rustc/cargo only for engines whose MSRV exceeds nixos-25.05 (default
-    # 1.86; rustPackages_* max 1.89). Arti 2.5.0 MSRV is 1.91. Not a full OS
-    # channel bump. Bump this input when Arti needs a newer rustc.
+    # Rustc/cargo only for engines whose MSRV exceeds the host channel default.
+    # Arti 2.5.0 MSRV is 1.91. Keep a separate input so we can pin newer rustc
+    # without waiting on every host-channel package set. Bump when Arti needs it.
     nixpkgs-rust.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     crane.url = "github:ipetkov/crane";
@@ -95,7 +97,7 @@
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
-      # Leptos 0.8 SSR wants rustc >= 1.88; nixpkgs default on 25.05 is 1.86.
+      # Toolchain from nix/rust-toolchain.nix (nixos-26.05: rustPackages_1_95).
       mkManagementUiCrane =
         system:
         let
@@ -188,7 +190,11 @@
           e2e-host = e2ePkgs.e2e-host;
           # RFC-style nixfmt (same as formatter / checks.ci / devShell).
           # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt …
-          nixfmt = pkgs.nixfmt-rfc-style;
+          # nixos-26.05: nixfmt-rfc-style is an alias of pkgs.nixfmt (prefer the latter).
+          nixfmt = pkgs.nixfmt;
+          # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
+          # bootstrap without a host just install. Same pattern as grok-oss.
+          just = pkgs.just;
           default = self.packages.${system}.management-ui;
         }
       );
@@ -232,8 +238,12 @@
             }
           );
 
+          # Explicit pname/version: workspace root Cargo.toml has no [package]
+          # name; crane would otherwise warn and use placeholder 0.0.1.
           management-ui-fmt = craneLib.cargoFmt {
             inherit src;
+            pname = "surmount-management-ui";
+            version = "0.1.0";
           };
 
           # Pure e2e helpers + host-gate contracts (no VPS; not host probes).
@@ -300,7 +310,7 @@
           nix-fmt-check =
             pkgs.runCommand "nix-fmt-check"
               {
-                nativeBuildInputs = [ pkgs.nixfmt-rfc-style ];
+                nativeBuildInputs = [ pkgs.nixfmt ];
               }
               ''
                 set -euo pipefail
@@ -406,14 +416,14 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              # Match crane management-ui toolchain (Leptos SSR MSRV 1.88).
-              rustPackages_1_88.rustc
-              rustPackages_1_88.cargo
-              rustPackages_1_88.rustfmt
-              rustPackages_1_88.clippy
+              # Match crane management-ui toolchain (nix/rust-toolchain.nix).
+              rustPackages_1_95.rustc
+              rustPackages_1_95.cargo
+              rustPackages_1_95.rustfmt
+              rustPackages_1_95.clippy
               rust-analyzer
               pkg-config
-              nixfmt-rfc-style
+              nixfmt
               just
               sops
               age
@@ -426,7 +436,7 @@
               echo "Surmount dev shell  -  crates/ for Rust, modules/ for NixOS"
               echo "  just dev            # local management console → http://127.0.0.1:8080/"
               echo "  just check          # fmt --check + clippy + test (CI-style host bar)"
-              echo "  just check-ci       # full flake checks.<system>.ci aggregate"
+              echo "  just ci             # full flake checks.<system>.ci (GHA quality job)"
               echo "  just fmt-write      # apply cargo fmt + flake nixfmt"
               echo "  just e2e            # local hermetic end-to-end (nix run .#e2e)"
               echo "  just e2e-host       # host probes (needs SURMOUNT_E2E_HOST=1)"
@@ -439,6 +449,6 @@
         }
       );
 
-      formatter = forAllSystems (system: (mkPkgs system).nixfmt-rfc-style);
+      formatter = forAllSystems (system: (mkPkgs system).nixfmt);
     };
 }

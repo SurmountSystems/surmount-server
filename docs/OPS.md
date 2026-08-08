@@ -234,9 +234,11 @@ document the hygiene bar.
 
 ### UI path
 
-1. `curl -fsS http://127.0.0.1:8080/health`
-2. `curl -fsS https://services.surmount.systems/health`
-3. Stalwart admin: SSH tunnel to 8081 (prefer over public `/stalwart-admin/`)
+1. `curl -fsS http://127.0.0.1:8090/health` (Surmount management UI default port)
+2. `curl -fsS https://services.surmount.systems/health` when public HTTPS is live
+3. Stalwart HTTP management: SSH tunnel to **8080** (first-boot default; prefer
+   over public `/stalwart-admin/`). Example:
+   `ssh -L 8080:127.0.0.1:8080 mail-vps` then open `http://127.0.0.1:8080`
 
 ### Incident: disk full
 

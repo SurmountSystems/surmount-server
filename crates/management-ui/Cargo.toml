@@ -31,7 +31,8 @@ rustls-pki-types.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
-# SSR-only admin shell (no hydrate / WASM / NPM). MSRV 1.88; crane uses rust_1_88.
+# SSR-only admin shell (no hydrate / WASM / NPM). MSRV 1.88+; crane uses
+# rustPackages_1_95 on nixos-26.05.
 leptos.workspace = true
 # rust-nostr: NIP-98 kind 27235 verify (not JS NDK / no NPM).
 nostr.workspace = true

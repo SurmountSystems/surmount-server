@@ -1,10 +1,10 @@
 # Crane toolchain for management-ui (Leptos SSR wants rustc >= 1.88).
-# nixpkgs default rustc on 25.05 is 1.86; use rustPackages_1_88 without
-# rebasing the whole host channel.
+# Host channel nixos-26.05 ships rustc 1.95 and rustPackages_1_95 (1.88 set
+# removed). Pin the channel's rustPackages so crane and `nix develop` match.
 { pkgs }:
 pkgs.symlinkJoin {
-  name = "surmount-rust-1.88";
-  paths = with pkgs.rustPackages_1_88; [
+  name = "surmount-rust-1.95";
+  paths = with pkgs.rustPackages_1_95; [
     rustc
     cargo
     clippy

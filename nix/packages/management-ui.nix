@@ -2,8 +2,8 @@
 # Call as: pkgs.callPackage ./management-ui.nix { inherit craneLib; }
 # or via the flake overlay which injects craneLib.
 #
-# Leptos 0.8 SSR MSRV is rustc 1.88+. When craneLib is not overridden by the
-# flake, this package bumps to rustPackages_1_88 itself.
+# Leptos 0.8 SSR MSRV is rustc 1.88+. Toolchain comes from
+# nix/rust-toolchain.nix (nixos-26.05: rustPackages_1_95).
 
 {
   lib,
@@ -11,7 +11,7 @@
   craneLib,
   pkg-config,
   openssl,
-# Optional: cargo artifacts for faster incremental CI later.
+  # Optional: cargo artifacts for faster incremental CI later.
 }:
 let
   rustToolchain = import ../rust-toolchain.nix { inherit pkgs; };

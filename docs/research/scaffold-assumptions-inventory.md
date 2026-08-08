@@ -1,9 +1,12 @@
 # Scaffold assumptions inventory
 
-**Date:** 2026-07-30
+**Date:** 2026-07-30 (inventory body); host/channel rows refreshed **2026-08-07**.
 **Status:** research inventory only. Not operator acceptance.
 **Scope:** every material architectural assumption the Surmount Server tree
 currently implies via modules, packages, docs, or joins.
+
+**Living host (2026-08-07):** **nixos-26.05**, crane **`rustPackages_1_95`**,
+dual stock Stalwart module disable. See section 3 and section 22.
 
 **How to read this file**
 
@@ -31,8 +34,8 @@ direction. Do not treat those rows as permission to commit ciphertext.
 
 **Note on engine version in this inventory:** packages and
 `.grok/joins/stalwart-current.md` pin **Stalwart 0.16.15** (release binary FOD).
-Some living docs still say "current (see package after bump)" or mention
-historical 0.11.8 / TOML / :8081. Code + packaging join win for version and
+Older docs once said "current (see package after bump)" or mixed
+historical 0.11.8 / TOML / :8081. Living modules + packaging join win for version and
 ports; docs lag is called out per row where it matters.
 
 ---
@@ -63,19 +66,21 @@ ports; docs lag is called out per row where it matters.
 
 ## 2. Stalwart version pin: release binary FOD at 0.16.15
 
-- **Claim the tree currently implies:** Engine is **0.16.15**, not nixpkgs
-  25.05's 0.11.8. Packaged as **release binary fixed-output derivations**
-  (`stalwart-{arch}-unknown-linux-gnu.tar.gz`), plus FODs for cli 1.0.12,
-  webui 1.0.7, spam-filter 3.0.0. `packagingMode = "release-binary-fod"`.
-  Source `rustPlatform` build was attempted and not shipped (crates.io 403;
-  rustc age on 25.05).
+- **Claim the tree currently implies:** Engine is Surmount-owned **0.16.15**
+  release binary FODs (`stalwart-{arch}-unknown-linux-gnu.tar.gz`), plus FODs
+  for cli 1.0.12, webui 1.0.7, spam-filter 3.0.0.
+  `packagingMode = "release-binary-fod"`. Host channel is **nixos-26.05**;
+  engine is **not** the channel package (channel `pkgs.stalwart` still lags).
+  Source `rustPlatform` build was attempted and not shipped (crates.io 403 on
+  packaging day 2026-07-30; still deferred).
 - **Where it lives:** `nix/packages/stalwart-mail.nix`,
   `stalwart-cli.nix`, `stalwart-webui.nix`, `stalwart-spam-filter.nix`,
   `flake.nix` overlay, `.grok/joins/stalwart-current.md`.
-- **Why someone might have put it there:** Greenfield prefers current major;
-  nixos-25.05 lagged at 0.11.8 (scaffold accident); unstable module still TOML
-  / 0.15-shaped; binary FOD is hermetic and builds quickly when source vendor
-  fails.
+- **Why someone might have put it there:** Greenfield prefers current major.
+  Early scaffold briefly pulled channel **0.11.8** while the host was still on
+  **nixos-25.05**; that was channel lag, not a product pin. Unstable module
+  still TOML / 0.15-shaped when checked; binary FOD is hermetic when source
+  vendor fails. Host later moved to **26.05**; engine stayed Surmount FOD.
 - **Status:** **required by working code** (eval/build green on these
   packages). Pin approach is **scaffold / packaging choice**, not operator
   "only binaries forever."
@@ -88,23 +93,26 @@ ports; docs lag is called out per row where it matters.
 
 ---
 
-## 3. Surmount-owned service module; nixpkgs TOML module disabled
+## 3. Surmount-owned service module; both stock nixpkgs paths disabled
 
-- **Claim the tree currently implies:** nixpkgs `services/mail/stalwart-mail.nix`
-  is **disabled**. Surmount owns `modules/stalwart-service.nix`. Option path
-  name stays `services.stalwart-mail`. On-disk config is **config.json** with
-  DataStore only (`@type: RocksDb`, path). `settings` is accepted and **ignored**
-  (no TOML writer). Day-2 config is WebUI or `stalwart-cli apply`.
+- **Claim the tree currently implies:** Surmount dual-disables both stock
+  paths: `services/mail/stalwart-mail.nix` (older / 25.x TOML path) and
+  `services/mail/stalwart.nix` (26.05+ stock TOML module). Surmount owns
+  `modules/stalwart-service.nix`. Option path is **`services.stalwart`**
+  (matches stock attr name). Surmount still owns 0.16 **config.json** (not
+  the stock TOML module body). Unit/state stay `stalwart-mail*`. `settings`
+  is accepted and **ignored** (no TOML writer). Day-2 config is WebUI or
+  `stalwart-cli apply`.
 - **Where it lives:** `modules/stalwart-service.nix`, `modules/mail.nix`,
   `modules/default.nix`, join `stalwart-current.md`.
-- **Why someone might have put it there:** Stalwart 0.16 dropped TOML; nixpkgs
-  25.05 and unstable modules still assume older config. Keep option path for
-  less churn in tests/docs.
+- **Why someone might have put it there:** Stalwart 0.16 dropped TOML; stock
+  modules still assume older config and would conflict if left enabled. Option
+  name aligns with nixpkgs 26.05; dual-disable keeps Surmount ownership.
 - **Status:** **required by working code** for 0.16.15 to run at all on this
   flake.
 - **Should revisit now that Stalwart is 0.16.15?** **Yes** for declarative
   apply plans under Nix (listeners, spam URL, TLS, loopback binds). **No** for
-  going back to TOML.
+  going back to TOML or adopting the stock module body under `services.stalwart`.
 - **Open question for operator:** How much first-boot and day-2 Stalwart config
   should be declarative in-repo (`stalwart-cli apply` plans) versus operator
   WebUI clicks?
@@ -328,13 +336,13 @@ ports; docs lag is called out per row where it matters.
   **127.0.0.1:8090** (default). Stalwart 0.16 first-boot HTTP management is
   **:8080** (upstream safe defaults; may bind all interfaces). nginx proxies
   `/` -> UI :8090 and `/stalwart-admin/` -> `127.0.0.1:8080`. UI env
-  `SURMOUNT_STALWART_URL=http://127.0.0.1:8080`. Older docs/joins still say
-  UI :8080 and Stalwart :8081 in places (**doc lag**).
+  `SURMOUNT_STALWART_URL=http://127.0.0.1:8080`. Living OPS/MIGRATION/
+  SEARCH_AND_UI mopped to that story (2026-08-07). Some joins may still lag.
 - **Where it lives:** `modules/options.nix` (port 8090),
   `modules/management-ui.nix`, `modules/web.nix`, `modules/mail.nix`,
   `modules/networking.nix` (comments), `.grok/joins/stalwart-current.md`.
-  Lag examples: `docs/STACK.md` diagram (8080 UI / 8081 Stalwart),
-  `docs/MIGRATION.md` (8081), `.grok/joins/foundation.md`.
+  Historical lag examples included old MIGRATION :8081; residual join risk:
+  `.grok/joins/foundation.md`.
 - **Why someone might have put it there:** Avoid port fight after 0.16
   first-boot took :8080; keep bootstrap admin path; loopback-only product UI.
 - **Status:** **required by working code** for current defaults. Public
@@ -368,7 +376,7 @@ ports; docs lag is called out per row where it matters.
   packaging join (schema-driven CLI may differ from older `import messages`).
 - **Should revisit now that Stalwart is 0.16.15?** **Yes.** Validate real
   import path against `stalwart-cli --help` and 0.16 docs before any
-  production MailPlus cutover. Update MIGRATION.md ports (8081 -> 8080).
+  production MailPlus cutover. MIGRATION.md ports mopped to **8080** (2026-08-07).
 - **Open question for operator:** Is Maildir-nested still the only import
   path you need at cutover, and who runs the verified trial import?
 
@@ -522,25 +530,20 @@ ports; docs lag is called out per row where it matters.
 
 ---
 
-## 22. Hermetic flake; nixpkgs 25.05 host channel; crane UI
+## 22. Hermetic flake; nixpkgs 26.05 host channel; crane UI
 
 - **Claim the tree currently implies:** Locked `flake.lock`; hermetic packages
   under `nix/packages/` (crane for management-ui; FODs for Stalwart bits);
-  `ref/` study-only; host OS from **nixos-25.05** while engines can be newer
-  via overlays. `system.stateVersion = "25.05"` on sample host. Crane may warn
-  about wanting newer nixpkgs; builds still green on 25.05 per foundation join.
+  `ref/` study-only; host OS from **nixos-26.05** while engines can be newer
+  via overlays. Sample host `system.stateVersion = "26.05"`. Crane wants
+  nixpkgs >= 26.05 (no more 25.05 evaluation warning).
 - **Where it lives:** `flake.nix`, `flake.lock`, `nix/packages/*`,
-  `docs/hygiene.md`, `docs/open-choices.md`, `hosts/mail-vps/configuration.nix`,
-  joins `foundation.md` / `stalwart-current.md`.
+  `nix/rust-toolchain.nix`, `docs/hygiene.md`, `hosts/mail-vps/configuration.nix`.
 - **Why someone might have put it there:** Reproducible mail host; pure CI;
   stable OS channel while overriding hot packages.
-- **Status:** **required by working code** for the flake shape. Channel pin is
-  **scaffold default**.
-- **Should revisit now that Stalwart is 0.16.15?** **Yes** if source builds need
-  newer rustc, or when climbing Fix ladder / soft channel. Binary FOD path
-  reduces urgency.
-- **Open question for operator:** Stay on nixos-25.05 until a concrete package
-  need forces a channel bump, or move host channel sooner?
+- **Status:** **living** (operator direction 2026-08-07: use 26.05).
+- **Open question for operator:** Further channel bumps only with release notes
+  + measured need.
 
 ---
 
@@ -622,21 +625,19 @@ ports; docs lag is called out per row where it matters.
 
 ## 27. Doc and join lag (meta-assumption risk)
 
-- **Claim the tree currently implies (risk):** Readers of STACK/MIGRATION/
-  foundation join alone may still believe **Stalwart HTTP :8081**, **UI :8080**,
-  **TOML settings**, **spam-filter v2.0.5**, or **nixpkgs module owns mail**.
-  Packaging join + modules say otherwise for 0.16.15.
-- **Where it lives:** contrast `docs/STACK.md`, `docs/MIGRATION.md`,
-  `.grok/joins/foundation.md` vs `modules/*` and
-  `.grok/joins/stalwart-current.md`.
-- **Why someone might have put it there:** Rapid parallel agents; packaging
-  landed after foundation docs; cleanup scoped out of packaging turn.
-- **Status:** **documentation debt.** Can cause wrong operator actions.
-- **Should revisit now that Stalwart is 0.16.15?** **Yes.** Align living docs
-  to one port/version/config story (separate docs pass; out of scope for this
-  inventory file's "no package edits" mission beyond listing the gap).
-- **Open question for operator:** Want a dedicated docs-sync pass to make
-  STACK/MIGRATION/OPS match 0.16.15 modules before any install?
+- **Claim (living modules):** Stalwart HTTP management **:8080**, Surmount UI
+  default **:8090**, engine **0.16.15** config.json via `services.stalwart`,
+  spam-filter **3.0.0** FODs under `/etc/surmount/stalwart/`, stock modules
+  dual-disabled.
+- **Where lag lived:** older STACK/MIGRATION/OPS/SEARCH port rows, DATASTORES
+  5.2 TOML eval, foundation join. Mop pass 2026-08-07 fixed living MIGRATION /
+  OPS / SEARCH_AND_UI ports, DATASTORES 5.2, and historical option past-tense.
+- **Remaining risk:** `.grok/joins/foundation.md` and any un-mopped diagram
+  cells may still lag; trust `modules/*` + COMPACTION-PIN +
+  `.grok/joins/stalwart-current.md` over old joins.
+- **Status:** major living-doc debt mopped; joins may still lag.
+- **Should revisit now that Stalwart is 0.16.15?** Living product docs should
+  stay aligned on each packaging/port change (not a separate forever backlog).
 
 ---
 

@@ -50,7 +50,7 @@ let
           {
             nixpkgs.overlays = [ fakeOverlay ];
             nixpkgs.config.allowUnfree = false;
-            system.stateVersion = "25.05";
+            system.stateVersion = "26.05";
             networking.hostName = "surmount-eval";
             fileSystems."/" = {
               device = "nodev";
@@ -275,7 +275,7 @@ let
             {
               nixpkgs.overlays = [ noArtiOverlay ];
               nixpkgs.config.allowUnfree = false;
-              system.stateVersion = "25.05";
+              system.stateVersion = "26.05";
               networking.hostName = "surmount-eval-no-arti";
               fileSystems."/" = {
                 device = "nodev";
@@ -488,7 +488,7 @@ let
             {
               nixpkgs.overlays = [ stockOnlyOverlay ];
               nixpkgs.config.allowUnfree = false;
-              system.stateVersion = "25.05";
+              system.stateVersion = "26.05";
               networking.hostName = "surmount-eval-stock-arti";
               fileSystems."/" = {
                 device = "nodev";

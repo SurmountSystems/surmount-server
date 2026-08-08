@@ -1,0 +1,128 @@
+# Surmount Server GitHub Actions CI.
+# Pattern reference (naming / disk / Nix / least privilege):
+#   https://github.com/SurmountSystems/grok-oss/blob/main/.github/workflows/ci.yml
+#
+# Footguns (do not "simplify" without reading):
+# - Job *display* `name:` becomes the GitHub check context for branch
+#   protection. Keep it exactly `just ci` so rulesets can require that string.
+# - Workflow file name and top-level `name: CI` are separate from the check
+#   context; the required check is the *job* display name, not the file name.
+# - Payload is `just ci` -> flake `checks.<system>.ci` only. Never e2e-host,
+#   Tor deep row, mail-vm-test, or Stalwart FOD / full toplevel (those soft-
+#   elevate cutover if green CI is misread as host proof).
+# - Free disk + swap: free ubuntu-latest images are multi-GB of unused
+#   toolchains; nix + crane cargo has hit ENOSPC on other Surmount repos.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: checkout + read contents only (no write to repo).
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Shared env for free ubuntu-latest (~4 vCPU / 16GB RAM on the *runner*, not
+# a product host-size claim). Cap build cores to reduce OOM thrash.
+env:
+  NIX_CONFIG: |
+    download-attempts = 5
+    connect-timeout = 30
+    stalled-download-timeout = 100
+    http-connections = 4
+  CI_SYSTEM: x86_64-linux
+  NIX_BUILD_CORES: "2"
+
+jobs:
+  # Job display name must match ruleset required check context (`just ci`).
+  quality:
+    name: just ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Free GHA images ship multi-GB toolchains we never use. Reclaim before
+      # nix/crane so the store + cargo target do not ENOSPC mid-build.
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          # Best-effort: dirs missing on a future image must not fail the job.
+          for path in \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell \
+            /usr/share/swift \
+            /usr/local/.ghcup
+          do
+            if [[ -e "$path" ]]; then
+              echo "removing $path"
+              sudo rm -rf "$path" || true
+            fi
+          done
+          sudo apt-get clean || true
+          df -h /
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Add swap
+        continue-on-error: true
+        run: |
+          set -u
+          free -h || true
+          swapon --show || true
+          SWAPFILE=/mnt/surmount-ci-swapfile
+          if swapon --show 2>/dev/null | grep -qF "$SWAPFILE"; then
+            echo "already using $SWAPFILE"
+            exit 0
+          fi
+          sudo swapoff "$SWAPFILE" 2>/dev/null || true
+          sudo rm -f "$SWAPFILE" 2>/dev/null || true
+          if ! sudo fallocate -l 8G "$SWAPFILE" 2>/dev/null; then
+            sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=8192 status=none || exit 0
+          fi
+          sudo chmod 600 "$SWAPFILE" || exit 0
+          sudo mkswap "$SWAPFILE" || exit 0
+          sudo swapon "$SWAPFILE" || exit 0
+          free -h || true
+
+      # Bootstrap flake-pinned just; retry cold flake eval only (network flakes).
+      # Permanent compile/test fails are not retried.
+      - name: just ci
+        run: |
+          set -euo pipefail
+          attempts=4
+          backoff=5
+          n=1
+          while true; do
+            echo "==> quality attempt ${n}/${attempts}"
+            set +e
+            nix shell .#just -c just --version
+            status=$?
+            set -e
+            if [[ "${status}" -ne 0 ]]; then
+              if [[ "${n}" -ge "${attempts}" ]]; then
+                exit "${status}"
+              fi
+              echo "==> nix shell .#just failed; retry in ${backoff}s" >&2
+              sleep "${backoff}"
+              backoff=$((backoff * 3))
+              n=$((n + 1))
+              continue
+            fi
+            # Flake checks aggregate once (no outer retry of permanent fails).
+            nix shell .#just -c just ci
+            exit $?
+          done

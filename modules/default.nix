@@ -7,7 +7,8 @@
     ./secrets.nix
     ./networking.nix
     ./hardening.nix
-    # Surmount 0.16+ service (disables nixpkgs TOML module). Before mail.nix.
+    # Surmount 0.16+ service (dual-disables stock stalwart-mail.nix +
+    # stalwart.nix; owns services.stalwart). Before mail.nix.
     ./stalwart-service.nix
     ./mail.nix
     ./web.nix

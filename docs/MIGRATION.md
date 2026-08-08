@@ -58,7 +58,7 @@ rsync -a backup-host:/data/mailplus-export/@local/ \
 
 Import attaches messages to an existing account. Create the principal via:
 
-- Stalwart admin UI (SSH tunnel to `http://127.0.0.1:8081`), or
+- Stalwart admin UI (SSH tunnel to `http://127.0.0.1:8080`), or
 - `stalwart-cli` directory/account commands for your Stalwart version
 
 Use the final production address, e.g. `you@surmount.systems`.
@@ -75,7 +75,7 @@ surmount-mail-import-maildir you@surmount.systems \
 Equivalent manual form:
 
 ```bash
-export STALWART_URL="http://127.0.0.1:8081"
+export STALWART_URL="http://127.0.0.1:8080"
 # Auth flags as required by your Stalwart version / admin credentials:
 #   stalwart-cli --url "$STALWART_URL" -u admin -p ... \
 stalwart-cli --url "$STALWART_URL" import messages \

@@ -4,7 +4,7 @@ Intentional design of every durable and semi-durable store in the Surmount
 mail + web stack. Written for a senior database engineer: precise, no
 "defaults are fine," explicit unknowns, load-test honesty.
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-07
 
 > **Operator direction 2026-07-30:** RocksDB for all roles is **fine for now**;
 > co-location OK this phase; internal FTS good enough for now; in-memory on
@@ -18,8 +18,9 @@ mail + web stack. Written for a senior database engineer: precise, no
 > [research/stalwart-stores-evidence-2026-07-30.md](research/stalwart-stores-evidence-2026-07-30.md).
 
 > **Engine version:** Surmount pins Stalwart **0.16.15** via release-binary FODs
-> (`nix/packages/stalwart-mail.nix`, `modules/stalwart-service.nix`). Historical
-> 0.11.8 was a nixos-25.05 scaffold accident, not a product choice.
+> (`nix/packages/stalwart-mail.nix`, `modules/stalwart-service.nix`). Host
+> channel is **nixos-26.05**; engine is not the channel package. Early scaffold
+> briefly used channel **0.11.8** on host **25.05** (historical only).
 
 **Design notes:** [open-choices.md](open-choices.md),
 [operator-direction.md](operator-direction.md).
@@ -228,7 +229,7 @@ Treat internal CF use as engine private.
 | **Multi-node** | No shared-writer multi-node. |
 | **Ops burden** | Low. |
 | **Failure modes** | Single-file corruption; lock contention; huge single file. |
-| **Surmount** | nixpkgs **legacy** path when `stateVersion < 24.11`: SQLite index + **filesystem blobs**. We are on **25.05** and **not** on that path. Revisit only with a written design update if RocksDB ops pain dominates and scale stays tiny. |
+| **Surmount** | nixpkgs **legacy** path when `stateVersion < 24.11`: SQLite index + **filesystem blobs**. Host channel is **26.05** (`stateVersion` 26.05); we are **not** on the legacy path. Revisit only with a written design update if RocksDB ops pain dominates and scale stays tiny. |
 
 ### 3.3 PostgreSQL
 
@@ -371,51 +372,75 @@ Consider split when:
 
 ### 5.1 Module and stateVersion
 
-- Option path (nixpkgs 25.05): `services.stalwart-mail`
-- Source (locked rev `ac62194c...`): `nixos/modules/services/mail/stalwart-mail.nix`
-- `useLegacyStorage = versionOlder stateVersion "24.11"`
-- Host `system.stateVersion = "25.05"` => **non-legacy RocksDB path**
+- Option path: Surmount **`services.stalwart`** (matches stock nixpkgs 26.05 attr name). Dual-disable both stock module paths; Surmount still owns 0.16 `config.json` (not stock TOML)
+- Stock sources: `services/mail/stalwart-mail.nix` (older channels) and `services/mail/stalwart.nix` (26.05+)
+- `useLegacyStorage = versionOlder stateVersion "24.11"` (historical nixpkgs behavior)
+- Host `system.stateVersion` **26.05** => **non-legacy RocksDB path**
 
-### 5.2 Exact store-related settings (flake eval)
+### 5.2 Store config on disk (0.16 config.json, not TOML settings)
 
-Eval of `nixosConfigurations.mail-vps` on this tree (2026-07-30):
+**Living product is Stalwart 0.16+.** Surmount does **not** feed store layout
+through stock-module TOML `settings`. The Surmount module
+(`modules/stalwart-service.nix`) writes a small **config.json** DataStore
+document and starts `stalwart --config=...`. Everything else (listeners,
+directory objects, spam, TLS, accounts) lives in the datastore as JMAP objects
+after first boot or via WebUI / `stalwart-cli apply`.
 
-```toml
-# Conceptual TOML equivalent of evaluated settings
-[store.db]
-type = "rocksdb"
-path = "/var/lib/stalwart-mail/db"
-compression = "lz4"
+**Option path:** `services.stalwart` (not `services.stalwart-mail`). Unit name
+stays `stalwart-mail.service`. `services.stalwart.settings` exists only as an
+accepted-and-ignored attr for old fragments; it is **not** written to disk.
 
-[storage]
-data = "db"
-fts = "db"
-lookup = "db"
-blob = "db"
-directory = "internal"
+**What `modules/mail.nix` sets today:**
 
-[directory.internal]
-type = "internal"
-store = "db"
+| Option | Value |
+|--------|--------|
+| `services.stalwart.enable` | `true` |
+| `services.stalwart.dataDir` | `surmount.mailDataDir` (default `/var/lib/stalwart-mail`) |
+| `services.stalwart.storeType` | `"RocksDb"` |
+| `services.stalwart.storePath` | `${mailDataDir}/db` |
+| `services.stalwart.blobSize` / `bufferSize` | omit (`null`) unless measured need |
+| `services.stalwart.configFile` | omit (generated JSON from storeType/path) |
+
+**Generated config.json shape** (conceptual; `@type` / path from options):
+
+```json
+{
+  "@type": "RocksDb",
+  "path": "/var/lib/stalwart-mail/db"
+}
 ```
 
-Also present (non-store but related):
+Optional keys when set: `blobSize`, `bufferSize` (upstream RocksDB defaults
+apply when omitted; see section 3.1).
 
-- `spam-filter.resource` = **our FOD** `file://${spamFilterToml}` (v2.0.5),
-  **not** the broken empty nixpkgs package path and **not** the message DB.
-- `webadmin.path` = `/var/cache/stalwart-mail` (UI assets cache, not mail DB).
-- Listeners, hostname, tracer stdout -> journald.
+**Four-store roles:** 0.16 co-locates data/blob/FTS/lookup inside that one
+DataStore path for the single-node RocksDB case. There is no living TOML
+`storage.data = "db"` map in the Surmount module. Older 0.11.8 TOML role maps
+are historical only:
+[research/stalwart-stores-evidence-2026-07-30.md](research/stalwart-stores-evidence-2026-07-30.md).
+Current engine store evidence:
+[research/stalwart-0.16.15-stores-evidence.md](research/stalwart-0.16.15-stores-evidence.md).
 
-**Not set by us today (omit = upstream defaults):** `blobSize`, `bufferSize`,
-`poolWorkers`, DataRetention crons, Email `compressionAlgorithm` (engine
-default LZ4 for blobs). Starting-point rationale:
-[operator-direction.md](operator-direction.md) section 2.
+**Hermetic FODs (not auto-applied as engine config):**
+
+- Spam-filter **3.0.0** and WebUI zip are installed under
+  `/etc/surmount/stalwart/` via `environment.etc` in `modules/mail.nix`.
+- They are **not** the message DB and are **not** wired through TOML
+  `spam-filter.resource` settings. Operator points SpamSettings / resource URL
+  at those `file://` paths via apply or WebUI when ready.
+- CacheDirectory for the unit remains `stalwart-mail` under systemd
+  (`/var/cache/stalwart-mail` for UI assets cache, not mail DB).
+
+**Not set as first-class Nix options today:** `poolWorkers`, DataRetention
+crons, blob email compression algorithm (engine default LZ4 for blobs).
+Starting-point rationale: [operator-direction.md](operator-direction.md)
+section 2.
 
 ### 5.3 Paths and units
 
 | Item | Value |
 |------|-------|
-| `surmount.mailDataDir` / `services.stalwart-mail.dataDir` | `/var/lib/stalwart-mail` |
+| `surmount.mailDataDir` / `services.stalwart.dataDir` | `/var/lib/stalwart-mail` |
 | RocksDB directory | `/var/lib/stalwart-mail/db` |
 | systemd unit | `stalwart-mail.service` |
 | User | `stalwart-mail` (static user; avoids chown storms) |
@@ -423,12 +448,13 @@ default LZ4 for blobs). Starting-point rationale:
 
 ### 5.4 Spam-filter FOD is not the message store
 
-`modules/mail.nix` pins
-`https://github.com/stalwartlabs/spam-filter/releases/download/v2.0.5/spam-filter.toml`
-as a fixed-output derivation so Stalwart does not download rules at runtime.
-That TOML is **anti-spam configuration**, completely separate from RocksDB
-message data. Do not back it up as if it were mail; it is in the Nix store
-via the system closure.
+`nix/packages/stalwart-spam-filter.nix` pins spam-filter **3.0.0**
+(`spam-filter.toml` + `spam-filter-rules.json.gz` FODs). `modules/mail.nix`
+installs them under `/etc/surmount/stalwart/` for operators. That material is
+**anti-spam configuration**, completely separate from RocksDB message data.
+Do not back it up as if it were mail; it is in the Nix store via the system
+closure. Engine consumption is Day-2 apply/WebUI, not automatic first-boot
+wiring through a TOML `settings` key.
 
 ### 5.5 Import path vs live store
 
@@ -460,8 +486,9 @@ Live authority is only the Stalwart store. Never auto-import on activation.
 ### 6.2 Why provisional RocksDB co-location (rationale, not "nixpkgs said so")
 
 1. Stalwart **recommends RocksDB for single-node** installations.
-2. Matches nixpkgs 25.05 non-legacy defaults (we independently agree for
-   now; we do not outsource judgment).
+2. Matches stock non-legacy RocksDB defaults (including how older 25.05
+   modules framed them; we independently agree for now; we do not
+   outsource judgment).
 3. Minimizes process count on a mail VPS that already runs edge, UI, spam
    path, and later Vaultwarden.
 4. One tree for restic paths simplifies first production backups.
@@ -514,7 +541,7 @@ wired in modules yet.
 | Stalwart data+blob+FTS+lookup | RocksDB (provisional) | `/var/lib/stalwart-mail/db` | WAL + process; stop-service backup preferred | restic `mailDataDir`; test restore | Mail passwords inside engine DB | Stalwart |
 | Stalwart internal directory | Same RocksDB | inside `db` | Same | Same | Credential hashes | Stalwart |
 | Stalwart webadmin cache | Files | `/var/cache/stalwart-mail` | Ephemeral cache | Optional / skip | No | Stalwart package |
-| Spam-filter rules | TOML FOD in Nix store | store path via settings | Immutable in closure | Via nix / flake | No | `mail.nix` pin |
+| Spam-filter rules | TOML + rules FODs in Nix store | `/etc/surmount/stalwart/` (3.0.0); apply/WebUI to engine | Immutable in closure | Via nix / flake | No | `mail.nix` + spam-filter package |
 | MailPlus import staging | Maildir files | `/var/lib/surmount/import/...` | Files | Optional until import done | May contain mail | Operator |
 | Surmount state root | dir | `/var/lib/surmount` | Files | restic `stateDir` | Future sessions etc. | Surmount |
 | Management UI durable state | Optional ban/whitelist-last-used JSON; future sessions | default `stateDir/ui/ban-state.json` when accessControl.enable; no secrets | Files | With `stateDir` | Session secrets via sops (future); ban state is IPs only | Surmount management-ui |
@@ -641,8 +668,11 @@ duplicate messages. Operator-run only.
 - Exact RocksDB WAL fsync flags inside the Stalwart binary build we ship.
 - Production mailbox counts, average message size, attachment mix for
   Surmount.
-- Whether nixpkgs will rename `services.stalwart-mail` -> `services.stalwart`
-  on 26.05+ (watch release notes).
+- Stock nixpkgs on **26.05+** uses option name `services.stalwart` via
+  `services/mail/stalwart.nix`. Surmount dual-disables both stock paths
+  (`stalwart-mail.nix` and `stalwart.nix`) and claims option `services.stalwart`
+  with its own 0.16 module (see `modules/stalwart-service.nix`). Unit/state
+  stay `stalwart-mail*` unless a separate migration is planned.
 - Stalwart Enterprise undelete: out of scope unless licensed.
 - No claim that internal bloom FTS equals ES quality.
 - Live restic without stop/snapshot is unproven for RocksDB consistency; prefer stop or FS snapshot.

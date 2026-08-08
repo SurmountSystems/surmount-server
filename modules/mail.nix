@@ -1,7 +1,9 @@
 # Stalwart Mail Server wiring for Surmount (engine 0.16+).
 #
-# Module path: services.stalwart-mail (Surmount-owned in
-# modules/stalwart-service.nix; nixpkgs 25.05 TOML module is disabled there).
+# Module path: services.stalwart (Surmount-owned in modules/stalwart-service.nix;
+# both stock paths dual-disabled there: stalwart-mail.nix + stalwart.nix).
+# Option name matches stock nixpkgs 26.05; Surmount still owns 0.16 config.json
+# (not the stock TOML module body). Unit remains stalwart-mail.service.
 #
 # Stalwart owns SMTP/IMAP/JMAP/ManageSieve (and collab protocols). We do not
 # reimplement an MTA. Management UI and operator tooling live in the Rust crate
@@ -37,13 +39,13 @@ let
   inherit (lib) mkIf mkMerge concatMapStringsSep;
   allDomains = [ cfg.primaryDomain ] ++ cfg.additionalDomains;
 
-  spamFilter = config.services.stalwart-mail.package.spam-filter or null;
-  webui = config.services.stalwart-mail.package.webui or null;
+  spamFilter = config.services.stalwart.package.spam-filter or null;
+  webui = config.services.stalwart.package.webui or null;
 in
 {
   config = mkIf cfg.enable (mkMerge [
     {
-      services.stalwart-mail = {
+      services.stalwart = {
         enable = true;
         openFirewall = false;
         dataDir = cfg.mailDataDir;
@@ -62,7 +64,7 @@ in
 
       # Binary + CLI + import helper on PATH.
       environment.systemPackages = [
-        config.services.stalwart-mail.package
+        config.services.stalwart.package
         pkgs.stalwart-cli
         (pkgs.writeShellApplication {
           name = "surmount-mail-import-maildir";

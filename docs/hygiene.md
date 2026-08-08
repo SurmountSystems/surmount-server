@@ -63,8 +63,8 @@ paths and operator-managed secret stores outside the public tree.
 - Prefer **current** major versions of engines we choose. nixpkgs lag is not a
   reason to stay old. Always re-validate latest when bumping.
 - Stalwart is pinned via **Surmount package overlay**
-  (`nix/packages/stalwart-mail.nix`); 0.11.8 was a scaffold accident from
-  nixos-25.05.
+  (`nix/packages/stalwart-mail.nix`); 0.11.8 was a historical scaffold
+  accident from an older host channel (pre-26.05).
 - Do not claim "unsafe" or "version skew is dangerous" without a failed build,
   broken import, or measured issue.
 - On source builds, prefer system shared libraries with fixed ABI (for example

@@ -1,15 +1,29 @@
 # Evidence: Stalwart 0.16.15 storage and config (Surmount pin)
 
-**Status:** research finding for the **current Surmount package pin**. Not
-operator acceptance of any layout. **Date:** 2026-07-30
+**Status:** research finding for the Surmount **engine** pin **0.16.15**.
+Not operator acceptance of any layout.
+**Store / packaging evidence date:** 2026-07-30.
+**Host channel + module path refresh:** 2026-08-07 (living tree).
 
-**Scope:** versions in this tree, how they are packaged, the 0.16 storage /
-config model from official docs and tag `v0.16.15` source, what Surmount
-modules actually write, and what remains unverified in the release binary.
+**Living host (2026-08-07):** flake input **`nixos-26.05`** @
+`445d861c6d31b4af0c79d8d4be2331f762a361d7`. Sample `system.stateVersion =
+"26.05"`. Surmount dual-disables both stock module paths
+(`services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`) and
+claims option path `services.stalwart` (not stock TOML body). Living pins:
+[COMPACTION-PIN.md](../COMPACTION-PIN.md),
+[architecture-review.md](../architecture-review.md),
+[version-audit.md](version-audit.md).
+
+**Scope:** Surmount engine pin (still **0.16.15** FODs as of living refresh),
+how they are packaged, the 0.16 storage / config model from official docs and
+tag `v0.16.15` source, what Surmount modules actually write, and what remains
+unverified in the release binary. Store-shape measurements are **2026-07-30**
+evidence and still apply to engine **0.16.15** unless a later engine bump
+lands.
 
 **Historical only (do not treat as current):**
 [stalwart-stores-evidence-2026-07-30.md](stalwart-stores-evidence-2026-07-30.md)
-documents the old nixpkgs **0.11.8** TOML era.
+documents the old nixpkgs **0.11.8** TOML era (host was on 25.05 then).
 
 **Packaging join (not architecture law):**
 `.grok/joins/stalwart-current.md`
@@ -18,8 +32,10 @@ documents the old nixpkgs **0.11.8** TOML era.
 
 ## 1. Exact versions in the Surmount tree
 
-Measured 2026-07-30 on this machine via package files, `nix build`, and
-`--version`.
+Engine package versions measured 2026-07-30 via package files, `nix build`,
+and `--version`. Living tree still pins these FODs (re-check
+[COMPACTION-PIN.md](../COMPACTION-PIN.md) / `nix/packages/` before claiming a
+bump).
 
 | Component | Version | Packaging | Upstream assets | Evidence |
 |-----------|---------|-----------|-----------------|----------|
@@ -48,12 +64,14 @@ Measured 2026-07-30 on this machine via package files, `nix build`, and
 
 ### Why FOD binaries (not rustPlatform)
 
-From package comments and join:
+From package comments and join (reasons as of 2026-07-30 packaging day):
 
 1. `fetch-cargo-vendor` hit crates.io **HTTP 403** for some crates in this
    environment (2026-07-30).
-2. CLI source build wants rustc newer than nixos-25.05's 1.86 for some
-   unstable lib features.
+2. At packaging time the host was still on nixos-25.05; CLI source build
+   wanted rustc newer than that channel's default 1.86 for some unstable lib
+   features. Living host is **nixos-26.05** / rustc **1.95**; source build is
+   still deferred for the vendor-403 path, not because the host is on 25.05.
 3. Release binaries are hermetic fixed-output hashes and match the published
    tag. Source build remains a future path, not current.
 
@@ -107,23 +125,36 @@ Redis cluster, ElasticSearch, Meilisearch, and blake3 (see section 4).
 
 ---
 
-## 2. nixpkgs version still used for the OS
+## 2. Host nixpkgs channel vs Surmount engine
 
-Surmount still boots the host from **nixos-25.05**. The mail **engine is not**
-taken from that channel.
+**Living truth (2026-08-07):** host channel is **`nixos-26.05`**. The mail
+**engine is not** taken from the host channel; it remains Surmount FOD pin
+**0.16.15**.
 
-| Item | Value | Where |
-|------|--------|--------|
-| flake input | `github:NixOS/nixpkgs/nixos-25.05` | `flake.nix` |
-| locked rev | `ac62194c3917d5f474c1a844b6fd6da2db95077d` | `flake.lock` node `nixpkgs` |
-| locked narHash | `sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=` | `flake.lock` |
-| `pkgs.lib.version` (mail-vps eval) | `25.05pre-git` | `nix eval` |
-| Channel package `pkgs.stalwart-mail` | still **0.11.8** on this channel | historical note only |
-| Surmount engine | overlay / flake package **0.16.15** | `flake.nix` packages + overlay |
+| Item | Living value (2026-08-07) | Where |
+|------|---------------------------|--------|
+| flake input | `github:NixOS/nixpkgs/nixos-26.05` | `flake.nix` |
+| locked rev | `445d861c6d31b4af0c79d8d4be2331f762a361d7` | `flake.lock` node `nixpkgs` |
+| Sample `system.stateVersion` | **26.05** | `hosts/mail-vps/configuration.nix`, tests |
+| Channel stock package | nixos-26.05 ships `pkgs.stalwart` (lagged vs Surmount FOD; not used) | nixpkgs; see [version-audit.md](version-audit.md) |
+| Surmount engine | overlay / flake package **0.16.15** | `nix/packages/stalwart-mail.nix`, `flake.nix` |
+| Stock modules | dual `disabledModules`: `services/mail/stalwart-mail.nix` + `services/mail/stalwart.nix` | `modules/stalwart-service.nix` |
+| Option path | `services.stalwart` (matches stock attr; Surmount 0.16 config.json module) | same module |
 
-The Surmount module **disables** nixpkgs
-`services/mail/stalwart-mail.nix` so the 25.05 TOML module and 0.11 binary
-assumptions do not apply (`modules/stalwart-service.nix`).
+### Historical footnote: host on 2026-07-30 store-evidence day
+
+When store packaging evidence was gathered, the host was still **nixos-25.05**:
+
+| Item | Value (2026-07-30 only) |
+|------|-------------------------|
+| flake input | `github:NixOS/nixpkgs/nixos-25.05` |
+| locked rev | `ac62194c3917d5f474c1a844b6fd6da2db95077d` |
+| `pkgs.lib.version` (mail-vps eval then) | `25.05pre-git` |
+| Channel package `pkgs.stalwart-mail` | **0.11.8** on 25.05 (not Surmount engine) |
+| Module disable (then) | single path `services/mail/stalwart-mail.nix` was enough on 25.05 |
+
+Do **not** claim Surmount still boots 25.05. Engine store evidence below
+still targets pin **0.16.15**.
 
 ---
 
@@ -445,7 +476,7 @@ That file is **historical only**.
 | `nix/packages/stalwart-spam-filter.nix` | spam-filter 3.0.0 FODs |
 | `modules/stalwart-service.nix` | config.json + systemd unit |
 | `modules/mail.nix` | Surmount wiring, FODs under `/etc/surmount/stalwart/` |
-| `flake.nix` / `flake.lock` | packages, overlay, nixpkgs 25.05 lock |
+| `flake.nix` / `flake.lock` | packages, overlay; living host nixos-26.05 lock |
 | `.grok/joins/stalwart-current.md` | packaging join |
 | `docs/DATASTORES.md` | living datastore inventory (may lag wording) |
 | `docs/research/stalwart-stores-evidence-2026-07-30.md` | historical 0.11.8 only |
@@ -459,7 +490,7 @@ nix build .#stalwart-mail .#stalwart-cli .#stalwart-webui .#stalwart-spam-filter
 #   result/bin/stalwart-cli --version      # stalwart-cli 1.0.12
 nix eval --raw .#stalwart-mail.version
 nix eval --raw .#stalwart-mail.passthru.packagingMode
-nix eval --raw .#nixosConfigurations.mail-vps.config.services.stalwart-mail.storePath
+nix eval --raw .#nixosConfigurations.mail-vps.config.services.stalwart.storePath
 # ExecStart embeds generated config.json; cat that store path for JSON body
 jq -r '.nodes.nixpkgs.locked.rev' flake.lock
 ```

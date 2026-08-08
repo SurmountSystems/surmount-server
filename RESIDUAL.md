@@ -30,8 +30,8 @@ HTTP-01 on product :80 (still parked; Q-EDGE). Ops day-one:
 | Entry | What |
 |-------|------|
 | **`just check`** | Host CI-style bar: `fmt` (check-only, errors if dirty) then `clippy` (`-D warnings`) then `test` (all workspace cargo tests). Does **not** write format fixes. Does **not** hard-depend on Tor deep row or host e2e |
-| **`just check-ci`** | Same as `nix build .#checks.<system>.ci` (full flake CI aggregate) |
-| **`checks.*.ci`** | management-ui build + cargo fmt/clippy/test, **e2e-pure-test** (Rust pure helpers + host-gate contracts), one full module-eval, thin pure deploy/arti path contracts, arti-onion-package eval (features/passthru, no cargo build), nixfmt. **Does not** run host probes or optional Tor deep row |
+| **`just ci`** / **`just check-ci`** | Same as `nix build .#checks.<system>.ci` (full flake CI aggregate). GHA job display name is **`just ci`** (required-check footgun; see `.github/workflows/ci.yml`) |
+| **`checks.*.ci`** | management-ui build + cargo fmt/clippy/test, **e2e-pure-test** (Rust pure helpers + host-gate contracts), one full module-eval, thin pure deploy/arti path contracts, arti-onion-package eval (features/passthru, no cargo build), nixfmt. **Does not** run host probes or optional Tor deep row. Workflow: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (pattern from grok-oss) |
 | **`just fmt`** | Format **check** only (`cargo fmt --check` + flake nixfmt `--check`); use `just fmt-write` to apply |
 | **`just test`** | Host `cargo test` only (fast loop) |
 | **`just clippy`** | Host `cargo clippy --all-targets -- -D warnings` |
@@ -132,7 +132,8 @@ self-signed PEMs are not host ownership or public cutover.
   inventory (empty + `source: unavailable`; no fake `admin@`). Domains from
   config labeled as inventory, not Stalwart directory. Live Stalwart probe on
   overview/mail. Hermetic tests: SSR markers, DOGE palette, nav, no skeleton,
-  accounts honesty, `/health`. No NPM. Crane: nixpkgs `rustPackages_1_88`.
+  accounts honesty, `/health`. No NPM. Crane: nixpkgs `rustPackages_1_95`
+  (host channel nixos-26.05).
   **DOGE theme (2026-08-01):** pure 3-bit RGB eight-color palette only
   (`data-theme="doge"`, `color-scheme: only dark`); no grays / no light
   media queries. Spec SurmountSystems/specs `0001_DOGE.md` v1.0.0.
@@ -387,7 +388,9 @@ a host **stop** at docs, tree wiring, and local e2e.
 ### Agent-done earlier (packaging + docs; no cutover)
 
 - [x] Version currency audit vs network latest (Stalwart family at tip;
-      crane rustc 1.88 vs stable 1.97.1 noted). See
+      crane rustc 1.88 vs stable 1.97.1 noted in pre-26.05 audit; living
+      crane is 1.95 via `rustPackages_1_95`, see
+      [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)). Snapshot:
       [docs/research/version-audit.md](docs/research/version-audit.md)
 - [x] **Arti packaging currency:** Surmount-owned **2.5.0** source build
       (`nix/packages/arti-onion-service.nix`, GitLab `arti-v2.5.0`) +

@@ -85,23 +85,25 @@ Measured 2026-07-30 from package files, `nix build`, `--version`, and
 | stalwart-cli | **1.0.12** | Release binary FOD | `nix/packages/stalwart-cli.nix` |
 | WebUI assets | **1.0.7** | Zip FOD (`webui.zip`) | `nix/packages/stalwart-webui.nix` |
 | spam-filter rules | **3.0.0** | toml + `spam-filter-rules.json.gz` FODs | `nix/packages/stalwart-spam-filter.nix` |
-| Host OS channel | **nixos-25.05** | flake input; engine **not** from channel | `flake.nix`, `flake.lock` |
-| nixpkgs lock rev | `ac62194c3917d5f474c1a844b6fd6da2db95077d` | locked node `nixpkgs` | `flake.lock` |
-| Channel `pkgs.stalwart-mail` | still **0.11.8** on 25.05 | historical only; disabled module | nixpkgs |
-| Surmount service module | custom | disables nixpkgs TOML module | `modules/stalwart-service.nix` |
-| Management UI | Axum + Leptos SSR admin shell scaffold (ssr-only; no hydrate) | crane under `nix/packages/` with `rustPackages_1_88` | `crates/management-ui/`, `nix/packages/management-ui.nix`, `nix/rust-toolchain.nix` |
+| Host OS channel | **nixos-26.05** | flake input; engine **not** from channel | `flake.nix`, `flake.lock` |
+| nixpkgs lock rev | `445d861c6d31b4af0c79d8d4be2331f762a361d7` | locked node `nixpkgs` (nixos-26.05) | `flake.lock` |
+| Channel `pkgs.stalwart-mail` | historical on **25.05** (was 0.11.8); Surmount never uses channel engine | stock module dual-disabled | nixpkgs (not product pin) |
+| Surmount service module | custom | disables both stock paths (`services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`); option `services.stalwart` | `modules/stalwart-service.nix` |
+| Management UI | Axum + Leptos SSR admin shell scaffold (ssr-only; no hydrate) | crane under `nix/packages/` with `rustPackages_1_95` (nixos-26.05) | `crates/management-ui/`, `nix/packages/management-ui.nix`, `nix/rust-toolchain.nix` |
 | Upstream server tag | `v0.16.15` (published 2026-07-27) | https://github.com/stalwartlabs/stalwart | evidence note |
 | RocksDB (upstream lock) | rust `rocksdb` **0.24.0**; `librocksdb-sys` **0.17.3+10.4.2** | tag `Cargo.lock` | evidence note |
 | Blob hash crate | `blake3` **1.8.5** | tag `Cargo.lock` | evidence note |
 
-**Why not stay on 0.11.8:** nixos-25.05 packaged 0.11.8. That was a scaffold
-accident, not a product pin. Greenfield does not need old-engine compatibility
-([AGENTS.md](../AGENTS.md), [open-choices.md](open-choices.md)).
+**Why not stay on 0.11.8:** Early scaffold briefly used the channel package
+while the host was still on **nixos-25.05** (that channel packaged 0.11.8).
+That was channel lag, not a product pin. Living host is **nixos-26.05**;
+engine is Surmount **0.16.15** FOD. Greenfield does not need old-engine
+compatibility ([AGENTS.md](../AGENTS.md), [open-choices.md](open-choices.md)).
 
 **Why binary FOD, not rustPlatform today:** cargo vendor hit crates.io HTTP 403
-in this environment; CLI wants rustc newer than 25.05's 1.86 for some unstable
-lib features. Binary FODs are hermetic hashes and match the published tag.
-Source build is a future path, not current.
+in this environment (2026-07-30). Binary FODs are hermetic hashes and match the
+published tag. Source build is a future path, not current (host rustc age is
+no longer the blocker; living crane is 1.95 on 26.05).
 
 **Approx closures (this machine after build):** server ~126.5 MiB; cli ~39 MiB
 (see evidence note for store path examples).
@@ -173,8 +175,8 @@ Distributed sketch: FoundationDB + S3 + Redis + ES/Meilisearch.
 | dataDir | `/var/lib/stalwart-mail` |
 | Unit | `stalwart-mail.service` -> `stalwart --config=<config.json>` |
 | User | `stalwart-mail` |
-| nixpkgs module | **disabled**; Surmount owns `modules/stalwart-service.nix` |
-| Option path name | still `services.stalwart-mail` (same path, new implementation) |
+| nixpkgs modules | **both disabled** (`services/mail/stalwart-mail.nix` older path; `services/mail/stalwart.nix` 26.05 rename path); Surmount owns `modules/stalwart-service.nix` |
+| Option path name | `services.stalwart` (matches stock 26.05 attr; Surmount owns 0.16 config.json, not stock TOML) |
 | `settings` attr | accepted and **ignored** (no TOML writer) |
 | Blob / Search / InMemory in Nix | **not declared**; after first boot follow upstream **Default** (same data store) unless apply/WebUI changes them |
 | Hermetic FODs on host | `/etc/surmount/stalwart/{spam-filter.toml,spam-filter-rules.json.gz,webui.zip}` |
@@ -355,7 +357,7 @@ Full row inventory:
 |-------|----------|-----------|----------|
 | Mail engine is Stalwart only | `modules/mail.nix`, unit, firewall, import helper, UI probes Stalwart HTTP | Required by code for *this* path; engine *choice* vs Postfix+Dovecot etc. is still proposed | Keep Stalwart as sole production engine for cutover? |
 | Pin **0.16.15** via release-binary FOD | packages + green builds; join | Packaging choice, not "binaries forever"; trust model and bump ownership open | Is binary FOD OK until hermetic source works, or must source build precede live MX? |
-| Surmount owns service module; nixpkgs TOML module off | `stalwart-service.nix` `disabledModules` | Required for 0.16 to run on this flake; declarative apply plans still missing | How much first-boot/day-2 config is in-repo apply plans vs WebUI clicks? |
+| Surmount owns service module; both stock nixpkgs paths off | `stalwart-service.nix` dual `disabledModules` (`stalwart-mail.nix` + `stalwart.nix`); option `services.stalwart` | Required for 0.16 to run on this flake; declarative apply plans still missing | How much first-boot/day-2 config is in-repo apply plans vs WebUI clicks? |
 | spam/webui FODs installed, not auto-applied | `mail.nix` environment.etc; join known gap | Impure GitHub fetch on first boot possible | Require hermetic spam/webui on first boot? |
 
 ### 4.2 Data plane
@@ -402,7 +404,7 @@ Full row inventory:
 |-------|----------|-----------|----------|
 | Fix/FixOS ladder; today L0 + early L1 | fix-and-fixos.md; Stalwart FODs + modules are L1 evidence | **You agreed ladder direction**; L2 soft channel and L3/L4 not started | Stay L0+L1 inside this repo for now, or split packaging/soft channel while greenfield is cheap? |
 | Maildir-nested import, operator-run only | mail.nix helper; MIGRATION | Helper is template; cli 1.0.12 import path needs confirm | Only import path needed? Who runs verified trial import? |
-| Hermetic flake; host on 25.05; crane UI | flake.lock; packages | Channel pin is scaffold; source Stalwart may force newer rustc later | Stay on 25.05 until a concrete package need, or bump host channel sooner? |
+| Hermetic flake; host on 26.05; crane UI | flake.lock; packages | Channel pin is living product direction | Bump on release notes + measured need only |
 | Self-ops: journald, scripts, health | OPS, scripts/, UI /health | Partial scaffold; no SaaS log sink required | External monitoring required before go-live? |
 | Domains: surmount.systems / mail / services | options defaults; sample host | Scaffold names; DNS not proven by inventory | Hostnames and bootstrap local-parts final? |
 
@@ -467,14 +469,15 @@ Doc and comment lag can cause wrong operator actions. Prefer one story:
 
 | Location | Stale implication | Current fact |
 |----------|-------------------|--------------|
-| `docs/STACK.md` diagram and ports table | UI :8080, Stalwart HTTP :8081 | UI **:8090**, Stalwart **:8080** |
-| `docs/MIGRATION.md` | :8081 references | Management HTTP **:8080** |
-| `docs/STACK.md` / README / open-choices engine wording | "current (see package after bump)" without number | Pin is **0.16.15** (still not "accepted forever") |
-| `docs/DATASTORES.md` section 5.x | TOML-shaped eval (`storage.data = "db"`, spam v2.0.5, nixpkgs module settings) | 0.16 config.json; spam-filter **3.0.0**; Surmount module |
+| `docs/STACK.md` diagram and ports table | may still lag if old diagram cells remain | UI **:8090**, Stalwart **:8080** (verify diagram) |
+| `docs/MIGRATION.md` | *(mopped 2026-08-07)* :8081 references | Management HTTP **:8080** |
+| `docs/STACK.md` / README / open-choices engine wording | *(mopped earlier)* soft "after bump" | Pin is **0.16.15** (still not "accepted forever") |
+| `docs/DATASTORES.md` section 5.x | *(mopped 2026-08-07)* had TOML-shaped eval + spam v2.0.5 | Living text: 0.16 config.json; spam-filter **3.0.0**; `services.stalwart` |
+| `docs/OPS.md` / `MIGRATION.md` / `SEARCH_AND_UI.md` ports | *(mopped 2026-08-07)* Stalwart **:8081** / UI **:8080** mixups | Stalwart **:8080**, UI default **:8090** |
 | `docs/fix-and-fixos.md` section 3 "today" | Stalwart still largely from nixpkgs until packaging lands | Packaging **landed** (L1 evidence): Surmount FODs + service module |
 | `.grok/joins/foundation.md` | Older port/module story | Defer to `stalwart-current.md` + modules |
-| README "Stalwart admin fallback" ssh example | `-L 8081:127.0.0.1:8081` | Should be **8080** (and note public-bind gap) |
-| open-choices "Engine version" | "write current after bump" / TODO package path | Package paths exist; version **0.16.15** |
+| README "Stalwart admin fallback" ssh example | *(mopped earlier)* was 8081 | Living example uses **8080** |
+| open-choices "Engine version" | *(mopped earlier)* soft "after bump" prose | Living pin **0.16.15** + package path |
 
 ### 6.2 Code / ops implications to stop treating as settled product law
 

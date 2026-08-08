@@ -1,19 +1,19 @@
 # Surmount-owned Stalwart 0.16+ service module.
 #
-# Why not nixpkgs services.stalwart-mail (25.05)?
-#   That module generates TOML and runs bin/stalwart-mail. Stalwart 0.16 dropped
-#   TOML: on-disk config is a small config.json (DataStore only). Everything
-#   else (listeners, accounts, spam, TLS) lives in the datastore as JMAP objects
-#   and is managed via WebUI or stalwart-cli apply.
+# Why not stock nixpkgs Stalwart modules?
+#   nixos-25.x: services/mail/stalwart-mail.nix (TOML + bin/stalwart-mail).
+#   nixos-26.05+: services/mail/stalwart.nix renames options to services.stalwart
+#   and still targets TOML / older packaging. Stalwart 0.16 dropped TOML: on-disk
+#   config is a small config.json (DataStore only). Everything else (listeners,
+#   accounts, spam, TLS) lives in the datastore as JMAP objects and is managed
+#   via WebUI or stalwart-cli apply.
 #   Upstream notes: resources/UPGRADING/v0_16.md in the stalwart tag we pin.
 #
-# Why not unstable services.stalwart?
-#   Still targets the 0.15 TOML world; nixpkgs warns stalwart_0_16 is not
-#   compatible with that module.
-#
-# Approach: disable the nixpkgs module and run our binary with generated
-# config.json. Unit name stays stalwart-mail.service for less churn in tests
-# and ops notes; binary is `stalwart`.
+# Approach: claim the stock option name services.stalwart and dual-disable both
+# stock module paths so they do not conflict. Surmount still owns 0.16 config.json
+# generation; we are not adopting the stock TOML module body. Unit name stays
+# stalwart-mail.service (and /var/lib/stalwart-mail, user/group) for state and
+# ops stability; binary is `stalwart`.
 
 {
   config,
@@ -23,7 +23,7 @@
 }:
 
 let
-  cfg = config.services.stalwart-mail;
+  cfg = config.services.stalwart;
   # 0.16 DataStore JSON: tagged union with @type. Defaults for blobSize /
   # bufferSize match upstream RocksDbStore::default when omitted.
   configJson =
@@ -42,10 +42,15 @@ let
       );
 in
 {
-  # Replace the nixpkgs 25.05 TOML module entirely.
-  disabledModules = [ "services/mail/stalwart-mail.nix" ];
+  # Replace stock nixpkgs Stalwart modules entirely.
+  # 25.05 path + 26.05 path. We claim services.stalwart; disable stock so
+  # neither TOML module conflicts with our options or unit.
+  disabledModules = [
+    "services/mail/stalwart-mail.nix"
+    "services/mail/stalwart.nix"
+  ];
 
-  options.services.stalwart-mail = {
+  options.services.stalwart = {
     enable = lib.mkEnableOption "Stalwart mail and collaboration server (Surmount 0.16+ module)";
 
     package = lib.mkOption {
@@ -77,7 +82,7 @@ in
     storePath = lib.mkOption {
       type = lib.types.path;
       default = "${cfg.dataDir}/db";
-      defaultText = lib.literalExpression ''"''${config.services.stalwart-mail.dataDir}/db"'';
+      defaultText = lib.literalExpression ''"''${config.services.stalwart.dataDir}/db"'';
       description = "Filesystem path for RocksDB / SQLite store.";
     };
 
@@ -163,7 +168,7 @@ in
     assertions = [
       {
         assertion = cfg.storeType == "RocksDb" || cfg.storeType == "Sqlite" || cfg.configFile != null;
-        message = "services.stalwart-mail: unsupported storeType without configFile";
+        message = "services.stalwart: unsupported storeType without configFile";
       }
     ];
 
