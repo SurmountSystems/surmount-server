@@ -20,7 +20,7 @@
 //! Fail-closed: missing sock/helper, timeout, protocol error, or `ok:false`
 //! must surface as Err. DryRun must not invoke the helper. Q-ACL not invented.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -442,9 +442,14 @@ impl HelperNftClient {
                 .stdin
                 .take()
                 .ok_or_else(|| "helper stdin missing (fail-closed)".to_string())?;
-            stdin
-                .write_all(payload.as_bytes())
-                .map_err(|e| format!("write helper stdin: {e}"))?;
+            // Ignore BrokenPipe: a helper that answers and exits before draining
+            // stdin (or a racey fake script) closes the pipe; response is still
+            // on stdout and fail-closed parsing below remains authoritative.
+            if let Err(e) = stdin.write_all(payload.as_bytes())
+                && e.kind() != ErrorKind::BrokenPipe
+            {
+                return Err(format!("write helper stdin: {e}"));
+            }
         }
 
         // Best-effort wait with timeout via thread join (no wait_timeout on all targets).
@@ -836,7 +841,9 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let ok_bin = dir.join("helper-ok");
-        std::fs::write(&ok_bin, "#!/bin/sh\necho '{\"ok\":true}'\n").unwrap();
+        // Drain stdin before answer so client write cannot race EPIPE when the
+        // shell exits before the parent finishes write_all (CI flake).
+        std::fs::write(&ok_bin, "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true}'\n").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -851,7 +858,7 @@ mod tests {
         let bad_bin = dir.join("helper-bad");
         std::fs::write(
             &bad_bin,
-            "#!/bin/sh\necho '{\"ok\":false,\"error\":\"simulated refuse\"}'\nexit 1\n",
+            "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":false,\"error\":\"simulated refuse\"}'\nexit 1\n",
         )
         .unwrap();
         #[cfg(unix)]
@@ -888,7 +895,7 @@ mod tests {
         let bad_bin = dir.join("helper-refuse");
         std::fs::write(
             &bad_bin,
-            "#!/bin/sh\necho '{\"ok\":false,\"error\":\"nft deny\"}'\nexit 2\n",
+            "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":false,\"error\":\"nft deny\"}'\nexit 2\n",
         )
         .unwrap();
         #[cfg(unix)]
