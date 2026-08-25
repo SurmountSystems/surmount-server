@@ -49,10 +49,12 @@ before a commit object exists:
 
 | Piece | Path |
 |-------|------|
-| Shared scanner | `script/check-private-data.sh` (`--staged` / `--tree` / `--paths`) |
+| Shared scanner | `surmount-private-data` crate (`--staged` / `--tree` / `--paths`) |
+| Nix package | `nix/packages/surmount-private-data.nix` (crane, same toolchain as management-ui) |
 | Project pre-commit | `script/git-hooks/pre-commit` (host `~/.git-hooks` chains here) |
-| Detector fixtures | `script/testdata/private-data/` (synthetic only; excluded from tree scan) |
-| Self-test | `script/test-check-private-data.sh` |
+| Detector fixtures | crate `testdata/` (synthetic only; excluded from tree scan). Leftover-homes **sample** `.sh` files under `crates/surmount-leftover-homes/testdata/` are fixtures, not product drivers. |
+| Git hook | `script/git-hooks/pre-commit` is a short shebang that execs the scanner. Git needs that file. It is not a product bash driver. |
+| Self-test | crate tests in `crates/surmount-private-data` |
 
 **Classes (regex / path only; never real values in the tool):** PEM / OpenSSH
 private key blocks; `AGE-SECRET-KEY-1...`; common token shapes (`ghp_`,
@@ -69,13 +71,23 @@ Provisioned-host UI screenshots must not be copied into the tree, residual,
 reports, or hooks.
 
 ```bash
-script/check-private-data.sh --staged   # what pre-commit runs
-script/check-private-data.sh --tree     # full tracked tree (CI twin)
-script/test-check-private-data.sh       # red/green on synthetic fixtures
+just check-private-data -- --staged   # pre-commit twin (alias: just private-data)
+just check-private-data -- --tree     # full tracked tree (CI twin)
+nix run .#surmount-private-data -- --tree
+# crate tests: cd crates && cargo test -p surmount-private-data
+# or: nix build .#checks.<system>.surmount-private-data-test
 ```
 
-Requires `rg` (ripgrep) on PATH. CI runs `--tree` early. This gate is admission
+`nix run .#surmount-private-data` (alias `just check-private-data` /
+`just private-data`). Pre-commit prefers the binary on PATH, then a
+`crates/target` build, then `nix run .#surmount-private-data -- --staged`
+so a commit TTY does not need a nix shell. GHA runs the flake package
+`--tree` and `just ci` includes crate tests. This gate is admission
 control only; it does not replace the standing never-secrets law above.
+
+Reasonable leftover exceptions (fixtures, git hook shebang, laptop-renew
+units): [packages-and-forks.md](packages-and-forks.md) *Reasonable leftover
+exceptions*.
 
 ### Host-specific identity stays off the public tree
 
@@ -87,9 +99,37 @@ hostname on the machine (or a local overlay that never lands in this public
 repo). First-deploy box names are operator host identity, not living product
 path names.
 
-**Agent session notes** under `.agents/` are local only (gitignored). Do not
-stage or commit them: they are not product docs and may record private host
-work. Older commits may still contain some; do not grow that set.
+**Host-local overlay contract:** hardware-config, SSH authorized keys, real
+networking, real hostname, PEMs, and age/HS material live in a **private**
+`host-local/` directory on the host (or private operator path). Never copy
+that material into tracked `hosts/` or `secrets/`. Living contract and
+placeholder layout: [deploy-host-local.md](deploy-host-local.md). Operator
+deploy driver: `nix run .#surmount-deploy-host` / `just deploy-host` (refuses
+host-local into public product paths; fails loud if authorized keys are empty
+when checking lockout risk).
+
+**Public repo vs operator facts (Kerckhoffs).** This repository is meant to
+be public. Process, architecture, and crypto design belong in the tree.
+Living operator facts do not: person mailbox addresses, MailPlus
+uid-to-person maps, provisioned host names. Those live under global
+`~/.agents/surmount-server/` on this machine (see `operator-facts.md`).
+Public docs may **point** at that directory. They must not paste the
+roster. The scanner is patterns-only and will not catch every address.
+
+**Agent session notes** are local only (gitignored). Write **plans** to
+`~/.agents/plans/` (use `~/.agents/plans/surmount-server/` if a filename
+would collide) and **reports** to `~/.agents/reports/` on this machine.
+Call those handoffs **reports**, never "joins". Do **not** recreate repo
+`.agents/plans/`, `.agents/reports/`, or `.agents/joins/` as a live home.
+Do **not** create project-root `.grok/` for reports, plans, or scratch.
+Leftover repo `.agents/plans` and `.agents/reports` were moved 2026-08-18.
+Leftover repo `.grok/joins` reports were moved the same day to
+`~/.agents/reports/`. Product scripts and tests must not mkdir those leftover
+homes; use `mktemp` / `$TMPDIR`, or host `~/.agents/reports/` for notes.
+`.gitignore` already ignores `.agents/`; keep that ignore.
+Do not stage or commit agent notes: they are not product docs and
+may record private host work. Older commits may still contain some; do
+not grow that set.
 
 ---
 
@@ -124,7 +164,9 @@ work. Older commits may still contain some; do not grow that set.
 
 - Living docs under `docs/`; deep notes under `docs/research/`; parent docs
   link to research.
-- Multi-file work: hierarchical subagents; join on disk under `.grok/joins/`.
+- Multi-file work: hierarchical subagents; write short reports under
+  `~/.agents/reports/` on this machine. Call those handoffs **reports**,
+  never "joins".
 - Open questions: global **Q1, Q2, ...** per file; do not collide with section
   numbers.
 
@@ -146,9 +188,9 @@ work. Older commits may still contain some; do not grow that set.
   age as scaffold tool today). Material lives **on the host** (or private
   operator channels), not in the public repo. Operator may replace the
   *tool*; the *need* for secrets at activation remains.
-- **Bucket 2 (humans):** planned self-hosted **Vaultwarden**; does **not**
-  replace deploy secrets for activation or flake purity. Mail cred inventory
-  UX.
+- **Bucket 2 (humans):** self-hosted **Vaultwarden** (S7a module offline done;
+  S7b enable path scripted by A0 host-cutover after token); does **not**
+  replace deploy secrets for activation or flake purity. Mail cred inventory UX.
 - **Disk (optional third):** **LUKS2** FDE first-class when install allows.
   Unlock: passphrase / initrd SSH / TPM. sops-nix does **not** unlock LUKS2.
   Never put LUKS unlock material in git. Detail:
@@ -287,8 +329,11 @@ work. Older commits may still contain some; do not grow that set.
 - Prefer an **operator-chosen VPS** you control (size/plan open; do not invent
   provider names or RAM/disk/core/SKU numbers). Prefer **LUKS2** when
   install path allows.
-- Self-ops: journald, health endpoints, `scripts/` checks
-  ([OPS.md](OPS.md)). No required third-party WAF.
+- Self-ops: persistent size-capped journald (`surmount.logging`), health
+  endpoints, `just host-logs` / `just host-logs -- --status` / `scripts/` checks
+  ([OPS.md](OPS.md)). Journal files can hold peer IPs and auth-fail
+  metadata; they stay on the host, never in git, never on the apex site.
+  No required third-party WAF.
 - **Single mail VPS** until the operator says otherwise.
 
 ## 13. Packages and forks

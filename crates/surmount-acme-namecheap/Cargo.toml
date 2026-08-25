@@ -1,0 +1,34 @@
+[package]
+name = "surmount-acme-namecheap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Namecheap DNS-01 ACME hook, dispatch, lab, laptop renew, host-profile render"
+publish = false
+
+[[bin]]
+name = "acme-dns-hook-namecheap"
+path = "src/bin/acme-dns-hook-namecheap.rs"
+
+[[bin]]
+name = "acme-dns-hook-namecheap-dispatch"
+path = "src/bin/acme-dns-hook-namecheap-dispatch.rs"
+
+[[bin]]
+name = "acme-dns-hook-lab"
+path = "src/bin/acme-dns-hook-lab.rs"
+
+[[bin]]
+name = "surmount-laptop-renew-cert"
+path = "src/bin/surmount-laptop-renew-cert.rs"
+
+[[bin]]
+name = "surmount-render-host-profile-acme"
+path = "src/bin/surmount-render-host-profile-acme.rs"
+
+[lib]
+name = "surmount_acme_namecheap"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true

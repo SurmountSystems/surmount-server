@@ -10,7 +10,8 @@ Operator machines with `core.hooksPath=~/.git-hooks` already chain into this
 path after GPG checks:
 
 ```text
-~/.git-hooks/pre-commit  ->  $repo/script/git-hooks/pre-commit  ->  script/check-private-data.sh --staged
+~/.git-hooks/pre-commit  ->  $repo/script/git-hooks/pre-commit
+  -> PATH bin, or crates/target, or nix run .#surmount-private-data -- --staged
 ```
 
 No per-repo `git config core.hooksPath` is required when that global chain is
@@ -20,9 +21,9 @@ global GPG unless you compose both).
 ## Manual runs
 
 ```bash
-script/check-private-data.sh --staged
-script/check-private-data.sh --tree
-script/test-check-private-data.sh
+nix run .#surmount-private-data -- --staged
+nix run .#surmount-private-data -- --tree
+just check-private-data -- --staged
 ```
 
 ## Rules

@@ -1,0 +1,3 @@
+# FAKE detector fixture only. Not a real GitHub token.
+# Shape matches public ghp_ format docs; value is obvious junk.
+ghp_FakeNotARealGitHubToken0001

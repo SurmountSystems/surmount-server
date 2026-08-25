@@ -138,9 +138,27 @@ in
         type = types.str;
         default = "/run/surmount-secrets";
         description = ''
-          Conventional host directory for deploy material (TLS PEMs, Arti HS
-          state, etc.). Operator-placed only; never a path under the public
-          git tree. Not automatically created with secret contents.
+          Ephemeral host directory for optional short-lived deploy material
+          under tmpfs (wiped on reboot). Operator-placed only; never a path
+          under the public git tree. Not automatically created with secret
+          contents. New profiles default TLS PEMs + ACME account under
+          durableMaterialDir (H-PEM); /run remains a valid override when the
+          operator prefers re-issue-after-reboot.
+        '';
+      };
+
+      durableMaterialDir = mkOption {
+        type = types.str;
+        default = "/var/lib/surmount/secrets";
+        description = ''
+          Durable Domain B root for activation copies that must survive reboot
+          (TLS PEMs + ACME account JSON recommended default H-PEM; session
+          secret, Stalwart API token, Namecheap DNS-01 env, Vaultwarden admin
+          env). Mode not world-writable; root-owned parent 0755; leaf dirs
+          0750 surmount-ui; leaf files mode 0600 (UI-consumed leaves owned by
+          surmount-ui when installed via secrets-install-host). Laptop Domain A
+          remains custody SoT. Never a path under the public git tree. See
+          docs/SECRETS.md.
         '';
       };
 
@@ -170,14 +188,15 @@ in
         default = [ ];
         example = [
           {
-            path = "/run/surmount-secrets/tls/cert.pem";
+            path = "/var/lib/surmount/secrets/tls/cert.pem";
             kind = "file";
           }
           {
-            path = "/run/surmount-secrets/tls/key.pem";
+            path = "/var/lib/surmount/secrets/tls/key.pem";
             kind = "file";
           }
           {
+            # Optional ephemeral override remains allowlisted.
             path = "/run/surmount-secrets/arti/onion-service";
             kind = "directory";
           }
@@ -252,15 +271,164 @@ in
       tlsCertPath = mkOption {
         type = types.str;
         default = "";
-        example = "/run/surmount-secrets/tls/cert.pem";
-        description = "Absolute host path to TLS certificate PEM when listenMode is https.";
+        example = "/var/lib/surmount/secrets/tls/cert.pem";
+        description = ''
+          Absolute host path to TLS certificate PEM when listenMode is https.
+          Prefer durable Domain B under secrets.durableMaterialDir (H-PEM).
+          Ephemeral /run/surmount-secrets/tls/cert.pem remains valid.
+        '';
       };
 
       tlsKeyPath = mkOption {
         type = types.str;
         default = "";
-        example = "/run/surmount-secrets/tls/key.pem";
-        description = "Absolute host path to TLS private key PEM when listenMode is https.";
+        example = "/var/lib/surmount/secrets/tls/key.pem";
+        description = ''
+          Absolute host path to TLS private key PEM when listenMode is https.
+          Prefer durable Domain B (mode 0640 surmount-ui:surmount-tls after
+          install/issue; do not chmod 0600). Ephemeral
+          /run/surmount-secrets/tls/key.pem remains valid.
+        '';
+      };
+
+      # In-process ACME (DNS-01). Default off. Not ACME-only forever; static PEMs stay.
+      # HTTP-01 on product :80 parked. external-hook = operator DNS-01 adapter;
+      # live host LE + hot-reload residual (not a commercial DNS brand lock-in).
+      acme = {
+        enable = mkOption {
+          type = types.bool;
+          default = false;
+          description = ''
+            Enable in-process ACME issuance inside management-ui (instant-acme,
+            DNS-01). Default false. When false, listenMode=https requires
+            existing host PEMs at tlsCertPath/tlsKeyPath. When true, the binary
+            reuses valid PEMs or attempts issuance (fail-closed on failure; no
+            silent cleartext). CI never requires live Let's Encrypt. Prefer
+            staging directory first. See docs/EDGE_AND_TLS.md and docs/OPS.md.
+          '';
+        };
+
+        directory = mkOption {
+          type = types.str;
+          default = "";
+          example = "https://acme-staging-v02.api.letsencrypt.org/directory";
+          description = ''
+            ACME directory URL. Empty default. When acme.enable, must be set
+            (e.g. Let's Encrypt staging, then production). Emitted as
+            SURMOUNT_ACME_DIRECTORY. Never required when enable is false.
+          '';
+        };
+
+        email = mkOption {
+          type = types.str;
+          default = "";
+          description = ''
+            ACME account contact email (mailto). Empty default. Required when
+            acme.enable. Emitted as SURMOUNT_ACME_EMAIL. Not a secret; still
+            do not invent production addresses in the public tree.
+          '';
+        };
+
+        domains = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          example = [
+            "services.example.test"
+            "mail.example.test"
+          ];
+          description = ''
+            DNS identifiers for the ACME order. Empty default. Required
+            non-empty when acme.enable. Joined into SURMOUNT_ACME_DOMAINS.
+          '';
+        };
+
+        accountCredentialsPath = mkOption {
+          type = types.str;
+          default = "";
+          example = "/var/lib/surmount/secrets/acme/account.json";
+          description = ''
+            Absolute host path for serialized ACME account credentials JSON
+            (never in git). Empty default. Required when acme.enable. Prefer
+            durable Domain B under secrets.durableMaterialDir (H-PEM).
+            Ephemeral /run path remains valid. Emitted as
+            SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH.
+          '';
+        };
+
+        challenge = mkOption {
+          type = types.enum [ "dns-01" ];
+          default = "dns-01";
+          description = ''
+            ACME challenge type. Only dns-01 in this build (fits redirect-only
+            product :80). HTTP-01 on product :80 is parked. Emitted as
+            SURMOUNT_ACME_CHALLENGE.
+          '';
+        };
+
+        dnsProvider = mkOption {
+          type = types.enum [
+            "none"
+            "mock"
+            "external-hook"
+          ];
+          default = "none";
+          description = ''
+            ACME DNS-01 *challenge adapter* (creates/deletes _acme-challenge TXT),
+            not a commercial DNS brand and not "Surmount DNS product."
+            "none" (default): reuse valid PEMs only; issuance fails closed without
+            an adapter. "mock": hermetic/lab self-signed issuer (not live Let's
+            Encrypt; refused against production LE directory). "external-hook":
+            run an operator-owned absolute executable (dnsHookPath /
+            SURMOUNT_ACME_DNS_HOOK) with argv set|clear|wait so the hook can talk
+            to whatever DNS the operator already runs. No Cloudflare/Route53
+            crates. Emitted as SURMOUNT_ACME_DNS_PROVIDER.
+          '';
+        };
+
+        dnsHookPath = mkOption {
+          type = types.str;
+          default = "";
+          example = "/run/surmount/acme-dns-hook";
+          description = ''
+            Absolute host path to the DNS-01 hook executable when dnsProvider is
+            "external-hook". Empty option default; when acme.enable and
+            external-hook, the management-ui module mkDefaults this to the
+            packaged Namecheap helper store path (pkgs.acme-dns-hook-namecheap)
+            when that package is on the overlay. That package is **code** only
+            (`nix run .#acme-dns-hook-namecheap-bin` / pkgs.acme-dns-hook-namecheap);
+            Namecheap API credentials
+            never embed in the Nix package or git. Prefer durable Domain B
+            namecheap.env at /var/lib/surmount/secrets/acme/namecheap.env
+            (survives reboot; install kind namecheap-api); optional ephemeral
+            /run/surmount-secrets/acme/namecheap.env remains allowlisted.
+            Override dnsHookPath with any operator absolute path. Required
+            (absolute) when enable and external-hook. Binary must be a regular
+            file (no symlink), executable, not group/world-writable. Prefer a
+            path outside ACME PEM ReadWritePaths parents (store path is ideal).
+            Emitted as SURMOUNT_ACME_DNS_HOOK. Protocol: set name value; clear
+            name; optional wait name value (exit 2 = unsupported).
+          '';
+        };
+
+        dnsHookTimeoutSecs = mkOption {
+          type = types.ints.between 1 600;
+          default = 60;
+          description = ''
+            Timeout seconds for one external-hook invocation (range 1..600).
+            Emitted as SURMOUNT_ACME_DNS_HOOK_TIMEOUT_SECS. Scaffold default 60.
+          '';
+        };
+
+        renewDaysBeforeExpiry = mkOption {
+          type = types.ints.unsigned;
+          default = 30;
+          description = ''
+            Reissue when remaining leaf lifetime is under this many days
+            (scaffold default 30; common LE operator practice, not locked CA law).
+            Emitted as SURMOUNT_ACME_RENEW_DAYS_BEFORE_EXPIRY when acme.enable.
+            Zero means only full notAfter fails the usability check.
+          '';
+        };
       };
 
       redirectHttpToHttps = mkOption {
@@ -319,6 +487,81 @@ in
         '';
       };
 
+      # MTA-STS policy skeleton (default off until public HTTPS policy host).
+      mtaStsMode = mkOption {
+        type = types.enum [
+          "off"
+          "testing"
+          "enforce"
+        ];
+        default = "off";
+        description = ''
+          MTA-STS policy mode for GET /.well-known/mta-sts.txt on the product
+          edge when Host is mta-sts.<primaryDomain> (RFC 8461). Default off
+          (404). Use testing before enforce. Emitted as SURMOUNT_MTA_STS_MODE.
+          Policy body uses mailHostname as mx. DNS TXT _mta-sts and A/AAAA for
+          the policy host remain operator residual (docs/DNS.md).
+        '';
+      };
+
+      mtaStsMaxAge = mkOption {
+        type = types.ints.unsigned;
+        default = 86400;
+        description = ''
+          max_age seconds in the MTA-STS policy body when mtaStsMode is not off.
+          Emitted as SURMOUNT_MTA_STS_MAX_AGE. Scaffold default 86400 (1 day).
+        '';
+      };
+
+      apexPublicRoot = mkOption {
+        type = types.nullOr types.str;
+        default = "/var/lib/surmount/public-site";
+        description = ''
+          Absolute directory for the public apex/www static site.
+          When the flake overlay provides pkgs.surmount-public-site, the
+          management-ui module mkDefaults this to that store path (locked
+          github:SurmountSystems/site). A host directory such as
+          /var/lib/surmount/public-site remains a valid override.
+          When the directory contains index.html, those files are served on
+          apex and www. Missing directory or missing index.html keeps the
+          UNDER CONSTRUCTION page. Emitted as SURMOUNT_APEX_PUBLIC_ROOT.
+        '';
+      };
+
+      staticVhosts = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              root = mkOption {
+                type = types.str;
+                example = "/var/lib/surmount/static-sites/cryptoquick";
+                description = "Absolute document root for this HTTP Host.";
+              };
+            };
+          }
+        );
+        default = { };
+        example = {
+          "extra.example.test" = {
+            root = "/var/lib/surmount/static-sites/extra";
+          };
+          "www.extra.example.test" = {
+            root = "/var/lib/surmount/static-sites/extra";
+          };
+        };
+        description = ''
+          Extra clearnet Host -> document root map (not apex/www SurmountSystems/site,
+          not services console). Each key is a hostname (include www aliases
+          pointing at the same root). Served with the same path/MIME/CSP rules
+          as apex static files. Missing index.html is a closed 404, never the
+          operator console. Emitted as SURMOUNT_STATIC_VHOSTS_FILE (JSON object).
+          Do not overload apexPublicRoot for these names.
+          The management-ui module mkDefaults proven DS3018xs static sites to
+          /var/lib/surmount/static-sites/<slug>. Populate with
+          just sync-static-sites-from-ds3018xs. See docs/EDGE_AND_TLS.md.
+        '';
+      };
+
       rateLimitMaxRequests = mkOption {
         type = types.ints.unsigned;
         default = 120;
@@ -359,8 +602,76 @@ in
         description = ''
           Optional host path to a file containing a bare .onion hostname
           (SURMOUNT_ONION_HOSTNAME_FILE). Read when onionUrl is empty.
-          Empty file or unreadable path = unset. Example location may match
-          Arti HS identity layout; operator must place material on host.
+          Empty file or unreadable path = hostname_missing status (not an
+          invented address). When empty and surmount.artiHiddenService.enable
+          is true, management-ui.nix derives
+          onionServiceStateDir + "/hostname" and also sets
+          SURMOUNT_ONION_HS_STATE_DIR so the binary can walk nested Arti
+          keystore layout for a hostname file. Product residual names
+          surmount.artiHiddenService; lab SURMOUNT_ONION_URL remains for tests.
+        '';
+      };
+
+      # Operator-published Vaultwarden URL for console link (domain C human vault).
+      # Never invent; empty = residual not configured. No admin token in UI/env.
+      vaultwardenUrl = mkOption {
+        type = types.str;
+        default = "";
+        example = "http://127.0.0.1:8222";
+        description = ''
+          Optional operator-published Vaultwarden URL for the management
+          console (SURMOUNT_VAULTWARDEN_URL). When non-empty, system/overview
+          show configured + "Open vault" external link. When empty and
+          surmount.vaultwarden.enable is true, management-ui.nix may derive a
+          private loopback URL from vaultwarden rocket listen (honest SSH
+          tunnel / local path only; not a public invent). When
+          vaultwardenProxyEnable is true and this is empty, management-ui.nix
+          may derive https://{servicesHostname}/vault (public subpath shape).
+          Empty with VW off and proxy off = residual not configured. Never put
+          ADMIN_TOKEN or passwords here.
+
+          Shape (eval fail-closed when set): http:// or https:// only; charset
+          safe for systemd Environment= (no whitespace, newlines, quotes, $,
+          backticks, or other metacharacters). Binary also rejects non-http(s)
+          schemes (javascript:, data:, ...).
+        '';
+      };
+
+      # Axum path reverse-proxy to loopback Vaultwarden (default off). No nginx.
+      vaultwardenProxyEnable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          When true, management-ui reverse-proxies public prefix
+          vaultwardenProxyPrefix (default /vault) to vaultwardenProxyUpstream
+          (default loopback Rocket). SURMOUNT_VAULTWARDEN_PROXY=1. Vaultwarden
+          login is SoT on that path (no Nostr gate day-one). WebSocket Upgrade
+          is forwarded. Prefer with surmount.vaultwarden.enable and a matching
+          vaultwarden.domain / vaultwardenUrl public base. Sample host stays
+          off. Never ADMIN_TOKEN in this option.
+        '';
+      };
+
+      vaultwardenProxyPrefix = mkOption {
+        type = types.str;
+        default = "/vault";
+        description = ''
+          Public path prefix for the Vaultwarden Axum proxy
+          (SURMOUNT_VAULTWARDEN_PROXY_PREFIX). Normalized without trailing
+          slash. Default /vault.
+        '';
+      };
+
+      vaultwardenProxyUpstream = mkOption {
+        type = types.str;
+        default = "";
+        example = "http://127.0.0.1:8222";
+        description = ''
+          Upstream base for the Vaultwarden path proxy
+          (SURMOUNT_VAULTWARDEN_PROXY_UPSTREAM). Empty = derive
+          http://{vaultwarden.rocketAddress}:{vaultwarden.rocketPort} when
+          vaultwarden is enabled, else http://127.0.0.1:8222. Loopback only
+          is the honest product default.
         '';
       };
 
@@ -374,10 +685,13 @@ in
         ];
         default = "off";
         description = ''
-          SURMOUNT_AUTH_MODE. off = open console (local/dev default; not
-          public-safe alone). nostr = gate admin HTML + JSON APIs behind
-          session cookie or valid NIP-98 (rust-nostr; not JS NDK). Requires
-          non-empty sessionSecret when nostr.
+          SURMOUNT_AUTH_MODE. off = open console (local/dev default on
+          loopback/private binds only; not public-safe). Public primary
+          listen (non-loopback / 0.0.0.0) refuses authMode=off at Nix eval
+          and process start unless lab-only allowPublicAuthOff. nostr = gate
+          admin HTML + JSON APIs behind session cookie or valid NIP-98
+          (rust-nostr; not JS NDK). Requires non-empty sessionSecret when
+          nostr.
         '';
       };
 
@@ -410,12 +724,13 @@ in
       sessionSecretPath = mkOption {
         type = types.str;
         default = "";
-        example = "/run/surmount-secrets/ui/session-secret";
+        example = "/var/lib/surmount/secrets/ui/session-secret";
         description = ''
           Host path to a systemd EnvironmentFile that sets
           SURMOUNT_SESSION_SECRET=... (KEY=value lines). Loaded when non-empty.
-          Prefer deploy-secrets path; never commit. Empty = unset (required
-          when authMode=nostr unless sessionSecretEnv is set for lab only).
+          Prefer durable Domain B path under durableMaterialDir; never commit.
+          Empty = unset (required when authMode=nostr unless sessionSecretEnv
+          is set for lab only).
         '';
       };
 
@@ -451,6 +766,34 @@ in
         description = "SURMOUNT_NIP98_MAX_SKEW_SECS: |now - created_at| window for kind 27235.";
       };
 
+      consoleAccountsFile = mkOption {
+        type = types.str;
+        default = "";
+        example = "/var/lib/surmount/console/accounts.json";
+        description = ''
+          Host path for the Surmount console account map (optional mailbox
+          address, optional npub hex, role administrator or user). Empty uses
+          stateDir/console/accounts.json. Emitted as SURMOUNT_CONSOLE_ACCOUNTS.
+          Owner surmount-ui, mode 0600 after first write. Not the Nostr
+          allowlist: User npubs stay in this map and must not be copied to
+          nostrAllowlistFile. Never nsec. Never commit. Missing file is an
+          empty map.
+        '';
+      };
+
+      nwcStoreFile = mkOption {
+        type = types.str;
+        default = "";
+        example = "/var/lib/surmount/secrets/ui/nwc.json";
+        description = ''
+          Host path for contributor Nostr Wallet Connect (NIP-47) URIs.
+          Empty uses durableMaterialDir/ui/nwc.json. Emitted as
+          SURMOUNT_NWC_STORE. Owner surmount-ui, mode 0600 after first write.
+          Wallet connection strings only. Never nsec. Never git. Login stays
+          NIP-07 / NIP-98. Missing file means no wallets connected.
+        '';
+      };
+
       # Account directory strategy (default honest empty; live Stalwart is explicit).
       directory = mkOption {
         type = types.enum [
@@ -476,15 +819,16 @@ in
       stalwartTokenPath = mkOption {
         type = types.str;
         default = "";
-        example = "/run/surmount-secrets/ui/stalwart-api-token";
+        example = "/var/lib/surmount/secrets/ui/stalwart-api-token";
         description = ''
           Host path to a raw API token file (SURMOUNT_STALWART_TOKEN_FILE).
           First non-empty non-# line is the Bearer token for Stalwart management
           JMAP. File must be non-empty (comments alone fail closed), a regular
           file, and owner-only readable (mode not group/world, e.g. 0600;
-          binary fail-closed). Readable by the UI user. Host-only deploy
-          secret; never commit. Empty = unset. Required when directory=stalwart
-          unless lab inline token is allowed. Module adds the path to
+          binary fail-closed). Readable by the UI user. Prefer durable Domain B
+          under durableMaterialDir so free-443 and directory survive reboot.
+          Host-only deploy secret; never commit. Empty = unset. Required when
+          directory=stalwart unless lab inline token is allowed. Module adds the path to
           ReadOnlyPaths + ConditionPathExists when path-only so a missing file
           yields inactive unit (not restart thrash). Present-but-bad content
           still fails at process start under Restart=on-failure (burst capped).
@@ -521,6 +865,19 @@ in
           SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED=1). Default false: live
           directory requires authMode=nostr so principal inventory is not open
           on the UI bind. Binary also fail-closes the same coupling.
+        '';
+      };
+
+      allowPublicAuthOff = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Lab only: allow authMode=off while the primary listen is not loopback
+          (sets SURMOUNT_ALLOW_PUBLIC_AUTH_OFF=1). Default false: public primary
+          bind (0.0.0.0 / non-loopback) requires authMode=nostr so the open
+          console cannot sit on a public edge. Prefer loopback/private binds for
+          local auth-off instead of this flag. Binary also fail-closes the same
+          coupling. Never production default.
         '';
       };
     };
@@ -740,6 +1097,347 @@ in
         default = false;
         description = "Allow SSH password authentication (prefer keys only).";
       };
+
+      qemuGuestAgent = {
+        enable = mkOption {
+          type = types.bool;
+          default = false;
+          description = ''
+            Start the QEMU guest agent (services.qemuGuest). SHC ticket 261
+            staff could not inject a command when SSH was stuck because
+            this agent was missing. Ticket 263 staff (2026-08-25) said
+            guest-agent talk is pending the next reboot acknowledgement
+            and is not a silver bullet. Default off (non-QEMU hosts).
+            Enable from private host-local on the mail VPS. Agents never
+            reboot.
+          '';
+        };
+      };
+
+      eternalTerminal = {
+        enable = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            Eternal Terminal server (etserver) for operator SSH that
+            reconnects after sleep and network change. Default on with
+            hardening. Listens TCP 2022 and opens that port. Uses stock
+            nixpkgs services.eternal-terminal. Not niced (same class as
+            sshd). Mullvad or other laptop VPNs stay operator-owned; this
+            module does not replace them. Pair long commands with tmux
+            on the guest. See docs/OPS.md.
+          '';
+        };
+
+        port = mkOption {
+          type = types.port;
+          default = 2022;
+          description = "etserver TCP port (stock Eternal Terminal default).";
+        };
+      };
+    };
+
+    # Operator paper trail: persistent journald with a size cap, sshd VERBOSE,
+    # journal group for nixbuilder. Completeness and OOM/cgroup clues are
+    # the priority; size vacuum is secondary so the disk cannot fill.
+    # Default on with surmount.enable. Never log secrets. Scaffold sizes
+    # are not published guest disk.
+    logging = {
+      enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Persistent journald paper trail for host services (mail, management-ui,
+          sshd, Arti, nft/fail2ban, nix-daemon, optional Vaultwarden, optional
+          Lake). Default true when surmount.enable. Completeness and start-of-OOM
+          clues beat aggressive rate-limit vacuum. Size-capped so logs cannot
+          fill the disk (SHC ticket 261 class). Operator-only; no public log dump.
+        '';
+      };
+
+      systemMaxUse = mkOption {
+        type = types.str;
+        default = "1G";
+        description = ''
+          journald SystemMaxUse (persistent /var/log/journal). Scaffold default
+          1G, not a published guest disk size. Host-local may raise it without
+          committing a SKU.
+        '';
+      };
+
+      runtimeMaxUse = mkOption {
+        type = types.str;
+        default = "256M";
+        description = ''
+          journald RuntimeMaxUse (volatile /run/log/journal). Scaffold default
+          256M, not a published guest RAM or disk size.
+        '';
+      };
+
+      maxRetentionSec = mkOption {
+        type = types.str;
+        default = "30day";
+        description = ''
+          journald MaxRetentionSec. Vacuum by age in addition to size. Scaffold
+          30day.
+        '';
+      };
+
+      rateLimitIntervalSec = mkOption {
+        type = types.str;
+        default = "30s";
+        description = ''
+          journald RateLimitIntervalSec. Explicit so a flood cannot silently
+          use an unpinned default. Combined with rateLimitBurst. Size vacuum
+          (systemMaxUse) still caps disk. Do not set 0 (that disables the
+          rate limit and can fill the cap with noise).
+        '';
+      };
+
+      rateLimitBurst = mkOption {
+        type = types.str;
+        default = "50000";
+        description = ''
+          journald RateLimitBurst per interval. Scaffold 50000 is above the
+          systemd 10000 default so mail, Axum, nix-daemon, and Lake lines
+          (including the start of an OOM or cgroup kill) are less likely to
+          be the first dropped during a torture-test burst. Must stay at
+          least 20000; 0 disables the rate limit. Size vacuum (systemMaxUse)
+          still caps disk. Not a guest SKU.
+        '';
+      };
+
+      sshdLogLevel = mkOption {
+        type = types.str;
+        default = "VERBOSE";
+        description = ''
+          OpenSSH LogLevel when logging.enable. VERBOSE records auth failures
+          and disconnects without passwords. Do not set DEBUG3 on a public
+          host (noise and possible sensitive material).
+        '';
+      };
+
+      journalReaders = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = ''
+          Extra local users added to group systemd-journal so they can read
+          the system journal without sudo. The remote-builder user is added
+          automatically when remoteBuilder.enable (do not add nixbuilder to
+          wheel). Users listed here must already exist.
+        '';
+      };
+    };
+
+    # ssh-ng remote builder. Default off (host-local enable). Hard MemoryMax
+    # is required: niceness is not a memory cap. Optional Lake lives in
+    # surmount.lake (also default off).
+    remoteBuilder = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Install the nixbuilder user, niced wrappers, and hard memory
+          caps for ssh-ng. Trusted ssh-ng forwards rustc to system
+          nix-daemon, so MemoryMax and Nice land on nix-daemon.service
+          as well as the nixbuilder user slice.
+          Default false. Enable from private host-local.
+          Does not set Nice= or MemoryMax on mail or other critical units.
+        '';
+      };
+
+      user = mkOption {
+        type = types.str;
+        default = "nixbuilder";
+        description = "Unprivileged ssh-ng builder user. Do not add to wheel.";
+      };
+
+      uid = mkOption {
+        type = types.int;
+        default = 1987;
+        description = ''
+          Stable uid (>= 1000, normal user) so user-<uid>.slice can carry
+          MemoryMax. Not a published host SKU. Override from host-local if
+          this uid is already taken.
+        '';
+      };
+
+      group = mkOption {
+        type = types.str;
+        default = "nixbuilder";
+        description = "Primary group for the builder user.";
+      };
+
+      memoryMax = mkOption {
+        type = types.str;
+        default = "4G";
+        example = "1500M";
+        description = ''
+          systemd MemoryMax for nix-daemon.service (the cgroup that
+          actually runs rustc), the builder slice, and ssh-ng stdio.
+          Scaffold default 4G is a conservative budget, not a published guest
+          RAM size. This is the builder's budget, not 95 percent of the
+          whole guest: mail and OS must keep RAM. SHC 261 95 percent
+          guards are a total ceiling (CPU, RAM, storage), not "give the
+          builder almost all RAM." Host-local sets the real budget
+          without committing that number to the public tree.
+        '';
+      };
+
+      maxJobs = mkOption {
+        type = types.ints.positive;
+        default = 8;
+        description = ''
+          Parallel store jobs this builder will accept (host
+          nix.settings.max-jobs). The operator laptop is local;
+          surmount-1 is the remote builder. Laptop ssh-ng machines
+          max-jobs must match this live guest number, not laptop inxi
+          / nproc. Measure the guest with ssh surmount-1 inxi or lscpu
+          before changing it. Scaffold 8 is a memory-safe default, not
+          laptop cores and not a published guest SKU. Do not set this
+          to a fake high advert.
+        '';
+      };
+
+      buildCores = mkOption {
+        type = types.nullOr types.ints.unsigned;
+        default = null;
+        description = ''
+          If set, nix.settings.cores (threads per job). null leaves the Nix
+          default (0 = auto) so one derivation can use online CPUs.
+          Pair a modest maxJobs with auto cores instead of one job slot
+          per online CPU.
+        '';
+      };
+
+      cpuQuota = mkOption {
+        type = types.str;
+        default = "auto";
+        description = ''
+          systemd CPUQuota on the builder path. "auto" means do not apply
+          a one-CPU 95 percent cap (that leaves cores idle and starves the
+          ssh-ng stdio proxy). When onlineCpus is also set, the module
+          applies 95 percent times that count on nix-daemon.service and
+          the slices. niced-builder then uses 95 percent times nproc when
+          systemd-run is available. Host-local may set an explicit
+          multi-CPU quota without putting a SKU in git.
+        '';
+      };
+
+      onlineCpus = mkOption {
+        type = types.nullOr types.ints.positive;
+        default = null;
+        description = ''
+          Guest online CPU count for cpuQuota=auto (95 percent times this
+          number, not 95 percent of one CPU). null leaves CPUQuota unset on
+          systemd units so we never pin one CPU. Measure the mail host with
+          ssh surmount-1 inxi / lscpu; set this from host-local. Do not
+          copy laptop nproc. Do not put the live guest count in git.
+        '';
+      };
+
+      diskGuardPercent = mkOption {
+        type = types.ints.between 1 100;
+        default = 95;
+        description = ''
+          Refuse ssh-ng stdio when df used-percent on diskGuardPath
+          is at least this value (SHC storage guard). Default 95.
+        '';
+      };
+
+      diskGuardPath = mkOption {
+        type = types.str;
+        default = "/";
+        description = ''
+          Filesystem path measured by the niced-builder disk guard. Default
+          root.
+        '';
+      };
+    };
+
+    # Optional Lean/Lake compute. Default off. Same class of cgroup guards
+    # as the ssh-ng builder. Do not enable on the live mail host from an
+    # agent. Uncapped Lake previously OOM-killed systemd.
+    lake = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Install a niced, MemoryMax-capped surmount-lake unit. Default
+          false. Enable only from private host-local after the generation
+          that carries this unit is live. Does not set Nice= on mail,
+          management-ui, sshd, Arti, or networking.
+        '';
+      };
+
+      package = mkOption {
+        type = types.nullOr types.package;
+        default = null;
+        description = ''
+          Lake (Lean) package whose bin/lake is ExecStart. Required when
+          enable is true. null while default-off so eval does not pull Lean.
+        '';
+      };
+
+      extraArgs = mkOption {
+        type = types.listOf types.str;
+        default = [ "build" ];
+        description = ''
+          Arguments after lake -j<jobs>. Default is one build. Not a shell
+          string.
+        '';
+      };
+
+      workDir = mkOption {
+        type = types.str;
+        default = "/var/lib/surmount-lake";
+        description = ''
+          Working directory for the Lake unit (StateDirectory). Must be
+          absolute. Not a published guest path SKU.
+        '';
+      };
+
+      memoryMax = mkOption {
+        type = types.str;
+        default = "4G";
+        example = "1500M";
+        description = ''
+          systemd MemoryMax for surmount-lake.service and its slice.
+          Scaffold 4G is a Lake budget, not a published guest RAM size
+          and not 95 percent of the whole guest. Required when enable is
+          true.
+        '';
+      };
+
+      jobs = mkOption {
+        type = types.ints.positive;
+        default = 4;
+        description = ''
+          Parallel Lake jobs (-j). Scaffold 4 is memory-safe, not guest
+          nproc and not a published core count. Must stay under what
+          memoryMax can hold. Do not set this to raw nproc.
+        '';
+      };
+
+      cpuQuota = mkOption {
+        type = types.str;
+        default = "auto";
+        description = ''
+          systemd CPUQuota on the Lake unit. auto means do not apply a
+          one-CPU 95 percent cap. When onlineCpus is set, apply 95 percent
+          times that count.
+        '';
+      };
+
+      onlineCpus = mkOption {
+        type = types.nullOr types.ints.positive;
+        default = null;
+        description = ''
+          Guest online CPU count for cpuQuota=auto. Same rule as
+          remoteBuilder.onlineCpus. Measure the mail host; set from
+          host-local; do not copy laptop nproc into git.
+        '';
+      };
     };
 
     # Merciless ban / whitelist first product path (Rust edge + optional nft sets).
@@ -876,6 +1574,118 @@ in
           the socket-activated oneshot when nftHelper is true. Empty uses
           ''${managementUi.package}/bin/surmount-nft-ban-helper. Non-empty must
           be absolute. UI env points at the UDS path, not this binary.
+        '';
+      };
+    };
+
+    # Domain C: human / org password vault (Vaultwarden). Not deploy-secret
+    # activation feed; not Bitwarden Secrets Manager API. Sample host stays off.
+    vaultwarden = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Enable Surmount-wrapped Vaultwarden (stock services.vaultwarden with
+          private defaults). Default false so sample hosts and CI stay off.
+          When true: SQLite, loopback Rocket, signups disabled, admin token
+          from host EnvironmentFile path only (never inline secret in tree).
+          Does not feed nixos-rebuild for other secrets. See docs/SECRETS.md
+          section 5 and modules/vaultwarden.nix.
+        '';
+      };
+
+      rocketAddress = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+        description = ''
+          Rocket bind address (ROCKET_ADDRESS). Default and forced after
+          extraConfig: loopback only (127.0.0.1 or ::1) unless
+          allowNonLoopbackListen = true. Private; SSH tunnel or later
+          onion/edge exposure is operator work. World bind without the
+          escape fails eval closed.
+        '';
+      };
+
+      rocketPort = mkOption {
+        type = types.port;
+        default = 8222;
+        description = "Rocket listen port (ROCKET_PORT). Default 8222.";
+      };
+
+      allowNonLoopbackListen = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Escape hatch: allow rocketAddress outside 127.0.0.1 / ::1 (e.g.
+          0.0.0.0). Default false so accidental world bind fails at eval.
+          Signups stay forced off; public exposure is still operator residual
+          (tunnel / onion / deliberate design). Prefer leave false.
+        '';
+      };
+
+      domain = mkOption {
+        type = types.str;
+        default = "";
+        example = "https://services.example.test/vault";
+        description = ''
+          Optional Vaultwarden DOMAIN config (public or private base URL the
+          clients see). Empty = unset (fine for pure loopback / tunnel).
+          Not the same as managementUi.vaultwardenUrl (console link); set both
+          when you publish a stable client URL. When managementUi path proxy
+          is on and this is empty, vaultwarden.nix may derive
+          https://{servicesHostname}/vault so Rocket DOMAIN matches the
+          public subpath.
+        '';
+      };
+
+      adminTokenEnvFile = mkOption {
+        type = types.str;
+        default = "";
+        example = "/var/lib/surmount/secrets/vaultwarden/admin.env";
+        description = ''
+          Host path to a systemd EnvironmentFile that sets ADMIN_TOKEN=...
+          (KEY=value lines; mode 0600; never in git). Required non-empty when
+          enable is true (eval assertion). Unit uses ConditionPathExists so a
+          missing file yields inactive (dead), not restart thrash. Example
+          install via `nix run .#secrets-install-host` (domain B). Secret keys
+          must not go in extraConfig (store-bound env file).
+        '';
+      };
+
+      dbBackend = mkOption {
+        type = types.enum [
+          "sqlite"
+          "mysql"
+          "postgresql"
+        ];
+        default = "sqlite";
+        description = ''
+          Vaultwarden database backend. Default sqlite (recommended single-VPS;
+          see docs/DATASTORES.md). Postgres only if already operating PG.
+        '';
+      };
+
+      # Optional extra config keys (ROCKET_LOG, etc.). Never put secrets here.
+      extraConfig = mkOption {
+        type = types.attrsOf (
+          types.nullOr (
+            types.oneOf [
+              types.bool
+              types.int
+              types.str
+            ]
+          )
+        );
+        default = { };
+        description = ''
+          Extra services.vaultwarden.config attrs (non-secret only). Eval
+          refuses secret-bearing keys (ADMIN_TOKEN, SMTP_PASSWORD, DATABASE_URL,
+          YUBICO_SECRET_KEY, HIBP_API_KEY, PUSH_INSTALLATION_KEY,
+          SSO_CLIENT_SECRET) because stock nixpkgs writes config to a
+          world-readable store EnvironmentFile. Secrets belong only in host
+          environmentFile paths. SIGNUPS_ALLOWED is forced false after this
+          merge; ROCKET_ADDRESS / ROCKET_PORT are forced from rocketAddress /
+          rocketPort after this merge (extraConfig cannot rebind listen).
         '';
       };
     };

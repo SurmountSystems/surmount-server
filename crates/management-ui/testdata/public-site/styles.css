@@ -1,0 +1,218 @@
+/*
+  DOGE colors only.
+  https://github.com/SurmountSystems/specs/blob/main/0001_DOGE.md
+  accessed: 2026-08-14
+*/
+
+@view-transition {
+  navigation: auto;
+}
+
+@font-face {
+  font-family: "Cinzel";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/cinzel-regular.woff2") format("woff2");
+}
+
+html {
+  background-color: #000000;
+  color-scheme: dark;
+}
+
+body {
+  background-color: #000000;
+  color: #FFFFFF;
+  font-family: system-ui, sans-serif;
+  line-height: 1.6;
+  margin: 0;
+}
+
+header,
+main {
+  max-width: 40rem;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+header {
+  margin-top: 2.25rem;
+  text-align: center;
+}
+
+main {
+  margin-top: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.tagline {
+  margin-top: 2rem;
+}
+
+h1 {
+  color: #FFFFFF;
+}
+
+.logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0;
+  text-align: center;
+  color: #FFFFFF;
+}
+
+.logo-link {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  text-decoration: none;
+  color: #FFFFFF;
+}
+
+.logo-link,
+.logo-link:visited,
+.logo-link:hover {
+  color: #FFFFFF;
+}
+
+.logo-mark {
+  position: relative;
+  display: block;
+  width: 5rem;
+  height: 5rem;
+}
+
+.logo-mark::before,
+.logo-mark::after {
+  content: "";
+  position: absolute;
+  background-color: #FFFFFF;
+}
+
+.logo-mark::before {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 15%;
+  transform: translateY(-50%);
+}
+
+.logo-mark::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 15%;
+  transform: translateX(-50%);
+}
+
+.logo-word {
+  font-family: "Cinzel", serif;
+  font-weight: 400;
+  font-style: normal;
+  font-size: 1.15rem;
+  letter-spacing: 0.4em;
+  padding-left: 0.4em;
+  margin-top: 0.85rem;
+  color: #FFFFFF;
+}
+
+.logo-link:visited .logo-word,
+.logo-link:hover .logo-word {
+  color: #FFFFFF;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+h2 {
+  color: #FFFF00;
+}
+
+h3 {
+  color: #FFFFFF;
+  font-size: 1.25rem;
+  margin-top: 2rem;
+}
+
+nav {
+  margin-top: 1rem;
+}
+
+nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+nav li {
+  display: inline;
+  margin-left: 0.625rem;
+  margin-right: 0.625rem;
+}
+
+a {
+  color: #00FFFF;
+}
+
+a:visited {
+  color: #FF00FF;
+}
+
+a:hover {
+  color: #FFFF00;
+}
+
+[aria-current="page"],
+[aria-current="page"]:visited,
+[aria-current="page"]:hover {
+  color: #FFFFFF;
+  text-decoration: none;
+}
+
+code.invoice {
+  color: #00FF00;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+code.npub {
+  color: inherit;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+code.invoice.copied {
+  color: #FFFF00;
+}
+
+button {
+  background-color: #000000;
+  border: 1px solid #00FFFF;
+  color: #00FFFF;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 0.35rem 0.75rem;
+}
+
+button:hover {
+  border-color: #FFFF00;
+  color: #FFFF00;
+}
+
+:focus-visible {
+  outline: 2px solid #FFFF00;
+  outline-offset: 2px;
+}

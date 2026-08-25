@@ -1,0 +1,50 @@
+# PUBLIC SAMPLE only. Copy outside the git tree before filling real values.
+# Suggested private path (operator machine):
+#   ~/.local/share/surmount/host-profile.toml
+# Never put API keys, PEMs, tokens, or production IPs here.
+# Namecheap API material is Domain A -> B (namecheap.env), not this profile.
+# See docs/SECRETS.md (profile vs Secret Service vs Vaultwarden).
+
+# Optional logical host id (comment in rendered fragment only).
+host_id = "mail-lab"
+
+# ACME account contact (public-ish config; not a high-value secret).
+acme_email = "ops@example.invalid"
+
+# Prefer Let's Encrypt staging until a host cutover is proven.
+acme_directory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+# Edge certificate hostnames for laptop DNS-01 (documentation domains only).
+# Sample list: services (UI), mail (IMAP/SMTP TLS; first-class), apex + www
+# (public UNDER CONSTRUCTION). Optional: mta-sts.<domain> on the *private*
+# laptop profile when serving MTA-STS HTTPS (not this sample). Enable
+# mtaStsMode=testing only after that name is on the production leaf.
+# Private live profile should include mail.<apex> so Evolution sees a
+# browser-trusted name. See docs/DNS.md and docs/EDGE_AND_TLS.md.
+acme_domains = [
+  "services.example.invalid",
+  "mail.example.invalid",
+  "example.invalid",
+  "www.example.invalid",
+]
+
+# Optional overrides. Defaults are durable Domain B (H-PEM):
+#   tls -> /var/lib/surmount/secrets/tls/{cert,key}.pem
+#   account -> /var/lib/surmount/secrets/acme/account.json
+# Ephemeral /run/surmount-secrets/... remains a valid override (wiped on reboot).
+# dns_provider = "external-hook"
+# dns_hook_path = "/run/surmount/acme-dns-hook"
+# account_credentials_path = "/var/lib/surmount/secrets/acme/account.json"
+# tls_cert_path = "/var/lib/surmount/secrets/tls/cert.pem"
+# tls_key_path = "/var/lib/surmount/secrets/tls/key.pem"
+# Ephemeral example (optional):
+# account_credentials_path = "/run/surmount-secrets/acme/account.json"
+# tls_cert_path = "/run/surmount-secrets/tls/cert.pem"
+# tls_key_path = "/run/surmount-secrets/tls/key.pem"
+#
+# Public Axum edge listen (non-secret). Defaults: 0.0.0.0:443 + redirect :80.
+# Do not put real public IPs in committed samples; use 0.0.0.0 or docs ranges.
+# listen_address = "0.0.0.0"
+# listen_port = 443
+# redirect_http_to_https = true
+# http_redirect_listen = "0.0.0.0:80"

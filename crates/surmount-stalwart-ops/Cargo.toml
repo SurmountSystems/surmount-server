@@ -1,0 +1,40 @@
+[package]
+name = "surmount-stalwart-ops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Stalwart operator drivers: DKIM, free :443, mail-plane TLS, tokens, recovery"
+publish = false
+
+[[bin]]
+name = "register-dkim"
+path = "src/bin/register-dkim.rs"
+
+[[bin]]
+name = "free-stalwart-public-443"
+path = "src/bin/free-stalwart-public-443.rs"
+
+[[bin]]
+name = "point-stalwart-mail-tls"
+path = "src/bin/point-stalwart-mail-tls.rs"
+
+[[bin]]
+name = "add-stalwart-token"
+path = "src/bin/add-stalwart-token.rs"
+
+[[bin]]
+name = "bootstrap-stalwart-api-token"
+path = "src/bin/bootstrap-stalwart-api-token.rs"
+
+[[bin]]
+name = "stalwart-recovery-unlock"
+path = "src/bin/stalwart-recovery-unlock.rs"
+
+[lib]
+name = "surmount_stalwart_ops"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json.workspace = true
+surmount-secrets-install = { path = "../surmount-secrets-install" }
+surmount-secrets-prompt = { path = "../surmount-secrets-prompt" }

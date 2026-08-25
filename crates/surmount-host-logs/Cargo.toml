@@ -1,0 +1,15 @@
+[package]
+name = "surmount-host-logs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read the host systemd journal (follow and --status). No sudo."
+publish = false
+
+[[bin]]
+name = "surmount-host-logs"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_host_logs"
+path = "src/lib.rs"

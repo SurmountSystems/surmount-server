@@ -233,6 +233,16 @@ Full write-up: [SECRETS.md](SECRETS.md). Hygiene top rule: [hygiene.md](hygiene.
 | Language/runtime product deps | **Nix + Rust** product stack. **No Python** and **no NPM/Node** as product dependencies. Gaps filled in-house (Rust/Nix; tiny shell scripts OK for operator helpers). |
 | Mail legitimacy | **Earn trust** with automatable DNS/TLS auth: SPF, DKIM, DMARC, PTR/rDNS, MTA-STS, TLS-RPT; plan DNSSEC + DANE/TLSA without blocking Day-1 if WebPKI path is green. Cert automation affordable; custom CA options **not locked**. Checklist: [DNS.md](DNS.md). |
 
+### DKIM dual-sign and quantum honesty (operator direction 2026-08-11)
+
+| Item | Direction |
+|------|-----------|
+| Classical Day-1 DKIM | **Dual-sign:** Ed25519 (selector `stalwart`) **and** RSA-4096 (selector `stalwart-rsa`). Both public keys in DNS; both `DkimSignature` objects when engine token works. |
+| RSA size | **4096** floor for receiver compatibility hardness. RSA-2048 is not enough. **Do not** use RSA-8192 for DKIM (RFC 8301 verifier MUST range through 4096; larger often breaks). |
+| Post-quantum | **Neither** Ed25519 nor RSA-4096 is post-quantum. Larger RSA does **not** buy meaningful quantum resistance (Shor). Do not claim PQ from RSA-4096. |
+| Future PQ mail auth | Residual: when IETF and receivers support PQ or hybrid mail auth, Surmount tracks it. Separate from D1 TLS hybrid KEX and D2 PQConnect. |
+| Living docs | [DNS.md](DNS.md) *Hardness and quantum honesty*, [SECURITY.md](SECURITY.md), [OPS.md](OPS.md), [SECRETS.md](SECRETS.md), RESIDUAL B6 |
+
 ---
 
 ## 7. Process and language
@@ -335,6 +345,81 @@ These are not answered yet. Full list and context: [open-choices.md](open-choice
 | **Q-EDGE-2** | UDS path layout under `/run/surmount/` vs per-service |
 | **Q-AUTH-1** | Session store shape, first-operator bootstrap allowlist, key-loss recovery |
 | **Q-DEP-1** | Keep sops-nix long-term vs evaluate a different deploy-secrets tool (need stays) |
+
+---
+
+## 11. Follow-up (2026-08-09): operator workstation OS secret store
+
+**Status:** operator direction **2026-08-09** (chat). Working product direction
+for custody layout. Offline bridge + S4 deploy glue + S7a VW module ship in
+tree; **not** full product acceptance of a libsecret Rust crate, live keyring
+CI, or host-enabled Vaultwarden / live requireDeployMaterial.
+
+| Item | Direction |
+|------|-----------|
+| Project tree | Secrets **never** in the project git tree (plain or ciphertext). Unchanged absolute. |
+| Operator-side custody | Prefer an **OS-level secret store** on the **operator workstation** (laptop/admin machine). Candidate: **GNOME Secret Service** (libsecret / gnome-keyring). Get far without inventing a full Secrets Manager first. If something perfect does not exist, **build it later**. |
+| Host at activation | Server is (or will be) deployed. Host still needs **activation material** as files / systemd credentials / sops-nix (or Q-DEP-1 alternative) on the box (e.g. `/run/surmount-secrets/...`). Product today: env + file paths only. |
+| Human vault | Vaultwarden for day-to-day passwords/TOTP (S7a module offline; host enable residual); never feeds nixos-rebuild at activation. |
+| Bridge | Laptop store does **not** replace host files. Install bridge (`secrets-install-host.sh`) + opt-in deploy glue (`deploy-host --install-secrets`) shipped offline; live material still operator host work. |
+| Intent | Intentional secrets storage **before** more secret material sprawl. |
+
+Three domains (A workstation / B host deploy / C human vault): full write-up
+[SECRETS.md](SECRETS.md) section 1. Compaction: [COMPACTION-PIN.md](COMPACTION-PIN.md)
+section 8. Residual: [../RESIDUAL.md](../RESIDUAL.md).
+
+Do **not** invent new Q-DEP / Q-SEC answers from this pin. Offline bridge
+(`secrets-install-host.sh`) and opt-in deploy glue (`deploy-host
+--install-secrets`) are already in tree. Open remains: live host material +
+`requireDeployMaterial` (S6), Vaultwarden host enable (S7b), Q-DEP-1 tool
+choice, Q-SEC-SM-*.
+
+---
+
+## 12. Follow-up (2026-08-20): mail-domain DNSSEC same class
+
+**Status:** operator direction **2026-08-20** (chat). Working product
+direction. Not a lock of Namecheap internals beyond what they already
+run.
+
+The operator wants **both** mail domains this host sends or receives
+through at the **same security and deliverability class** as
+`surmount.systems`, **including DNSSEC**. They were **not** asking to
+leave `cryptoquick.com` unsigned.
+
+| Item | Direction |
+|------|-----------|
+| Class | Extra mailbox domains (`cryptoquick.com`, later mailbox domains) get the same mail records **and** the same hosted DNSSEC as the primary. Not leftover-unsigned. Static-site-only extra vhosts are still **not** automatically mail domains. |
+| Algorithm | **ECDSA P-256 SHA-256** (algorithm 13) is acceptable for now. Prefer a matching parent DS with digest type 2 (SHA-256). Digest type 1 (SHA-1) is a fail even if a DNSKEY exists. |
+| `surmount.systems` | Operator already toggled Namecheap Advanced DNS **DNSSEC Status ON**. Live public lookups may still be waiting for parent DS plus apex DNSKEY. That wait is Namecheap publish, not a second product decision. |
+| `cryptoquick.com` | Operator toggled **OFF** only because agents asked after a leftover parent DS (key tag 2368, algorithm 13, digest type 1 SHA-1, no matching DNSKEY) SERVFAILed validating resolvers. That was sequencing. They now want **ON**, same as `surmount.systems`. Do **not** re-add 2368 by hand. |
+| Sequencing vs unsigned | A leftover unmatched parent DS is a SERVFAIL **bug to clear, then sign**. It is **not** "cryptoquick stays unsigned." Enabling hosted ON while stale SHA-1 DS remains can stay SERVFAIL until that DS drops. |
+| HTTPS leaf | Do **not** add `cryptoquick.com` / `www` to the production Let's Encrypt leaf until validating lookups succeed. Not this turn while SERVFAIL. |
+| DMARC | Live mailbox policy is **`p=quarantine`** (follow-up same day). Do **not** use `p=reject`. |
+
+Living maps: [DNS.md](DNS.md) *Best DNSSEC we can actually run*,
+[COMPACTION-PIN.md](COMPACTION-PIN.md), [../AGENTS.md](../AGENTS.md),
+[../RESIDUAL.md](../RESIDUAL.md).
+
+---
+
+## 13. Follow-up (2026-08-20): `_dmarc` p=quarantine
+
+**Status:** operator direction **2026-08-20** (chat: quarantine is fine).
+Working product direction.
+
+Set `_dmarc` to **`p=quarantine`** on every domain this host sends or
+receives mail for. Do **not** use `p=reject`.
+
+| Domain | Direction |
+|--------|-----------|
+| `surmount.systems` | Change live `_dmarc` from `p=none` to `p=quarantine`. Keep existing rua (`admin@surmount.systems`) and `pct=100`. |
+| `cryptoquick.com` | Already `p=quarantine`. Leave as-is. |
+| `baxterartworks.com` | Mail plus static. `_dmarc` **intended** is **`p=quarantine`** (rua `admin@baxterartworks.com`). Do **not** restore getHosts `_dmarc` to `p=none`. Public `_dmarc.baxterartworks.com` may stay NXDOMAIN while Namecheap EmailType is FWD even when getHosts has the TXT. |
+| Static-only extra vhosts | Do **not** invent `_dmarc` on `yiffa.app`, `btcfur.com`, `nostrfurs.com`, `exophiles.org`, `iantuckerstudios.com`. |
+
+Living maps: [DNS.md](DNS.md), [../AGENTS.md](../AGENTS.md),
+[../RESIDUAL.md](../RESIDUAL.md).
 
 ---
 

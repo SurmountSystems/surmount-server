@@ -5,7 +5,7 @@ survive compaction live here, in [operator-direction.md](operator-direction.md),
 and in [open-choices.md](open-choices.md). Implementation detail stays in Nix
 modules and Rust crates.
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-17 (Onion-Location + Alt-Svc on Axum edge; live Arti unit)
 
 Operator direction 2026-07-30 is working product direction (dated, not eternal
 law). Scaffold defaults still describe what code does today when they differ.
@@ -22,9 +22,9 @@ move to an **Axum-first** edge we own (nginx is transitional-to-delete; no
 required Cloudflare hop). Prefer **Unix domain sockets** between local
 services. **Arti onion/hidden services are REQUIRED** (first-class reachability
 alongside clearnet). **Encrypted deploy secrets** must be available at
-activation (**sops-nix** today); humans use planned **Vaultwarden**; disk at
-rest prefers **LUKS2**. Multi-host ends when the operator says. Compaction
-reload: [COMPACTION-PIN.md](COMPACTION-PIN.md).
+activation (**sops-nix** today); humans use **Vaultwarden** (module offline;
+host enable residual); disk at rest prefers **LUKS2**. Multi-host ends when
+the operator says. Compaction reload: [COMPACTION-PIN.md](COMPACTION-PIN.md).
 
 ## Layer diagram
 
@@ -77,13 +77,13 @@ reload: [COMPACTION-PIN.md](COMPACTION-PIN.md).
 | Product identity / login (operators, users) | **Surmount (Nostr)** | Keys via host OS / other Surmount tools |
 | Bridge: Nostr session -> Stalwart APIs | **Surmount** | Provision/authorize; never browser-hold Stalwart admin |
 | TLS on mail ports (465/993 and STARTTLS) | **Stalwart** (certs from ACME paths) | Operator TODO until cert paths wired |
-| HTTPS edge, certs for web vhosts | **management-ui** rustls (default); nginx dual-run escape | `web.enable` default false; nginx transitional-to-delete |
+| HTTPS edge, certs for web vhosts | **management-ui** rustls (default); nginx dual-run escape | P1: Axum owns public :80/:443; Stalwart not product clearnet HTTPS; `web.enable` default false; nginx transitional-to-delete |
 | Management console + v1 webmail HTTP | **surmount-management-ui** | Axum shell + Leptos SSR |
 | User-facing mail UX (search, read, compose) | **Product via JMAP** | After admin; Stalwart internal search for now |
-| Legacy / migrated public sites | **Static files only** | No exceptions for old Synology apps |
+| Legacy / migrated public sites | **Static files only** (Axum Host map) | Proven DS3018xs HTML on the mail-host edge; no nginx product edge; no exceptions for old Synology PHP/Ghost apps |
 | Non-mail product indexes (audit, ops logs) | **Surmount** (only if needed) | Explicit product need required |
 | Deploy / Nix secrets | **sops-nix** (or alternative tool) | Bucket 1; decrypt on host at activation |
-| Human / team password vault | **Vaultwarden** (planned) | Bucket 2; PM API; not Bitwarden Secrets Manager; not deploy-secrets |
+| Human / team password vault | **Vaultwarden** (module offline; host enable residual) | Bucket 2 / domain C; PM API; not Bitwarden Secrets Manager; not deploy-secrets |
 | **Arti onion / hidden services** | **Arti (REQUIRED)** | Tor Project Rust Tor; HS reachability first-class next to clearnet; not a clearnet edge replacement; HS keys never in git |
 | Disk encryption at rest | **LUKS2** (first-class) | Disk encryption; SECURITY.md |
 | Packaging / OS / deploy | **Nix flake + Surmount package overlay** | Hermetic lock; path to fixpkgs later; **no Python/NPM product deps** |
@@ -107,7 +107,7 @@ reload: [COMPACTION-PIN.md](COMPACTION-PIN.md).
   Stalwart directory + store
            ^
            |
-  Classic MUA (Thunderbird, etc.): IMAP/SMTP app password
+  Classic MUA (Evolution, etc.): IMAP/SMTP app password
   (may be issued/rotated by Surmount after Nostr admin login;
    human tracking in Vaultwarden)
 ```
@@ -147,12 +147,17 @@ No blob tiering/compliance split this phase. Clever RPO/RTO backup design later.
 
 ### Product / UI / other state
 
-- Management multi-page console: little durable state today; future
-  sessions/npub map/audit under `/var/lib/surmount` (inventory when added).
-  HTML routes `/`, `/domains`, `/accounts`, `/system`, `/mail`; honest JSON
-  inventories; JMAP proxy remains 501 residual.
+- Management multi-page console: HMAC session cookie plus a Surmount
+  console account map at `/var/lib/surmount/console/accounts.json`
+  (optional mailbox, optional npub hex, Administrator/User). This is the
+  npub-to-account bridge (JSON, not Q5 SQLite). HTML routes `/`,
+  `/domains`, `/accounts`, `/system`, `/mail`; honest JSON inventories;
+  JMAP proxy remains 501 residual. `/mail` can create mailboxes
+  (Administrator) without flipping `directory=stalwart`.
 - Never a second mailbox corpus in Surmount code.
-- Vaultwarden (planned): own data dir; **SQLite recommended** on single VPS.
+- Vaultwarden (S7a module offline shipped; sample host enable=false): data dir
+  `/var/lib/vaultwarden`; **SQLite recommended** on single VPS; loopback default;
+  management console Open vault link via `SURMOUNT_VAULTWARDEN_URL`.
 - Full table (ACME, sops age keys, journald, fail2ban, restic, LUKS, SSH
   host keys, etc.): DATASTORES.md section 7.
 
@@ -161,7 +166,7 @@ No blob tiering/compliance split this phase. Clever RPO/RTO backup design later.
 | Bucket | What | Tool |
 |--------|------|------|
 | **1** | Service secrets at NixOS activation | **sops-nix** today (or other deploy-secrets tool) |
-| **2** | Human passwords, TOTP, notes, mail cred inventory UX | **Vaultwarden** (planned) |
+| **2** | Human passwords, TOTP, notes, mail cred inventory UX | **Vaultwarden** (module offline; host enable residual) |
 | Disk | Disk at rest | **LUKS2** FDE first-class (not the same as 1 or 2) |
 
 Full story: [SECRETS.md](SECRETS.md), [SECURITY.md](SECURITY.md).
@@ -201,10 +206,10 @@ Firewall set in `modules/networking.nix`.
 
 | Host | Path | Upstream |
 |------|------|----------|
-| `services.surmount.systems` | `/` | management-ui (UDS target; TCP loopback scaffold) |
+| `services.surmount.systems` | `/` | management-ui operator console (UDS target; TCP loopback scaffold) |
 | `services.surmount.systems` | `/stalwart-admin/` | Stalwart HTTP (bootstrap only) |
 | `mail.surmount.systems` | `/` | redirect to services (ACME name for mail certs) |
-| apex / www | `/` | park / redirect; static legacy later |
+| apex / www | `/` | packaged SurmountSystems/site static files (flake input; store path default); else UNDER CONSTRUCTION if the root has no index.html (not operator console) |
 | future vault host | `/` | Vaultwarden local only (private, no public signup) |
 
 JMAP clients should eventually hit either:
@@ -251,8 +256,13 @@ See [EDGE_AND_TLS.md](EDGE_AND_TLS.md), [hygiene.md](hygiene.md),
   (evaluate/plan; not TLS substitute alone).
 - **Arti hidden services (REQUIRED):** onion HS reachability for Surmount
   services; first-class next to clearnet; not a clearnet edge replacement.
+  Clearnet HTTPS advertises the onion with **Onion-Location** and **Alt-Svc**
+  (apex, www, services, extra static Hosts, MTA-STS policy Host; same v3;
+  `/_o/{host}` for non-console surfaces). Live unit
+  `surmount-arti-hidden-service` is active; Tor Browser verify remains residual.
   [research/arti-and-secrets-manager.md](research/arti-and-secrets-manager.md),
-  [COMPACTION-PIN.md](COMPACTION-PIN.md) section 7.
+  [COMPACTION-PIN.md](COMPACTION-PIN.md) section 7,
+  [EDGE_AND_TLS.md](EDGE_AND_TLS.md).
 - Full evaluation: [EDGE_AND_TLS.md](EDGE_AND_TLS.md)
 
 ## Product languages

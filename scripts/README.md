@@ -1,6 +1,6 @@
-# Operator scripts
+# Operator smoke
 
-Small helpers for DNS, TLS, and mail ports. End-to-end SoT is flake apps
+Small helpers for DNS, TLS, and mail posture. End-to-end SoT is flake apps
 (Rust), not free-floating bash.
 
 See [docs/OPS.md](../docs/OPS.md), [docs/EDGE_AND_TLS.md](../docs/EDGE_AND_TLS.md),
@@ -17,13 +17,14 @@ Implementation: `crates/surmount-e2e` (`surmount-e2e`, `surmount-e2e-host` bins)
 Pure helpers + host-gate contracts: `cargo test -p surmount-e2e --lib`
 (also `checks.*.e2e-pure-test` inside `checks.*.ci`).
 
-## Ops smoke scripts (bash; secondary)
+## Ops smoke (flake apps)
 
-| Script | Purpose |
-|--------|---------|
-| `check-dns.sh` | dig-based MX/A/AAAA/TXT presence checks |
-| `check-tls.sh` | openssl certificate dates and handshake for host:port (standalone ops; host e2e embeds the same check in Rust; **exit 1 if expired**) |
-| `check-mail-ports.sh` | TCP connect checks for mail/HTTPS ports |
+Product `scripts/*.sh` drivers are gone. Use `nix run .#...`.
+
+| Entry | Purpose |
+|-------|---------|
+| `nix run .#surmount-domain-audit` / `just domain-audit` | Read-only DNS/web/TLS/mail posture (SPF/DKIM/DMARC/MX/HTTPS/optional SMTP STARTTLS). Default DKIM selectors include `stalwart` + `stalwart-rsa`. Extra mailbox apexes auto-require SPF, dual DKIM TXT, DMARC, TLS-RPT, CAA. Registrar eforward public MX is a FAIL on claimed mailbox domains (and EmailType FWD if `SURMOUNT_DOMAIN_AUDIT_EMAIL_TYPE` is set). Extra mailboxes do not require MTA-STS until the cert covers `mta-sts.<apex>`. Static-site vhosts are not auto mailbox domains. |
+| `nix run .#surmount-tls-hybrid` / `just check-tls-hybrid` | **D1** hybrid KEX negotiation probe after B1 (requires `SURMOUNT_E2E_BASE_URL`; exit **2** BLOCKED if unset; not a flake check). |
 
 No secrets. Safe to run from a laptop against public DNS/HTTPS where noted.
 Local e2e uses temp self-signed certificate/key files inside cargo tests; host
@@ -49,8 +50,23 @@ SURMOUNT_E2E_HOST=1 \
 SURMOUNT_E2E_HOST=1 SURMOUNT_E2E_BASE_URL=https://127.0.0.1 \
   SURMOUNT_E2E_SKIP_BAN=1 nix run .#e2e-host
 
-chmod +x scripts/*.sh   # once, if needed
-./scripts/check-dns.sh
-./scripts/check-tls.sh services.surmount.systems:443
-./scripts/check-mail-ports.sh mail.surmount.systems
+nix run .#surmount-domain-audit -- --no-color surmount.systems
+# extra mailbox (same mail-record checks; MX flip parked, not a fail):
+nix run .#surmount-domain-audit -- --no-color cryptoquick.com
+nix run .#surmount-domain-audit -- --no-color baxterartworks.com
+# force mailbox checks, or web-only posture:
+nix run .#surmount-domain-audit -- --mail-domain extra.example
+nix run .#surmount-domain-audit -- --static-site btcfur.com
+# optional STARTTLS on highest-priority MX (outbound TCP/25 may be blocked):
+nix run .#surmount-domain-audit -- --smtp --no-color surmount.systems
+# or: just domain-audit
+# or: just domain-audit -- cryptoquick.com
+# or: just domain-audit -- --smtp --no-color surmount.systems
 ```
+
+`surmount-domain-audit` is **not** a flake check (live public DNS would be flaky).
+Exit: 0 clean, 1 warnings only, 2 failures, 64 bad invocation. Unsigned
+DNSSEC (no DS) is INFO; leftover DS without DNSKEY is FAIL; DS digest
+type 1 (SHA-1) is FAIL even with DNSKEY. Missing MTA-STS with no marker
+is INFO. Interpret against [DNS.md](../docs/DNS.md) earn-trust vs Day-1
+checklist.

@@ -99,6 +99,21 @@ in
             path (charset /[A-Za-z0-9._/-]+).
           '';
         }
+        {
+          assertion = hostPaths.optionalStrictHostPath cfg.secrets.durableMaterialDir;
+          message = ''
+            surmount.secrets.durableMaterialDir must be a strict absolute host
+            path (charset /[A-Za-z0-9._/-]+). Default /var/lib/surmount/secrets.
+          '';
+        }
+      ];
+
+      # Durable Domain B root only (no secret payloads). Root-owned, mode 0755
+      # so service users can traverse to UI-owned leaves. Leaf dirs (ui/, acme/)
+      # come from management-ui tmpfiles when that unit is enabled; install
+      # bridge also creates parents. Laptop Domain A remains custody SoT.
+      systemd.tmpfiles.rules = [
+        "d ${cfg.secrets.durableMaterialDir} 0755 root root - -"
       ];
     }
 

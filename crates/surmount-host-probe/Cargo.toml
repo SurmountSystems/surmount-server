@@ -1,0 +1,27 @@
+[package]
+name = "surmount-host-probe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host probes: inxi (no TTY), btop (TTY), hybrid TLS (env-gated)"
+publish = false
+
+[[bin]]
+name = "surmount-inxi-host"
+path = "src/bin/surmount-inxi-host.rs"
+
+[[bin]]
+name = "surmount-btop-host"
+path = "src/bin/surmount-btop-host.rs"
+
+[[bin]]
+name = "surmount-tls-hybrid"
+path = "src/bin/surmount-tls-hybrid.rs"
+
+[[bin]]
+name = "surmount-et"
+path = "src/bin/surmount-et.rs"
+
+[lib]
+name = "surmount_host_probe"
+path = "src/lib.rs"

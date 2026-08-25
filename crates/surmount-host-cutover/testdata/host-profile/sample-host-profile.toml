@@ -1,0 +1,12 @@
+# PUBLIC SAMPLE only. Copy outside the git tree before filling real values.
+# Never put API keys, PEMs, tokens, or production IPs here.
+
+host_id = "mail-lab"
+acme_email = "ops@example.invalid"
+acme_directory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+acme_domains = [
+  "services.example.invalid",
+  "mail.example.invalid",
+  "example.invalid",
+  "www.example.invalid",
+]

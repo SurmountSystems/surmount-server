@@ -1,0 +1,6 @@
+# FAKE detector fixture only. Not a Surmount host address.
+# Dotted quad outside allowlisted private/docs ranges (synthetic 1.2.3.4).
+networking.interfaces.eth0.ipv4.addresses = [{
+  address = "1.2.3.4";
+  prefixLength = 24;
+}];

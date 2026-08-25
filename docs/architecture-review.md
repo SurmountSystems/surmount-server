@@ -321,7 +321,7 @@ IMAP/JMAP readback, FTS spot-checks, ops skill with stop-and-restore, HA need.
 | ACME material | `/var/lib/acme/` via `security.acme` | Wired for nginx; Stalwart mail TLS file use **TODO** |
 | sops age key | host identity (default `/var/lib/sops-nix/key.txt`) | Module defaults; real `secrets.yaml` still scaffold |
 | restic repo | remote URL when enabled | Module present, **off** until repo + password set |
-| Vaultwarden | planned; SQLite recommended on single VPS | Docs only; no module |
+| Vaultwarden | S7a module offline (`modules/vaultwarden.nix`); SQLite recommended on single VPS; sample host enable=false | Host enable (S7b) residual; not SM API |
 | Spam-filter FOD | Nix store + `/etc/surmount/stalwart/` | Config, **not** message DB |
 | Nostr | nsec on clients only | Never server-side nsec |
 
@@ -339,8 +339,8 @@ From evidence section 4:
 5. RocksDB CF compression codec in 0.16 JSON world (0.11 TOML had explicit lz4;
    0.16 documented RocksDB JSON fields are path / blobSize / bufferSize /
    poolWorkers; app blob LZ4 is separate).
-6. Maildir import subcommand on cli **1.0.12** (helper still templates
-   `import messages --format maildir-nested`; schema-driven CLI may differ).
+6. Maildir import on cli **1.0.12**: **no `import` subcommand** (live
+   `--help` 2026-08-13). Path is Vandelay 1.0.7 + wrapper.
 7. Full `mail-vm-test` not run in the evidence packaging pass.
 
 ---
@@ -488,7 +488,7 @@ Doc and comment lag can cause wrong operator actions. Prefer one story:
 | "spam-filter FOD is live anti-spam on first boot" | Files on disk; engine may still use GitHub until apply |
 | "import helper is production-ready" | Template; confirm cli 1.0.12 subcommands |
 | "edge owns 443 exclusively" | True for nginx intent; engine safe defaults may also bind 443 until rebind |
-| "Caddy / Nostr auth / Leptos hydrate+webmail / Vaultwarden are implemented" | Caddy/Nostr/Vaultwarden not product code; Leptos admin shell is ssr-only scaffold in code; hydrate+webmail residual |
+| "Caddy / Nostr auth / Leptos hydrate+webmail / Vaultwarden are implemented" | Caddy not product edge; Nostr auth foundation + Vaultwarden module offline (S7a) ship with host residual; Leptos management console is SSR multi-page (not hydrate+webmail); hydrate+webmail residual |
 | "multi-host never" | Deferred, not forbidden |
 | "RPO/RTO exist" | Unset |
 | "mail TLS is done because ACME exists for nginx" | Web certs != Stalwart protocol cert wiring |

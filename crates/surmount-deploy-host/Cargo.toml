@@ -1,0 +1,19 @@
+[package]
+name = "surmount-deploy-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operator-driven NixOS deploy driver (public tree sync, host-local checks, post-switch smoke)"
+publish = false
+
+[lib]
+name = "surmount_deploy_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "surmount-deploy-host"
+path = "src/bin/surmount-deploy-host.rs"
+
+[[bin]]
+name = "surmount-deploy-host-post-switch-smoke"
+path = "src/bin/surmount-deploy-host-post-switch-smoke.rs"

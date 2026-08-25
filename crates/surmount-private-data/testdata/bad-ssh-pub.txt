@@ -1,0 +1,3 @@
+# FAKE detector fixture only. Not a real authorized_keys line.
+# Base64 after AAAA is long enough to trip the min-length gate; content is junk.
+ssh-ed25519 AAAAabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGfake= detector@fixture

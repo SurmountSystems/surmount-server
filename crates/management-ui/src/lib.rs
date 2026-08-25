@@ -6,5 +6,7 @@
 
 pub mod auth;
 pub mod ban;
+pub mod console_accounts;
 pub mod nft_helper;
+pub mod nwc;
 pub mod rate_limit;

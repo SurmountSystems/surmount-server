@@ -226,7 +226,7 @@ Minimum before real mail:
 Maildir is the source of truth. See [docs/MIGRATION.md](docs/MIGRATION.md).
 
 ```bash
-# After accounts exist in Stalwart:
+# After accounts exist in Stalwart. Uses Vandelay (not stalwart-cli import).
 surmount-mail-import-maildir you@surmount.systems \
   /var/lib/surmount/import/maildir/.../Maildir
 ```
@@ -269,7 +269,8 @@ Multi-page **Leptos SSR** operator console (Axum edge + DOGE dark theme):
 - Service: `surmount-management-ui.service`
 - Public: `https://services.surmount.systems/` (product edge is Axum HTTPS when
   `web.enable = false`)
-- Optional onion display: `SURMOUNT_ONION_URL` or `SURMOUNT_ONION_HOSTNAME_FILE`
+- Onion status: host `surmount.artiHiddenService` (hostname under
+  `onionServiceStateDir`); lab override `SURMOUNT_ONION_URL` only
   (never invent a live onion in tree)
 - Directory: default honest empty (`source: unavailable`); hermetic `mock` or
   live `stalwart` only when explicitly configured + host token (never
@@ -279,12 +280,12 @@ Honest residual: Q-AUTH-1 product answers; JMAP proxy beyond 501; v1 webmail
 UI; host cutover. Day-one host order: [docs/OPS.md](docs/OPS.md). Phases:
 [docs/SEARCH_AND_UI.md](docs/SEARCH_AND_UI.md).
 
-## Operator smoke scripts
+## Operator smoke
 
 ```bash
-./scripts/check-dns.sh
-./scripts/check-tls.sh services.surmount.systems:443
-./scripts/check-mail-ports.sh mail.surmount.systems
+nix run .#surmount-domain-audit -- surmount.systems
+# or: just domain-audit
+nix run .#e2e-host   # needs SURMOUNT_E2E_HOST=1 and SURMOUNT_E2E_BASE_URL
 ```
 
 See [docs/OPS.md](docs/OPS.md) and [scripts/README.md](scripts/README.md).

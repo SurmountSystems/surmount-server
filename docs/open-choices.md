@@ -7,7 +7,7 @@ defaults when they conflict. Items below are either still **open**,
 **proposed**, **scaffold default**, or **research finding** unless that
 direction file already settled them.
 
-**Last updated:** 2026-07-30
+**Last updated:** 2026-08-10
 
 **Peer review of current tree (versions, stores, assumptions):**
 [architecture-review.md](architecture-review.md) (see supersession banner for
@@ -169,6 +169,14 @@ services. Registrar may still be Cloudflare DNS-only.
 (`listenMode=https` + host PEMs); `surmount.web.enable` default **false**.
 Host public cutover + MDWE smoke still residual (RESIDUAL.md).
 
+**P1 (operator lock, offline pin 2026-08-10):** public **:80** and **:443**
+are the **Axum (management-ui)** product clearnet edge. Stalwart is backend
+mail only and must **not** permanently own product clearnet HTTPS on :443.
+First-boot engine HTTPS :443 is freed with
+`nix/stalwart/free-public-443-for-axum-edge.ndjson` (installed under
+`/etc/surmount/stalwart/`) or WebUI equivalent before public B1. Mail-plane
+TLS on 465/993 remains Stalwart. Live PEMs/DNS/`e2e-host` still host residual.
+
 **Dual-run escape:** `surmount.web.enable = true` + UI http loopback; nginx +
 `security.acme` in `modules/web.nix` (**transitional-to-delete**).
 
@@ -211,10 +219,48 @@ deps ([principles.md](principles.md) section 5b).
 **Mail earn-trust DNS:** checklist in [DNS.md](DNS.md); DANE timing still open
 (**Q-TLS-2**).
 
+### DNS hosting (nameserver product; open, not locked)
+
+**Status:** **open**. Product owns the **record checklist** and host services,
+not a required in-tree nameserver. Traffic stays **direct to the VPS**. No
+Cloudflare product on the critical path (orange-cloud, Access, Workers, WAF,
+Tunnel). **DNS-only** at any registrar (including Cloudflare DNS-only) is fine.
+
+| Option | What it is | Day-1 fit |
+|--------|------------|-----------|
+| **A. Registrar managed DNS** | Zone at the registrar (example: Namecheap BasicDNS or equivalent managed DNS where the domain already lives) | **Recommended path for Day-1** |
+| **B. Self-hosted authoritative** | BIND / PowerDNS (or similar) later; Track C style sovereignty | Later; not required for B6 |
+
+**Recommended for Day-1 (not a lock):** Option A. Matches [DNS.md](DNS.md)
+(records matter; registrar may be anywhere) and
+[deploy-host-local.md](deploy-host-local.md) **B6** ("Registrar/managed DNS;
+not self-host DNS required"). PTR/rDNS stays at the **VPS provider** reverse
+zone either way.
+
+**Option B notes:** optional later; bootstrap needs registrar glue / secondaries
+so the mail box is not a single point for public NS without a plan. ACME DNS-01
+uses operator **external-hook** against operator-controlled DNS either way; no
+commercial DNS product crate defaults.
+
+Detail and comparison: [DNS.md](DNS.md) (hosting section), report
+`.agents/reports/operator-secrets-and-dns-placement.md` (gitignored agent notes).
+
 **Still open:**
 
 **Q-EDGE-1.** Shared host ACME PEM files for mail + web vs in-process issuance
 on the Axum edge for web only?
+**Update 2026-08-10 (operator-directed scaffold, not full close):** management-ui
+has an **in-process ACME path** (`instant-acme`, DNS-01, **default off**).
+**Update 2026-08-10 A1/A2:** DNS-01 challenge adapter model documented:
+`DnsProvider` / `SURMOUNT_ACME_DNS_PROVIDER` means the ACME TXT challenge
+publisher, **not** a commercial DNS brand. First real (non-mock) adapter is
+**external-hook** (operator-owned executable for operator-controlled DNS;
+no Cloudflare/Route53 product defaults). Early-renew window scaffold default
+30 days (`SURMOUNT_ACME_RENEW_DAYS_BEFORE_EXPIRY`). Status: **operator-directed
+work in progress / scaffold**. Does **not** lock shared mail+web PEMs,
+multi-service cert pipeline, live host LE cutover, or any commercial DNS
+vendor. Static PEM load remains. HTTP-01 on product :80 still parked. Do not
+claim all Q-EDGE closed.
 
 **Q-EDGE-2.** UDS path layout (`/run/surmount/*.sock` vs per-service `/run/...`)?
 
@@ -270,7 +316,7 @@ or Surmount-owned Rust secrets service?
 | Bucket | Tool | Job |
 |--------|------|-----|
 | 1. Deploy secrets | sops-nix today (need required; tool open) | Decrypt on host at activation; **never in public git** |
-| 2. Humans | Vaultwarden (planned) | Passwords, TOTP, notes, mail cred UX |
+| 2. Humans | Vaultwarden (S7a offline done; S7b host-cutover after token) | Passwords, TOTP, notes, mail cred UX |
 | Disk | LUKS2 first-class | Offline disk / snapshot; unlock material never in git |
 
 Vaultwarden does not replace deploy secrets. Deploy secrets do not replace VW.
@@ -321,11 +367,12 @@ recover MailPlus onto self-sovereign Surmount Server.
 
 ## Self-ops
 
-**Proposed direction:** journald + retention; health endpoints; `scripts/` for
-DNS/TLS/mail checks; abuse controls carefully; runbooks in `docs/`. No
-dependence on a third-party WAF for basic hygiene. First-class spam detection
-at the mail engine. Merciless ban/whitelist is product direction (research
-sketch); fail2ban remains light scaffold until Rust/nft path lands.
+**In-tree (2026-08-19):** persistent size-capped journald (`surmount.logging`),
+health endpoints, `just host-logs` plus `scripts/` for DNS/TLS/mail checks.
+Not a SaaS log sink. No public log dump. Scaffold SystemMaxUse is not a
+published guest disk size. Merciless ban/whitelist is still product
+direction (research sketch); fail2ban remains light scaffold until the
+Rust/nft path is live. First-class spam detection at the mail engine.
 
 Detail: [OPS.md](OPS.md),
 [research/access-control-fail2ban.md](research/access-control-fail2ban.md).

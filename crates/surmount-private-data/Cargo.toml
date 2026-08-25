@@ -1,0 +1,18 @@
+[package]
+name = "surmount-private-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Private-data pattern scanner for git admission (staged, tree, paths)"
+publish = false
+
+[[bin]]
+name = "surmount-private-data"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_private_data"
+path = "src/lib.rs"
+
+[dependencies]
+# std only: git CLI for --staged / --tree, no ripgrep.

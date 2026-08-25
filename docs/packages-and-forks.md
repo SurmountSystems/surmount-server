@@ -4,7 +4,7 @@ Plain English. No assumption that the reader already knows Fix ladder codes.
 Ladder detail still lives in [fix-and-fixos.md](fix-and-fixos.md) if you
 want depth.
 
-**Last updated:** 2026-07-31
+**Last updated:** 2026-08-25 (every `nix/packages/surmount-*.nix` is `callPackage`'d in the flake overlay, packages, apps, and hermetic checks. `just` aliases only `nix run`. No leftover product `script/*.sh`.)
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
 ---
@@ -40,15 +40,50 @@ package bumps in this repo.
 | Path | Role |
 |------|------|
 | `nix/packages/stalwart-mail.nix` | Stalwart server pin (release binary FOD today) |
-| `nix/packages/stalwart-cli.nix` | CLI pin |
+| `nix/packages/stalwart-cli.nix` | CLI pin (admin only; no Maildir import on 1.0.x) |
+| `nix/packages/vandelay.nix` | Official 0.16 Maildir++ / JMAP importer-exporter |
 | `nix/packages/stalwart-webui.nix` | WebUI assets FOD |
 | `nix/packages/stalwart-spam-filter.nix` | Spam rules FODs |
 | `nix/packages/management-ui.nix` | Surmount Axum UI (crane) |
+| `nix/packages/surmount-public-site.nix` | Apex/www static site from flake input `github:SurmountSystems/site` (no NPM; operator bumps rev) |
 | `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.5.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti` |
+| `nix/packages/surmount-private-data.nix` | Private-data pattern scanner (crane). `nix run .#surmount-private-data`. Pre-commit + `just check-private-data` / `just private-data`. |
+| `nix/packages/surmount-host-logs.nix` | Host journal status/follow (crane). `nix run .#surmount-host-logs`. `just host-logs`. Journald stays source of truth. |
+| `nix/packages/surmount-shc.nix` | SHC customer user-api client (crane; rDNS PTR + tickets). `nix run .#surmount-shc`. `just rdns-shc`. No python3. |
+| `nix/packages/surmount-niced-builder.nix` | Niced ssh-ng nix-daemon helper (crane). `nix run .#surmount-niced-builder`. Installed as `/etc/surmount/niced-builder` when remote builder is on. MemoryMax stays on the NixOS module. Not a mail wrapper. |
+| `nix/packages/surmount-leftover-homes.nix` | Refuse leftover repo `.agents` / `.grok` homes (crane). `nix run .#surmount-leftover-homes`. Fixtures live under `crates/surmount-leftover-homes/testdata/`. |
+| `nix/packages/surmount-host-probe.nix` | inxi (no TTY), btop (TTY), hybrid TLS probe, Eternal Terminal client. `nix run .#surmount-inxi-host` / `.#surmount-btop-host` / `.#surmount-tls-hybrid` / `.#surmount-et`. |
+| `nix/packages/surmount-static-sites.nix` | Apex/www publish + proven DS3018xs extra vhosts. `nix run .#surmount-deploy-static-sites` / `.#surmount-sync-static-sites`. |
+| `nix/packages/surmount-diskstation.nix` | AFP mount, mDNS discover, MailPlus uid copy, public-dashboard compose. `nix run .#surmount-diskstation-afp-mount` and sibling apps. |
+| `nix/packages/surmount-deploy-host.nix` | Host deploy driver (crane). `nix run .#surmount-deploy-host`. |
+| `nix/packages/surmount-dns-zone.nix` | Namecheap zone tool (crane). `nix run .#surmount-dns-zone`. |
+| `nix/packages/surmount-domain-audit.nix` | Public DNS/mail posture audit (crane). `nix run .#surmount-domain-audit`. |
+| `nix/packages/surmount-host-cutover.nix` | Host cutover pack (crane). `nix run .#surmount-host-cutover`. |
+| `nix/packages/surmount-acme-namecheap.nix` | Namecheap DNS-01 hook, laptop renew, host-profile render (crane). `nix run .#surmount-laptop-renew-cert` and sibling apps. |
+| `nix/packages/surmount-stalwart-ops.nix` | Stalwart operator drivers (crane). `nix run .#register-dkim`, `.#free-stalwart-public-443`, `.#point-stalwart-mail-tls`, `.#add-stalwart-token`, `.#bootstrap-stalwart-api-token`, `.#stalwart-recovery-unlock`. |
+| `nix/packages/surmount-mail-import.nix` | Maildir++ import via Vandelay (crane). `nix run .#surmount-mail-import-maildir`. |
+| `nix/packages/surmount-secrets-install.nix` | Domain A to Domain B install + Vaultwarden export-to-staging (crane). `nix run .#secrets-install-host` / `.#secrets-export-bw-to-staging`. |
+| `nix/packages/surmount-secrets-prompt.nix` | Domain A no-echo intake (crane). `nix run .#surmount-secrets-prompt`. `just secrets-prompt`. |
 | `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary) |
 | `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
+
+### Reasonable leftover exceptions (not product bash)
+
+Product ops drivers are Rust plus one `callPackage` file each. These leftovers
+are **not** that class. Do not treat them as unfinished conversion, and do not
+grow new `.sh` drivers next to them.
+
+| Leftover | Why it may stay |
+|----------|-----------------|
+| `crates/surmount-leftover-homes/testdata/*.sh` (three files: bad mkdir relative, bad mkdir root, good mktemp) | Scanner **fixtures**. They are sample inputs the crate tests read, not programs we run. |
+| `script/git-hooks/pre-commit` | Git requires a shebang file. This one only execs `surmount-private-data --staged`. It is not a product driver. |
+| `script/laptop-renew/*.service` and `*.timer` | systemd units for laptop Let's Encrypt renew. The program is `nix run .#surmount-laptop-renew-cert`. |
+
+Do **not** wrap leftover bash in `writeShellApplication`. Do **not** grow
+`justfile` into a second program. Operator face is `nix run .#<app>` with a
+thin just alias.
 
 **Arti note:** stock nixpkgs `pkgs.arti` often lags (client-default, not
 HS-capable). Surmount owns a **current** Arti pin (`2.5.0` from GitLab
@@ -72,6 +107,18 @@ old mail.
 
 **Why own Arti here:** same spirit. Channel 1.4.2 lag is not a reason to ship
 old Tor for the required HS surface.
+
+**Operator tools:** each tool is one `callPackage` file under
+`nix/packages/`, a workspace crate, flake `packages` / `apps` / overlay
+attr, and hermetic `checks` (in `checks.*.ci` when crate src is present).
+`just` is a thin alias that only `nix run`s. Product `script/*.sh` drivers
+are gone. This is **not** a mega `ops.nix` and **not** leftover bash copied
+into `writeShellApplication`.
+
+**SHA-1 (later DNS wave, not a Wave 1 parser):** DNS / parent DNSSEC tooling
+must fail closed on DS digest type 1 (SHA-1). Do not treat leftover SHA-1
+parent records as acceptable. Wave 1 does not add a DNS parser. Living
+policy: [DNS.md](DNS.md), [SECURITY.md](SECURITY.md).
 
 ---
 

@@ -399,9 +399,8 @@ Things this research did **not** fully prove against the stripped FOD:
    `compression = "lz4"` in TOML; 0.16 RocksDB JSON fields documented are
    path / blobSize / bufferSize / poolWorkers only). App-level blob
    compression is on the Email object (default LZ4).
-6. **Import path** for Maildir on CLI 1.0.12: helper still calls
-   `stalwart-cli import messages --format maildir-nested`; not re-verified
-   against `stalwart-cli --help` output in this pass.
+6. **Import path** for Maildir on CLI 1.0.12: live `--help` has **no**
+   `import` subcommand (2026-08-13). Path is Vandelay 1.0.7 + wrapper.
 7. **Full `mail-vm-test`** not run for this evidence pass.
 8. **nixpkgs-unstable** lag note (0.16.14 / incompatible module) was from the
    packaging join; not re-fetched against current unstable in this pass.

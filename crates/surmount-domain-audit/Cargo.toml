@@ -1,0 +1,18 @@
+[package]
+name = "surmount-domain-audit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read-only DNS, TLS, and mailbox posture audit. Hermetic PATH fixtures."
+publish = false
+
+[[bin]]
+name = "surmount-domain-audit"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_domain_audit"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "surmount-dns-zone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Namecheap forward-zone helper (A/AAAA/TXT/CAA/MX). Dry-run default. Hermetic mock."
+publish = false
+
+[[bin]]
+name = "surmount-dns-zone"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_dns_zone"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true

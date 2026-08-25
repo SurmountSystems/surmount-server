@@ -1,0 +1,27 @@
+[package]
+name = "surmount-diskstation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Office DiskStation AFP mount, mDNS discover, MailPlus uid copy"
+publish = false
+
+[[bin]]
+name = "surmount-diskstation-afp-mount"
+path = "src/bin/surmount-diskstation-afp-mount.rs"
+
+[[bin]]
+name = "surmount-diskstation-discover"
+path = "src/bin/surmount-diskstation-discover.rs"
+
+[[bin]]
+name = "surmount-copy-mailplus-uid"
+path = "src/bin/surmount-copy-mailplus-uid.rs"
+
+[[bin]]
+name = "surmount-fix-public-dashboard"
+path = "src/bin/surmount-fix-public-dashboard.rs"
+
+[lib]
+name = "surmount_diskstation"
+path = "src/lib.rs"

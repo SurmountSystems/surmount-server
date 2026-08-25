@@ -1,0 +1,22 @@
+[package]
+name = "surmount-host-cutover"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host cutover driver (inventory, fragments, secrets/deploy plan). Default dry-run."
+publish = false
+
+[lib]
+name = "surmount_host_cutover"
+path = "src/lib.rs"
+
+[[bin]]
+name = "surmount-host-cutover"
+path = "src/bin/surmount-host-cutover.rs"
+
+[[bin]]
+name = "surmount-host-material-inventory"
+path = "src/bin/surmount-host-material-inventory.rs"
+
+[dependencies]
+surmount-deploy-host = { path = "../surmount-deploy-host" }

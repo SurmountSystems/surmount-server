@@ -22,7 +22,10 @@ let
     filter =
       path: type:
       (craneLib'.filterCargoSources path type)
-      || (builtins.match ".*\\.(html|css|js|svg|png|toml)$" path != null);
+      || (builtins.match ".*\\.(html|css|js|svg|png|toml|json)$" path != null)
+      # Extra-Host NIP-05 fixture: testdata/.../.well-known/nostr.json.
+      # filterCargoSources drops dotdirs.
+      || (type == "directory" && baseNameOf path == ".well-known");
   };
 
   commonArgs = {

@@ -24,6 +24,7 @@
 
 let
   cfg = config.services.stalwart;
+  hostPaths = import ./lib/host-paths.nix { inherit lib; };
   # 0.16 DataStore JSON: tagged union with @type. Defaults for blobSize /
   # bufferSize match upstream RocksDbStore::default when omitted.
   configJson =
@@ -40,6 +41,10 @@ let
           // lib.optionalAttrs (cfg.bufferSize != null) { bufferSize = cfg.bufferSize; }
         )
       );
+
+  # Path-only EnvironmentFile for recovery pin. Leading "-" = ignore if missing
+  # so the unit still starts after strip hygiene (no recovery.env on disk).
+  recoveryEnvFiles = lib.optional (cfg.recoveryAdminEnvFile != "") "-${cfg.recoveryAdminEnvFile}";
 in
 {
   # Replace stock nixpkgs Stalwart modules entirely.
@@ -144,9 +149,31 @@ in
       type = lib.types.attrsOf lib.types.str;
       default = { };
       description = ''
-        Extra environment for the unit. Useful keys include:
-        STALWART_HOSTNAME, STALWART_PUBLIC_URL, STALWART_RECOVERY_MODE,
-        STALWART_RECOVERY_ADMIN=admin:password (bootstrap pin).
+        Extra environment for the unit (non-secret only). Useful keys include
+        STALWART_HOSTNAME, STALWART_PUBLIC_URL, STALWART_RECOVERY_MODE.
+        Never put STALWART_RECOVERY_ADMIN (or any password) here: it would
+        land in the Nix store. Use recoveryAdminEnvFile (path only) for a
+        durable recovery pin, or temporary private systemd drop-in from
+        nix run .#stalwart-recovery-unlock. Prefer strip after permanent
+        admin API key (hygiene).
+      '';
+    };
+
+    recoveryAdminEnvFile = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      example = "/var/lib/surmount/secrets/stalwart/recovery.env";
+      description = ''
+        Host path to a systemd EnvironmentFile that may set
+        STALWART_RECOVERY_ADMIN=user:password (KEY=value lines; mode 0600;
+        never in git). Path only is declared in the unit so reboot survives
+        while the pin is intentionally kept. Empty (default) = no unit
+        EnvironmentFile for recovery: prefer strip after permanent admin
+        API key, or temporary unlock drop-in. Never put the password body
+        in Nix or extraEnvironment. Unit uses EnvironmentFile=-path so a
+        missing file after strip does not fail the unit. Install material
+        via nix run .#stalwart-recovery-unlock / secrets-install-host
+        (kind stalwart-recovery-admin). See docs/OPS.md, docs/SECRETS.md.
       '';
     };
 
@@ -169,6 +196,40 @@ in
       {
         assertion = cfg.storeType == "RocksDb" || cfg.storeType == "Sqlite" || cfg.configFile != null;
         message = "services.stalwart: unsupported storeType without configFile";
+      }
+      {
+        assertion = hostPaths.optionalStrictHostPath cfg.recoveryAdminEnvFile;
+        message = ''
+          services.stalwart.recoveryAdminEnvFile must be empty or a strict
+          absolute host path (/[A-Za-z0-9._/-]+, no metacharacters).
+          Path only; never put STALWART_RECOVERY_ADMIN password in Nix.
+        '';
+      }
+      {
+        # Password body must never land in the store via Environment=.
+        assertion = !(cfg.extraEnvironment ? STALWART_RECOVERY_ADMIN);
+        message = ''
+          services.stalwart.extraEnvironment must not set STALWART_RECOVERY_ADMIN
+          (secret would enter the Nix store). Use recoveryAdminEnvFile for a
+          host EnvironmentFile path only, or temporary unlock drop-in from
+          nix run .#stalwart-recovery-unlock. Prefer strip after permanent
+          admin API key.
+        '';
+      }
+      {
+        # Defense in depth: refuse direct unit environment too (host profile
+        # can set systemd.services.stalwart-mail.environment without going
+        # through extraEnvironment). Path-only EnvironmentFile is the only
+        # supported recovery pin load for this secret.
+        assertion = !((config.systemd.services.stalwart-mail.environment or { }) ? STALWART_RECOVERY_ADMIN);
+        message = ''
+          systemd.services.stalwart-mail.environment must not set
+          STALWART_RECOVERY_ADMIN (secret would enter the Nix store). Use
+          services.stalwart.recoveryAdminEnvFile for a host EnvironmentFile
+          path only, or temporary unlock drop-in from
+          nix run .#stalwart-recovery-unlock. Prefer strip after permanent
+          admin API key.
+        '';
       }
     ];
 
@@ -197,6 +258,9 @@ in
 
       environment = {
         STALWART_HOSTNAME = lib.mkDefault config.networking.hostName;
+        # stdout tracer -> journald (SyslogIdentifier=stalwart-mail). Never put
+        # recovery passwords or API tokens in extraEnvironment.
+        RUST_LOG = lib.mkDefault "info";
       }
       // cfg.extraEnvironment;
 
@@ -211,6 +275,8 @@ in
         Restart = "on-failure";
         RestartSec = 5;
         SyslogIdentifier = "stalwart-mail";
+        StandardOutput = "journal";
+        StandardError = "journal";
         LoadCredential = lib.mapAttrsToList (key: value: "${key}:${value}") cfg.credentials;
 
         ReadWritePaths = [ cfg.dataDir ];
@@ -250,6 +316,10 @@ in
           "~@privileged"
         ];
         UMask = "0077";
+      }
+      # Path-only EnvironmentFile for recovery pin (never password body).
+      // lib.optionalAttrs (recoveryEnvFiles != [ ]) {
+        EnvironmentFile = recoveryEnvFiles;
       };
     };
 
@@ -257,8 +327,10 @@ in
       cfg.package
     ];
 
-    # Conservative port set matching upstream 0.16 first-boot defaults.
-    # Surmount networking.nix should still own production firewall policy.
+    # Conservative mail-plane ports only. Deliberately omits 80/443: product
+    # clearnet HTTPS is management-ui (Axum), not Stalwart. Prefer leave
+    # openFirewall false; modules/networking.nix owns production firewall.
+    # 8080 listed only if you opt into openFirewall (not recommended public).
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [
       25
       465

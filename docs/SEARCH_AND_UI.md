@@ -6,7 +6,12 @@ Operator direction: [operator-direction.md](operator-direction.md).
 Stack map: [STACK.md](STACK.md). Glossary: [glossary.md](glossary.md)
 (Internal FTS).
 
-**Last updated:** 2026-08-07
+**Last updated:** 2026-08-25 (living mailbox map stays in
+`~/.agents/surmount-server/operator-facts.md`, not this public file.)
+Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (living mailbox map:
+`~/.agents/surmount-server/operator-facts.md`. Do not assume Thunderbird.
+Prior 2026-08-20: Onion-Location + Alt-Svc on every
+public Host; `/_o/{host}` onion routing)
 
 ## Principles
 
@@ -103,7 +108,12 @@ Stalwart webadmin (`/admin` on loopback, optional `/stalwart-admin/` via edge)
 is a **bootstrap fallback**, not the long-term Surmount UX.
 
 Legacy public sites: **static files only** at the edge. Not part of
-the Leptos app.
+the Leptos app. Live apex/www serve the packaged
+`SurmountSystems/site` tree (`pkgs.surmount-public-site`; Host
+`surmount.systems` / `www.surmount.systems`). `just deploy` publishes
+static sites; `just deploy-host` is the NixOS generation.
+Operator console stays on `services.surmount.systems`. COMING SOON
+leftover is closed.
 
 ## Phases
 
@@ -113,13 +123,30 @@ the Leptos app.
 
 - Axum binary `surmount-management-ui`
 - HTML routes (SSR): `/`, `/domains`, `/accounts`, `/system`, `/mail`
-- JSON: `/health`, `/api/v1/system` (optional onion), `/api/v1/domains`
+- JSON: `/health`, `/api/v1/system` (onion surface + `onion_discovery` map), `/api/v1/domains`
   (config inventory), `/api/v1/accounts` (directory strategy: default
   honest empty / `source: unavailable`; hermetic `mock`; live `stalwart`
   via management JMAP when explicitly configured + host token),
   `/api/v1/stalwart/status` (live probe), `POST /api/v1/jmap` (honest 501
   boundary: `jmap_proxy_not_implemented`; full proxy + webmail residual)
-- Onion display when `SURMOUNT_ONION_URL` or hostname file set (never invented)
+- Onion status: real host path via `surmount.artiHiddenService` (hostname under
+  `onionServiceStateDir` / derived `SURMOUNT_ONION_HOSTNAME_FILE`); structured
+  `configured` / `hostname_missing` / `not_provisioned` on system +
+  `GET /api/v1/system`. Lab override `SURMOUNT_ONION_URL` only; never invent.
+  **Discovery headers (2026-08-17, every public Host 2026-08-20):**
+  Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Auto-map: apex, www,
+  services, `mta-sts.{apex}`, extra static Hosts; same v3. Services
+  Onion-Location is `{onion}{path}`. Other mapped Hosts use
+  `{onion}/_o/{clearnet-host}{path}` so purple-pill lands on that surface.
+  `http://{onion}/` is the services console. Mail unmapped. Mapping loaded
+  at process start; restart the unit after hostname/env/map/static-vhost
+  change (no hot-reload). Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`,
+  `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`,
+  `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`.
+  `GET /api/v1/system` dumps `onion_discovery` (admin-gated when Nostr on).
+  Not on `/health`. `/vault` on services (proxy on) is path-preserving and
+  not Nostr-gated (VW login is SoT). Live Arti unit is active; Tor Browser
+  verify remains residual. Detail: [EDGE_AND_TLS.md](EDGE_AND_TLS.md).
 - Directory trait + hermetic mock + live Stalwart client shipped (explicit
   opt-in only; never default-on; fail-closed misconfig):
   [research/stalwart-directory-api.md](research/stalwart-directory-api.md)
@@ -167,8 +194,10 @@ reach Stalwart HTTP.
 
 **Exit criteria (full Phase 1):** allowlisted operator authenticates with
 Nostr and list/create accounts without Stalwart webadmin for the happy path
-(**list + lean API create/update shipped**; password/credential product UX
-and full Q-AUTH-1 still residual).
+(**list + lean API create/update shipped**; **Create mailbox + mailbox
+password + attach npub (Grant console login) shipped** on `/mail`; optional
+npub + Administrator/User map; attach does not need directory listing;
+full Q-AUTH-1 still residual).
 
 ### Phase 2 - Leptos SSR admin UI
 
@@ -177,16 +206,116 @@ and full Q-AUTH-1 still residual).
   honest empty accounts; config domain inventory; live Stalwart probe.
 - **Live Stalwart directory list client shipped (2026-08-07):** trait + mock +
   management JMAP client; default still honest empty; never default-on.
+- **Operator UX pass (2026-08-10):** Overview is a health-first operator
+  dashboard, not a residual diary. Product language on Overview (no
+  `SURMOUNT_*` primary residual for auth/directory/onion/vault). System holds
+  technical detail and env wiring. DOGE palette kept; craft pass on type
+  scale, card chrome, chip semantics (ok / fail / warn / neutral).
+- **Synology-style package home (2026-08-10):** Overview is a DSM-like package
+  console: one-line health strip, large package tiles (Console, Mail, Domains,
+  Accounts, Onion, Vault), and a compact alert bar of short chips only when
+  residual exists. No tutorial lede, Hostnames card, Navigate wall, or
+  per-service residual essays on home. Detail and env names live on **System**.
+  Hermetic contract: `overview_operator_language_no_env_primary_residual`.
+  Follow-on backlog:
+  [`.agents/reports/ux-residual-follow-on.md`](../.agents/reports/ux-residual-follow-on.md).
+- **Mailbox password form shipped (2026-08-14):** `/mail` leads with the IMAP
+  password card (Evolution and iPhone Mail; not Nostr). Card fragment stays
+  `#mailbox-password`; the password INPUT id is `mailbox-password-input`
+  (unique; the form script reads that input). `POST /api/v1/accounts/password`
+  looks up the principal by email and PATCHes a Password credential on that
+  Account (not the API-token `AccountPassword` singleton). The live client
+  POSTs management JMAP to `SURMOUNT_STALWART_URL/jmap` (Stalwart 0.16.15
+  `POST /api` is HTTP 404). Works when the
+  Accounts list is still `unavailable` if the host token + loopback URL
+  exist. Unauthenticated callers get 401. Password is never logged, never
+  returned in JSON, never put on child-process argv. The console sends
+  plaintext over the authenticated operator session to loopback Stalwart.
+  Stalwart 0.16.15 hashes the secret with
+  `Authentication.passwordHashAlgorithm` (default **Argon2id**). See
+  [SECURITY.md](SECURITY.md) *Mailbox password hashing*.
+  **Contributor self-serve (2026-08-20):** default story is grant npub,
+  they sign in with NIP-07, they set their own IMAP password. `PATCH` and
+  `POST /api/v1/accounts/password` are both allowed (session-bound CSRF;
+  User own mailbox only; Administrator any mailbox as support). User
+  `/mail` is "Your mailbox", not the create wall. Evolution User Name is
+  the full address (not the local-part alone). Authentication is Normal
+  password, not OAuth2. Public mail TLS is **Let's Encrypt** on
+  `mail.<apex>:993` / `:465`. The first folder scan can take a long time.
+  Evolution may wrap Stalwart `* BYE Connection timed out.` as Failed to
+  authenticate; that is a wait, not by itself a bad password.
+  **NWC (2026-08-20):** optional Nostr Wallet Connect (NIP-47) save/clear
+  at `POST /api/v1/accounts/nwc`. Login stays NIP-07 / NIP-98. NWC is a
+  wallet, not login and not IMAP. Store is Domain B
+  `/var/lib/surmount/secrets/ui/nwc.json` (`SURMOUNT_NWC_STORE`; Nix
+  `nwcStoreFile`). Valid `nostr+walletconnect://` only; nsec and garbage
+  refused without echo. Responses never echo the URI. No Lightning node
+  in this crate. Alby/NWC extensions are wallets, not the IMAP form.
+- **MailPlus extra mailboxes:** living map (who is which uid, which
+  aliases, import counts) is `~/.agents/surmount-server/operator-facts.md`.
+  Extra people are ordinary **User** mailboxes. **Administrator was not
+  granted.** Mailbox passwords were **not** set from SSH (do not invent
+  them). Default: grant npub, they log in, they set the password on
+  User `/mail`. Boss may still set it on **Set mailbox password**.
+  Create more mailboxes on `/mail` Create mailbox before import. Discover
+  and mount the NAS that has the Maildir
+  (`just diskstation-afp-mount -- --host DS1513` or `--host DS3018xs`).
+  Same local-part on another domain is **not** an alias. Distinct MailPlus
+  accounts are separate User mailboxes. Extra public MX stays parked.
+  Do **not** alias `admin@surmount.systems` onto a person mailbox
+  (API-token Admin principal). Do **not** serve unowned domains.
+- **Create mailbox + optional npub + two roles shipped (2026-08-14):**
+  Administrator `/mail` card **Create mailbox** (local-part, live
+  `{local}@{primary_domain}`, optional display name, password, confirm,
+  optional npub, role User default or Administrator). One submit creates a
+  Stalwart **User** via `x:Account/set`, sets Password the same way (never
+  `x:AccountPassword/set`), then writes
+  `/var/lib/surmount/console/accounts.json`. Domain id is looked up from
+  `SURMOUNT_PRIMARY_DOMAIN` (never a client `domain_id`, never hardcoded).
+  Local-part `admin` is reserved. Empty npub is IMAP/SMTP only. User npubs
+  stay in the map, not the host allowlist. **Attach npub (2026-08-20):**
+  Administrator `/mail` card **Grant console login** pastes bech32 `npub1...`
+  (or hex), session-bound CSRF, binds to an existing mailbox so that person
+  can log into the services portal (AuthMode nostr). Garbage and nsec are
+  refused. Directory listing is **not** required (live default unavailable
+  still writes the map). User npubs stay in the map, not the host allowlist.
+  Empty npub clears portal login (IMAP/SMTP only). Hunter stays IMAP-only
+  until an Administrator pastes a real npub here. Q-AUTH-1 is unchanged.
+  Console **User** sees own mailbox password + optional NWC card, no
+  create, and 403 on `/system` `/domains` `/accounts`. Administrator
+  `/mail` has a two-role story and a mailbox roster (primary, aliases,
+  npub yes/no, password yes/no, role). Grant and password use the
+  **primary** address (aliases of hunter are not extra people).
+  `/accounts` still has no create form.
+  `managementUi.directory` stays `unavailable`. MX still parked.
 - Remaining: hydrate only where needed; no cargo-leptos dual build until
   islands land; richer queue/metrics if Stalwart exposes them; link to
-  runbooks; issue/rotate app passwords for MUAs (account create/update API
-  lean surface already shipped; no HTML form)
+  runbooks; deeper design-system extract and a11y/mobile polish (see UX
+  follow-on report, not this slice).
 - Keep Axum as the server integration point (rate-limit, ban, rustls)
 - Still not full webmail (that is Phase 3)
 - Auth foundation shipped (mode off default); full Q-AUTH-1 residual remains
 
 **Exit criteria:** day-to-day admin no longer requires Stalwart webadmin for
 common tasks; `/stalwart-admin/` can be disabled by default.
+
+### Operator console UX principles (living)
+
+1. **Overview = DSM-like package home.** Health strip + large tiles + compact
+   alert chips when residual. Not agent residual walls, not env-var dumps as
+   the hero, not a second copy of System.
+2. **Glanceable tiles first.** One-word or big-number status on tiles (Mail OK/
+   Down, Onion Off/Ready/Missing, Vault Off/Linked, domain/account counts).
+   Env names and long enable paths belong on **System** (and Login technical
+   notes).
+3. **Honesty unchanged.** No invent mailboxes, onions, Vaultwarden URLs, or
+   host IPs. Empty is fine. Directory unavailable => honest 0 accounts.
+4. **Yellow is for true warnings**, not every residual card. Neutral cyan for
+   not-provisioned / not-linked setup items.
+5. **DOGE only** (pure 3-bit RGB, dark only). No NPM, no second CSS pipeline
+   unless operator directs.
+6. **System** is the home for technical residual, hostnames table, runbook
+   pointers, and JSON API catalog.
 
 ### Phase 3 - Real webmail in v1
 
@@ -225,6 +354,7 @@ an encouraged path, not a gate.
 | GET | `/api/v1/stalwart/status` | Best-effort upstream probe |
 | GET | `/api/v1/domains` | Inventory (Nix and/or Stalwart) |
 | GET/POST | `/api/v1/accounts` | Directory operations |
+| POST | `/api/v1/accounts/console` | Administrator attach/clear npub on a mailbox (session CSRF; map write; listing optional) |
 | POST | `/api/v1/jmap` | Honest 501 today (`jmap_proxy_not_implemented`); authenticated JMAP proxy residual |
 | GET | `/api/v1/auth/challenge` | Absolute `u` URL, method, skew, kind 27235 |
 | POST | `/api/v1/auth/session` | NIP-98 exchange -> Set-Cookie session |

@@ -117,16 +117,69 @@ pub async fn list_accounts(State(state): State<Arc<AppState>>) -> Json<AccountsI
     Json(state.directory.list_accounts().await)
 }
 
-/// JSON body for `POST /api/v1/accounts` (lean create; optional csrf for double-submit).
-#[derive(Debug, Deserialize)]
+/// JSON body for `POST /api/v1/accounts` (portal create + optional password/npub).
+///
+/// Client `domain_id` is ignored. Server looks up Domain id from the primary
+/// domain. Password/confirm/npub/role are optional so lab create stays lean.
+#[derive(Deserialize)]
 pub struct CreateAccountBody {
     pub name: String,
-    pub domain_id: String,
+    /// Ignored when present. Kept so older clients still deserialize.
+    #[serde(default)]
+    pub domain_id: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// Double-submit CSRF when using session cookie (header preferred).
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub confirm: Option<String>,
+    /// Optional npub (bech32 or hex). Empty means IMAP/SMTP only.
+    #[serde(default)]
+    pub npub: Option<String>,
+    /// Console role: `user` (default) or `administrator`. Not a Stalwart role.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Session-bound CSRF when using a session cookie (header preferred).
     #[serde(default)]
     pub csrf: Option<String>,
+}
+
+impl std::fmt::Debug for CreateAccountBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateAccountBody")
+            .field("name", &self.name)
+            .field("domain_id", &self.domain_id.as_ref().map(|_| "[ignored]"))
+            .field("description", &self.description)
+            .field("password", &self.password.as_ref().map(|_| "[redacted]"))
+            .field("confirm", &self.confirm.as_ref().map(|_| "[redacted]"))
+            .field("npub", &self.npub.as_ref().map(|_| "[present]"))
+            .field("role", &self.role)
+            .field("csrf", &self.csrf.as_ref().map(|_| "[present]"))
+            .finish()
+    }
+}
+
+/// JSON body for `POST /api/v1/accounts/console` (attach/clear npub + role).
+#[derive(Deserialize)]
+pub struct GrantConsoleBody {
+    pub mailbox: String,
+    #[serde(default)]
+    pub npub: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub csrf: Option<String>,
+}
+
+impl std::fmt::Debug for GrantConsoleBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrantConsoleBody")
+            .field("mailbox", &self.mailbox)
+            .field("npub", &self.npub.as_ref().map(|_| "[present]"))
+            .field("role", &self.role)
+            .field("csrf", &self.csrf.as_ref().map(|_| "[present]"))
+            .finish()
+    }
 }
 
 /// JSON body for `PATCH /api/v1/accounts/{id}` (description patch; optional csrf).
@@ -138,13 +191,67 @@ pub struct UpdateAccountBody {
     pub csrf: Option<String>,
 }
 
+/// JSON body for `POST /api/v1/accounts/password` (mailbox password set).
+///
+/// Password fields are never written back into the JSON response.
+#[derive(Deserialize)]
+pub struct SetMailboxPasswordBody {
+    pub mailbox: String,
+    pub password: String,
+    pub confirm: String,
+    #[serde(default)]
+    pub csrf: Option<String>,
+}
+
+impl std::fmt::Debug for SetMailboxPasswordBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetMailboxPasswordBody")
+            .field("mailbox", &self.mailbox)
+            .field("password", &"[redacted]")
+            .field("confirm", &"[redacted]")
+            .field("csrf", &self.csrf.as_ref().map(|_| "[present]"))
+            .finish()
+    }
+}
+
+/// JSON body for `POST /api/v1/accounts/nwc` (save or clear NWC URI).
+///
+/// Empty `uri` clears the stored connection. The URI is never written into
+/// the JSON response.
+#[derive(Deserialize)]
+pub struct SetNwcBody {
+    pub mailbox: String,
+    #[serde(default)]
+    pub uri: Option<String>,
+    #[serde(default)]
+    pub csrf: Option<String>,
+}
+
+impl std::fmt::Debug for SetNwcBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetNwcBody")
+            .field("mailbox", &self.mailbox)
+            .field("uri", &self.uri.as_ref().map(|_| "[redacted]"))
+            .field("csrf", &self.csrf.as_ref().map(|_| "[present]"))
+            .finish()
+    }
+}
+
 /// Create principal via directory strategy. Handler enforces auth coupling + CSRF
-/// at the route layer in `main` (this module only maps directory results).
+/// at the route layer in `main`. Administrator only unless lab auth-off escape.
 pub async fn create_account_via_directory(
     state: &AppState,
     body: CreateAccountBody,
+    principal: Option<&surmount_management_ui::console_accounts::RequestPrincipal>,
 ) -> (StatusCode, Json<Value>) {
-    use crate::directory::{CreateAccountInput, require_mutation_auth_coupling};
+    use crate::directory::{
+        CreateAccountInput, SetMailboxPasswordInput, normalize_mailbox_local_part,
+        require_mutation_auth_coupling,
+    };
+    use surmount_management_ui::auth::normalize_pubkey_token;
+    use surmount_management_ui::console_accounts::{
+        ConsoleRole, load_console_accounts, update_console_accounts,
+    };
 
     if let Err(msg) = require_mutation_auth_coupling(
         state.config.auth.mode,
@@ -155,16 +262,204 @@ pub async fn create_account_via_directory(
             Json(json!({"ok": false, "error": msg})),
         );
     }
+    if state.config.auth.mode.is_nostr() && !principal.is_some_and(|p| p.is_administrator()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "error": "Administrator role required to create a mailbox."
+            })),
+        );
+    }
+
+    let local = match normalize_mailbox_local_part(&body.name) {
+        Ok(n) => n,
+        Err(msg) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": msg})),
+            );
+        }
+    };
+    let address = format!("{}@{}", local, state.config.primary_domain);
+
+    let password = body
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let confirm = body
+        .confirm
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match (
+        password,
+        confirm,
+        body.password.is_some(),
+        body.confirm.is_some(),
+    ) {
+        (Some(p), Some(c), _, _) if p != c => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": "Passwords do not match."})),
+            );
+        }
+        (None, _, true, _) | (_, None, _, true) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": "Password required."})),
+            );
+        }
+        _ => {}
+    }
+
+    let npub_hex = match body
+        .npub
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw) => match normalize_pubkey_token(raw) {
+            Ok(hex) => Some(hex),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"ok": false, "error": format!("Invalid npub: {e}")})),
+                );
+            }
+        },
+        None => None,
+    };
+    let role = match ConsoleRole::parse(body.role.as_deref().unwrap_or("")) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": e})),
+            );
+        }
+    };
+
+    if let Some(hex) = npub_hex.as_deref() {
+        match load_console_accounts(&state.config.console_accounts_path) {
+            Ok(map) if map.has_npub(hex) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "ok": false,
+                        "error": "npub already bound to another mailbox"
+                    })),
+                );
+            }
+            Ok(_) => {}
+            // Unreadable / refused map: still create the mailbox. The write
+            // below fails closed (console_saved: false). Do not abort here.
+            Err(_) => {}
+        }
+    }
+
+    let domain = state
+        .directory
+        .lookup_domain_id(&state.config.primary_domain)
+        .await;
+    if !domain.ok {
+        let status = if domain.source == "unavailable" {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return (
+            status,
+            Json(json!({
+                "ok": false,
+                "source": domain.source,
+                "error": domain.note,
+            })),
+        );
+    }
+    let domain_id = domain.domain_id.unwrap_or_default();
 
     let result = state
         .directory
         .create_account(CreateAccountInput {
-            name: body.name,
-            domain_id: body.domain_id,
+            name: local.clone(),
+            domain_id,
             description: body.description,
         })
         .await;
-    mutation_result_to_response(result)
+    if !result.ok {
+        return mutation_result_to_response(result);
+    }
+
+    let mut password_set = false;
+    let mut password_note = None;
+    if let Some(secret) = password {
+        let lookup_addr = result
+            .account
+            .as_ref()
+            .map(|a| a.address.clone())
+            .unwrap_or_else(|| address.clone());
+        let pw = state
+            .directory
+            .set_mailbox_password(SetMailboxPasswordInput {
+                mailbox: lookup_addr,
+                password: secret.to_string(),
+            })
+            .await;
+        password_set = pw.ok;
+        if !pw.ok {
+            password_note = Some(pw.note);
+        }
+    }
+
+    let mut console_saved = true;
+    let mut console_note = None;
+    let map_err = update_console_accounts(&state.config.console_accounts_path, |file| {
+        file.upsert_mailbox(&address, npub_hex.clone(), role)
+    })
+    .err();
+    if let Some(e) = map_err {
+        console_saved = false;
+        console_note = Some(format!("Mailbox exists; console login was not saved. {e}"));
+    }
+
+    let mut note = if password.is_some() && !password_set {
+        password_note.unwrap_or_else(|| {
+            "Mailbox exists; password was not set. Finish on the password card.".into()
+        })
+    } else if !console_saved {
+        console_note.unwrap_or_else(|| "Mailbox exists; console login was not saved.".into())
+    } else if password_set {
+        format!("Created {address} and set the password. Evolution User Name is the full address.")
+    } else {
+        result.note
+    };
+    if password.is_some() && !password_set && !note.to_ascii_lowercase().contains("mailbox exists")
+    {
+        note = format!("Mailbox exists; password was not set. Finish on the password card. {note}");
+    }
+    if npub_hex.is_none() && console_saved && password_set {
+        note.push_str(" No npub: IMAP/SMTP only.");
+    }
+
+    let mut body = json!({
+        "ok": true,
+        "created": true,
+        "password_set": password_set,
+        "console_saved": console_saved,
+        "address": address,
+        "source": result.source,
+        "note": note,
+    });
+    if let Some(acc) = result.account {
+        body["account"] = json!(acc);
+    }
+    if !console_saved || (password.is_some() && !password_set) {
+        body["ok"] = json!(false);
+        body["error"] = json!(note);
+    }
+    (StatusCode::OK, Json(body))
 }
 
 /// Update principal via directory strategy (auth + CSRF enforced in route layer).
@@ -195,6 +490,389 @@ pub async fn update_account_via_directory(
     mutation_result_to_response(result)
 }
 
+/// Attach or clear a console npub and set role on an existing mailbox.
+pub async fn grant_console_via_directory(
+    state: &AppState,
+    body: GrantConsoleBody,
+    principal: Option<&surmount_management_ui::console_accounts::RequestPrincipal>,
+) -> (StatusCode, Json<Value>) {
+    use crate::directory::require_mutation_auth_coupling;
+    use surmount_management_ui::auth::normalize_pubkey_token;
+    use surmount_management_ui::console_accounts::{
+        ConsoleRole, load_console_accounts, update_console_accounts,
+    };
+
+    if let Err(msg) = require_mutation_auth_coupling(
+        state.config.auth.mode,
+        state.config.allow_directory_unauthenticated,
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"ok": false, "error": msg})),
+        );
+    }
+    if state.config.auth.mode.is_nostr() && !principal.is_some_and(|p| p.is_administrator()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "error": "Administrator role required to grant console login."
+            })),
+        );
+    }
+
+    let mailbox = body.mailbox.trim().to_string();
+    if mailbox.is_empty() || !mailbox.contains('@') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Mailbox address required (user@domain)."
+            })),
+        );
+    }
+
+    // Validate npub before directory lookup so garbage is 400 even when
+    // listing is unavailable. Portal login is the console map, not Stalwart.
+    let npub_hex = match body
+        .npub
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(raw) => match normalize_pubkey_token(raw) {
+            Ok(hex) => Some(hex),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"ok": false, "error": format!("Invalid npub: {e}")})),
+                );
+            }
+        },
+        None => None,
+    };
+    let role = match ConsoleRole::parse(body.role.as_deref().unwrap_or("")) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": e})),
+            );
+        }
+    };
+
+    let looked = state.directory.lookup_mailbox(&mailbox).await;
+    let map = match load_console_accounts(&state.config.console_accounts_path) {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": e})),
+            );
+        }
+    };
+    let address = if looked.ok {
+        looked
+            .account
+            .as_ref()
+            .map(|a| a.address.clone())
+            .unwrap_or_else(|| mailbox.to_ascii_lowercase())
+    } else if map.by_mailbox(&mailbox).is_some() {
+        // IMAP-only map row (for example hunter) without a live directory hit.
+        mailbox.to_ascii_lowercase()
+    } else if looked.source == "unavailable" {
+        // Live default: directory listing off. Operator names an existing
+        // mailbox; bind writes the map so that npub can log into the portal.
+        mailbox.to_ascii_lowercase()
+    } else {
+        let status = StatusCode::BAD_REQUEST;
+        return (
+            status,
+            Json(json!({
+                "ok": false,
+                "source": looked.source,
+                "error": looked.note,
+            })),
+        );
+    };
+    if let Some(hex) = npub_hex.as_deref() {
+        if let Some(existing) = map.by_npub(hex)
+            && existing.mailbox_normalized().as_deref() != Some(address.as_str())
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "ok": false,
+                    "error": "npub already bound to another mailbox"
+                })),
+            );
+        }
+    }
+    if let Err(e) = update_console_accounts(&state.config.console_accounts_path, |file| {
+        file.upsert_mailbox(&address, npub_hex.clone(), role)
+    }) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": e})),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "mailbox": address,
+            "role": role.as_str(),
+            "console_login": npub_hex.is_some(),
+            "note": if npub_hex.is_some() {
+                "Console login saved for this mailbox."
+            } else {
+                "Console npub cleared. Mailbox is IMAP/SMTP only."
+            },
+        })),
+    )
+}
+
+/// Set mailbox password via directory (auth + CSRF enforced in the route layer).
+///
+/// Rejects confirm mismatch before talking to Stalwart. Response never includes
+/// the password or confirm values. Console User may set only their bound address.
+pub async fn set_mailbox_password_via_directory(
+    state: &AppState,
+    body: SetMailboxPasswordBody,
+    principal: Option<&surmount_management_ui::console_accounts::RequestPrincipal>,
+) -> (StatusCode, Json<Value>) {
+    use crate::directory::{SetMailboxPasswordInput, require_mutation_auth_coupling};
+    use surmount_management_ui::console_accounts::ConsoleRole;
+
+    if let Err(msg) = require_mutation_auth_coupling(
+        state.config.auth.mode,
+        state.config.allow_directory_unauthenticated,
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"ok": false, "error": msg})),
+        );
+    }
+    // Nostr with no resolved principal (NIP-98 URL miss, leftover none)
+    // is 403 before any directory call. Lab auth-off stays coupling-only.
+    if state.config.auth.mode.is_nostr() && principal.is_none() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "error": "No console role for this session."
+            })),
+        );
+    }
+
+    let mailbox = body.mailbox.trim().to_string();
+    if mailbox.is_empty() || !mailbox.contains('@') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Mailbox address required (user@domain)."
+            })),
+        );
+    }
+    // Administrator: any mailbox. User: bound mailbox only. Role None
+    // (leftover cookie, no map row, not on the live allowlist) is 403.
+    if let Some(p) = principal {
+        match p.role {
+            Some(ConsoleRole::Administrator) => {}
+            Some(ConsoleRole::User) => {
+                let allowed = p
+                    .bound_mailbox()
+                    .is_some_and(|own| own.eq_ignore_ascii_case(&mailbox));
+                if !allowed {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "ok": false,
+                            "error": "Users may set only their own mailbox password."
+                        })),
+                    );
+                }
+            }
+            None => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "ok": false,
+                        "error": "No console role for this session."
+                    })),
+                );
+            }
+        }
+    }
+    if body.password != body.confirm {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Passwords do not match."
+            })),
+        );
+    }
+    if body.password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Password required."
+            })),
+        );
+    }
+
+    let result = state
+        .directory
+        .set_mailbox_password(SetMailboxPasswordInput {
+            mailbox,
+            password: body.password,
+        })
+        .await;
+    if result.ok
+        && let Some(addr) = result.mailbox.as_deref()
+    {
+        let _ = surmount_management_ui::console_accounts::update_console_accounts(
+            &state.config.console_accounts_path,
+            |file| {
+                file.mark_password_set(addr);
+                Ok(())
+            },
+        );
+    }
+    password_result_to_response(result)
+}
+
+/// Save or clear a contributor NWC URI (wallet, not login).
+pub async fn set_nwc_via_directory(
+    state: &AppState,
+    body: SetNwcBody,
+    principal: Option<&surmount_management_ui::console_accounts::RequestPrincipal>,
+) -> (StatusCode, Json<Value>) {
+    use crate::directory::require_mutation_auth_coupling;
+    use surmount_management_ui::console_accounts::ConsoleRole;
+    use surmount_management_ui::nwc::{clear_nwc_uri, nwc_connected, save_nwc_uri};
+
+    if let Err(msg) = require_mutation_auth_coupling(
+        state.config.auth.mode,
+        state.config.allow_directory_unauthenticated,
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"ok": false, "error": msg})),
+        );
+    }
+    if state.config.auth.mode.is_nostr() && principal.is_none() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "error": "No console role for this session."
+            })),
+        );
+    }
+
+    let mailbox = body.mailbox.trim().to_string();
+    if mailbox.is_empty() || !mailbox.contains('@') {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "error": "Mailbox address required (user@domain)."
+            })),
+        );
+    }
+    if let Some(p) = principal {
+        match p.role {
+            Some(ConsoleRole::Administrator) => {}
+            Some(ConsoleRole::User) => {
+                let allowed = p
+                    .bound_mailbox()
+                    .is_some_and(|own| own.eq_ignore_ascii_case(&mailbox));
+                if !allowed {
+                    return (
+                        StatusCode::FORBIDDEN,
+                        Json(json!({
+                            "ok": false,
+                            "error": "Users may set only their own wallet connection."
+                        })),
+                    );
+                }
+            }
+            None => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({
+                        "ok": false,
+                        "error": "No console role for this session."
+                    })),
+                );
+            }
+        }
+    }
+
+    let uri = body.uri.as_deref().map(str::trim).unwrap_or("");
+    if uri.is_empty() {
+        if let Err(e) = clear_nwc_uri(&state.config.nwc_store_path, &mailbox) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"ok": false, "error": e})),
+            );
+        }
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "mailbox": mailbox,
+                "connected": false,
+                "note": "Wallet connection cleared."
+            })),
+        );
+    }
+    if let Err(e) = save_nwc_uri(&state.config.nwc_store_path, &mailbox, uri) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"ok": false, "error": e})),
+        );
+    }
+    let connected = nwc_connected(&state.config.nwc_store_path, &mailbox).unwrap_or(true);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "mailbox": mailbox,
+            "connected": connected,
+            "note": "Wallet connected. Payments use this NWC wallet."
+        })),
+    )
+}
+
+fn password_result_to_response(
+    result: crate::directory::MailboxPasswordResult,
+) -> (StatusCode, Json<Value>) {
+    let status = if result.ok {
+        StatusCode::OK
+    } else if result.source == "unavailable" {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    let mut body = json!({
+        "ok": result.ok,
+        "source": result.source,
+        "note": result.note,
+    });
+    if let Some(mailbox) = result.mailbox {
+        body["mailbox"] = json!(mailbox);
+    }
+    if !result.ok {
+        body["error"] = json!(result.note);
+    }
+    (status, Json(body))
+}
+
 fn mutation_result_to_response(
     result: crate::directory::AccountMutationResult,
 ) -> (StatusCode, Json<Value>) {
@@ -218,13 +896,22 @@ fn mutation_result_to_response(
     (status, Json(body))
 }
 
-/// Thin system status for operators (JSON). Includes optional onion when configured.
+/// Thin system status for operators (JSON). Includes onion surface status and
+/// Vaultwarden link when configured. Never secrets / admin token / nsec.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SystemStatus {
     pub service: &'static str,
     pub version: &'static str,
-    /// Operator-published onion URL (`http://….onion`) or null when unset.
+    /// Operator-published onion URL (`http://….onion`) or null when not configured.
     pub onion: Option<String>,
+    /// `configured` | `hostname_missing` | `not_provisioned` (host Arti path).
+    pub onion_status: &'static str,
+    /// Currently loaded clearnet Host -> onion discovery map (start-of-process).
+    pub onion_discovery: crate::onion_discovery::OnionDiscoveryDump,
+    /// True when an operator-published Vaultwarden URL is set (domain C).
+    pub vaultwarden_configured: bool,
+    /// Operator-published Vaultwarden URL, or null when residual not configured.
+    pub vaultwarden_url: Option<String>,
     pub primary_domain: String,
     pub mail_hostname: String,
     pub services_hostname: String,
@@ -240,10 +927,15 @@ pub fn system_status_from_config(config: &AppConfig) -> SystemStatus {
         BanEnforcement::DryRun => "dry-run",
         BanEnforcement::Enforce => "enforce",
     };
+    let vaultwarden_url = config.vaultwarden_url.clone();
     SystemStatus {
         service: "surmount-management-ui",
         version: env!("CARGO_PKG_VERSION"),
         onion: config.onion_url.clone(),
+        onion_status: config.onion_surface.status_slug(),
+        onion_discovery: config.onion_discovery.dump(),
+        vaultwarden_configured: vaultwarden_url.is_some(),
+        vaultwarden_url,
         primary_domain: config.primary_domain.clone(),
         mail_hostname: config.mail_hostname.clone(),
         services_hostname: config.services_hostname.clone(),
@@ -338,11 +1030,20 @@ mod tests {
             redirect_http_to_https: false,
             redirect_allowed_hosts: vec!["services.example.test".into()],
             https_allow_cleartext_escape: false,
+            acme: crate::acme::AcmeConfig::default(),
+            mta_sts_mode: crate::mta_sts::MtaStsMode::Off,
+            mta_sts_max_age: 86_400,
             primary_domain: "example.test".into(),
             mail_hostname: "mail.example.test".into(),
             services_hostname: "services.example.test".into(),
             stalwart_url: "http://127.0.0.1:8080".into(),
+            onion_surface: crate::config::OnionSurface::NotProvisioned,
             onion_url: None,
+            onion_discovery: crate::onion_discovery::OnionDiscoveryConfig::empty(),
+            vaultwarden_url: None,
+            vaultwarden_proxy: crate::proxy_vaultwarden::VaultwardenProxyConfig::default(),
+            apex_public_root: None,
+            static_vhosts: Default::default(),
             rate_limit_max_requests: 0,
             rate_limit_window: Duration::from_secs(60),
             rate_limit_max_keys: 1000,
@@ -358,6 +1059,9 @@ mod tests {
             },
             auth: surmount_management_ui::auth::AuthConfig::off(),
             allow_directory_unauthenticated: false,
+            allow_public_auth_off: false,
+            console_accounts_path: crate::config::unused_console_accounts_path(),
+            nwc_store_path: crate::config::unused_nwc_store_path(),
         }
     }
 
@@ -421,10 +1125,15 @@ mod tests {
     fn system_status_onion_null_when_unset() {
         let s = system_status_from_config(&sample_config());
         assert!(s.onion.is_none());
+        assert_eq!(s.onion_status, "not_provisioned");
         let blob = serde_json::to_string(&s).unwrap();
         assert!(
             blob.contains("\"onion\":null") || blob.contains("\"onion\": null"),
             "expected null onion: {blob}"
+        );
+        assert!(
+            blob.contains("\"onion_status\":\"not_provisioned\""),
+            "expected not_provisioned status: {blob}"
         );
     }
 
@@ -433,7 +1142,94 @@ mod tests {
         let mut cfg = sample_config();
         let url = "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion";
         cfg.onion_url = Some(url.into());
+        cfg.onion_surface = crate::config::OnionSurface::Configured { url: url.into() };
+        cfg.onion_discovery = crate::onion_discovery::build_onion_discovery(
+            &cfg.primary_domain,
+            &cfg.services_hostname,
+            Some(url),
+            true,
+            true,
+            Vec::new(),
+            &[],
+            &[],
+            &[] as &[&str],
+        );
         let s = system_status_from_config(&cfg);
         assert_eq!(s.onion.as_deref(), Some(url));
+        assert_eq!(s.onion_status, "configured");
+        assert!(s.onion_discovery.onion_location_enabled);
+        assert!(s.onion_discovery.alt_svc_enabled);
+        let hosts: Vec<_> = s
+            .onion_discovery
+            .mappings
+            .iter()
+            .map(|m| m.clearnet_host.as_str())
+            .collect();
+        assert!(hosts.contains(&"example.test"));
+        assert!(hosts.contains(&"www.example.test"));
+        assert!(hosts.contains(&"services.example.test"));
+        assert!(!hosts.contains(&"mail.example.test"));
+        let blob = serde_json::to_string(&s).unwrap();
+        assert!(
+            blob.contains("\"onion_discovery\""),
+            "dump must be machine-readable JSON: {blob}"
+        );
+    }
+
+    /// Named contract: hostname_missing when path set but no address material.
+    #[test]
+    fn system_status_onion_hostname_missing() {
+        let mut cfg = sample_config();
+        cfg.onion_url = None;
+        cfg.onion_surface = crate::config::OnionSurface::HostnameMissing {
+            path: Some("/run/surmount-secrets/arti/onion-service/hostname".into()),
+            hs_state_dir: Some("/run/surmount-secrets/arti/onion-service".into()),
+        };
+        let s = system_status_from_config(&cfg);
+        assert!(s.onion.is_none());
+        assert_eq!(s.onion_status, "hostname_missing");
+    }
+
+    /// Named contract: Vaultwarden residual when URL unset (no invent; no secrets).
+    #[test]
+    fn system_status_vaultwarden_unset() {
+        let s = system_status_from_config(&sample_config());
+        assert!(!s.vaultwarden_configured);
+        assert!(s.vaultwarden_url.is_none());
+        let blob = serde_json::to_string(&s).unwrap();
+        assert!(
+            blob.contains("\"vaultwarden_configured\":false")
+                || blob.contains("\"vaultwarden_configured\": false"),
+            "expected configured false: {blob}"
+        );
+        assert!(
+            blob.contains("\"vaultwarden_url\":null") || blob.contains("\"vaultwarden_url\": null"),
+            "expected null vaultwarden_url: {blob}"
+        );
+        assert!(
+            !blob.to_ascii_lowercase().contains("admin_token")
+                && !blob.contains("ADMIN_TOKEN")
+                && !blob.contains("nsec"),
+            "must not leak secrets: {blob}"
+        );
+    }
+
+    /// Named contract: Vaultwarden configured marker + URL when set.
+    #[test]
+    fn system_status_vaultwarden_when_set() {
+        let mut cfg = sample_config();
+        cfg.vaultwarden_url = Some("http://127.0.0.1:8222".into());
+        let s = system_status_from_config(&cfg);
+        assert!(s.vaultwarden_configured);
+        assert_eq!(s.vaultwarden_url.as_deref(), Some("http://127.0.0.1:8222"));
+        let blob = serde_json::to_string(&s).unwrap();
+        assert!(
+            blob.contains("http://127.0.0.1:8222"),
+            "expected vault url in json: {blob}"
+        );
+        assert!(
+            !blob.contains("ADMIN_TOKEN") && !blob.contains("admin_token"),
+            "must not include admin token: {blob}"
+        );
     }
 }

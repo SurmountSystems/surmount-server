@@ -2,10 +2,14 @@
 
 **Status:** research finding / packaging scaffold. **Not** operator acceptance
 of Day-1 PQConnect deploy.
-**Date:** 2026-07-30
+**Date:** 2026-07-30 (integration-prep dual-pin 2026-08-08)
 
 Related: [pqconnect-and-pqc.md](pqconnect-and-pqc.md),
 Surmount open **Q-PQC-*** in [open-choices.md](../open-choices.md).
+Living residual: [RESIDUAL.md](../../RESIDUAL.md), [COMPACTION-PIN.md](../COMPACTION-PIN.md).
+
+**Do not mash with D1:** TLS hybrid KEX on Axum/rustls is ordinary HTTPS.
+PQConnect is a **separate** path-layer track (D2).
 
 ---
 
@@ -24,13 +28,27 @@ checkout:
 | Package exprs | `nix/packages/*.nix` |
 
 Upstream language is **Python** (flit), not Rust. Crane / rustPlatform do not
-apply. Version in tree: **1.2.3**.
+apply. Version in tree: **1.2.3**. Principles allow **isolated** upstream
+Python for this service without a Surmount product Python control plane.
 
 ---
 
 ## How Surmount should consume (until published)
 
-Path flake input (local only):
+**Default (plan):** do **not** wire a surmount-server `flake.nix` path input
+until the human has **committed** the sibling flake (agents never invent the
+fork tip). Preferred order:
+
+1. **Human** stages and sign-commits sibling `pqconnect` flake packaging.
+2. Rebuild packages against living host channel (**nixos-26.05**). Green on
+   25.05 alone is historical evidence, not readiness.
+3. Optional local path input (operator workspace only), then pin
+   `github:SurmountSystems/pqconnect` + rev when the operator wants a
+   durable remote pin.
+4. Optional NixOS module (server unit, caps, firewall, DNS announce).
+5. Host-only keys and lab peer handshake. **Never** PQConnect keys in git.
+
+Path flake input sketch (local only; **not wired** in product flake today):
 
 ```nix
 # surmount-server/flake.nix inputs (sketch; not wired yet)
@@ -50,6 +68,26 @@ operator wants pinned.
 **Prerequisite:** flake files in the pqconnect repo must be **git-tracked**
 for `nix build` / path inputs to see them. Packaging left the tree dirty for
 the human to stage and sign-commit.
+
+**Operator-local path input exception:** only if the operator explicitly
+orders a private workspace path input. Document as operator-local; do not
+treat uncommitted sibling as a required product path; prefer gitignore over
+committing machine-absolute paths. Plan default remains: wait for human
+commit.
+
+---
+
+## Secrets and host material (absolute)
+
+| Material | In public git? |
+|----------|----------------|
+| PQConnect server/client keys | **Never** |
+| HS / TLS PEMs / age keys | **Never** (same hygiene law) |
+| Real host identity in flake attrs | **Never** |
+
+Deploy secrets stay host-only / operator channels. Scanner:
+`nix run .#surmount-private-data`. Law: [hygiene.md](../hygiene.md),
+[SECRETS.md](../SECRETS.md).
 
 ---
 
@@ -73,7 +111,8 @@ Details and Surmount path-input instructions: sibling `README-NIX.md`.
 ## Still open (product)
 
 - Wire flake input + NixOS module in surmount-server (**Q-PQC-4** packaging
-  overlay now vs later)
+  overlay now vs later). Default lean: after human commit.
 - Day-1 vs Day-2 (**Q-PQC-1**), client audience (**Q-PQC-2**), mail path
-  (**Q-PQC-3**)
+  (**Q-PQC-3**). Default lean if unanswered: Day-2 after B1 + D1 host proof.
 - Capabilities / systemd units / DNS announce checklist for production
+- Lab peer handshake proof (host-gated; not CI)

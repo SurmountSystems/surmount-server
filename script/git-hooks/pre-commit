@@ -5,7 +5,7 @@
 #   $repo/script/git-hooks/pre-commit
 #
 # Patterns only. Never paste real IPs, keys, tokens, or screenshot contents
-# into the repo. See docs/hygiene.md and script/check-private-data.sh.
+# into the repo. See docs/hygiene.md. Binary: surmount-private-data.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
@@ -13,10 +13,21 @@ repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   exit 1
 }
 
-scanner="${repo_root}/script/check-private-data.sh"
-if [[ ! -x "${scanner}" ]]; then
-  echo "pre-commit: missing executable ${scanner}" >&2
-  exit 1
+if command -v surmount-private-data >/dev/null 2>&1; then
+  exec surmount-private-data --staged
 fi
-
-exec "${scanner}" --staged
+for candidate in \
+  "${repo_root}/crates/target/release/surmount-private-data" \
+  "${repo_root}/crates/target/debug/surmount-private-data"
+do
+  if [[ -x "${candidate}" ]]; then
+    exec "${candidate}" --staged
+  fi
+done
+if command -v nix >/dev/null 2>&1; then
+  cd "${repo_root}"
+  exec nix run ".#surmount-private-data" -- --staged
+fi
+echo "pre-commit: surmount-private-data not on PATH, no crates/target build, and nix is missing." >&2
+echo "  Use nix run .#surmount-private-data -- --staged" >&2
+exit 1

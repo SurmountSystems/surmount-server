@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script src="nav.js"></script>
+    <title>Support our work - Surmount Systems</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+
+    <meta property="og:title" content="Support our work - Surmount Systems" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://surmount.systems/support.html" />
+    <meta
+      property="og:description"
+      content="The Surmount Systems Foundation is a 501(c)(3) non-profit organization."
+    />
+    <meta property="og:site_name" content="Surmount Systems" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Support our work - Surmount Systems" />
+    <meta
+      name="twitter:description"
+      content="The Surmount Systems Foundation is a 501(c)(3) non-profit organization."
+    />
+    <meta name="twitter:site" content="@SurmountSystems" />
+    <meta name="twitter:creator" content="@SurmountSystems" />
+  </head>
+  <body>
+    <header>
+      <h1 class="logo">
+        <a class="logo-link" href="index.html">
+          <span class="logo-mark" aria-hidden="true"></span>
+          <span class="logo-word" aria-hidden="true">SURMOUNT</span>
+          <span class="visually-hidden">Surmount Systems</span>
+        </a>
+      </h1>
+      <p class="tagline">Bitcoin Initiative for Quantum Security</p>
+      <nav>
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="philosophy.html">Philosophy</a></li>
+          <li><a href="contributors.html">Contributors</a></li>
+          <li><a href="support.html" aria-current="page">Support</a></li>
+        </ul>
+      </nav>
+    </header>
+    <main>
+      <h2>Support our work</h2>
+      <p>
+        The Surmount Systems Foundation is a 501(c)(3) non-profit organization.
+      </p>
+      <p>
+        We accept <a href="https://bolt12.org/">BOLT-12</a> Lightning payments:
+      </p>
+      <p>
+        <code class="invoice" id="bolt-12">lno1pgmyx6rpwf5hgctzd3jjqer0deshg6t0dcs8gmeqw35x2gznw4ex6mm4de6zq5mewd6x2mtnyprx7atwv3shg6t0dcgvcquxfmcztl0gldv8mxy3sm8x5jscdz27u39fy6luxu8zcdn9j73l3upa9zywtymqal5a84lr7ra7fuyak2wd7980f0a6tanlzgglfqt9n3qzqv43qnvz0szkkh5g2tl56pl0fuj8emyvua9ugcaw68x968h3pj4n2qpng048pzvgnrkshz2tu8utgs8zc7vl9ff0t79c4hnzqwkug4j6yda38klaak8e2vpnmrp4k55z6y475scr4cpauugkl6vgvmny3e05xyk4sh2vtevnf3trwnjk7vjxpv5exk3e4xqqzq4stumfmnfwszp6lyt8e4nyf5nq</code>
+      </p>
+      <p>
+        <button type="button" id="copy-invoice">Copy Lightning offer</button>
+      </p>
+      <p>
+        To request a receipt, DM
+        <a href="https://x.com/SurmountSystems">@SurmountSystems</a>
+        on X.
+      </p>
+    </main>
+    <script>
+      (function () {
+        var invoice = document.getElementById("bolt-12");
+        var button = document.getElementById("copy-invoice");
+        if (!invoice || !button) {
+          return;
+        }
+
+        function flashCopied() {
+          invoice.classList.add("copied");
+          window.setTimeout(function () {
+            invoice.classList.remove("copied");
+          }, 800);
+        }
+
+        function copyInvoice() {
+          var text = invoice.textContent || "";
+          if (!navigator.clipboard || !navigator.clipboard.writeText) {
+            return;
+          }
+          navigator.clipboard.writeText(text).then(flashCopied, function () {
+            // Leave the offer text selectable if clipboard write fails.
+          });
+        }
+
+        button.addEventListener("click", copyInvoice);
+        invoice.addEventListener("click", copyInvoice);
+      })();
+    </script>
+  </body>
+</html>

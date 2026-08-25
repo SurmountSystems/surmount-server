@@ -2,6 +2,8 @@
 result
 result-*
 crates/target/
+*.rmeta
+*.rlib
 
 # Editor / OS
 .DS_Store
@@ -16,6 +18,11 @@ crates/target/
 secrets/**/*.decrypted.*
 .env
 .env.*
+
+# Private host-local overlay (hardware, SSH pubs, net, real hostname).
+# Never commit. Flake auto-imports when present (path flake / deploy rsync).
+# See docs/deploy-host-local.md.
+/host-local/
 
 # sops age keys must never land in the repo
 keys.txt

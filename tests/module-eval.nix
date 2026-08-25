@@ -16,6 +16,19 @@ let
   # Cheap stand-ins so eval does not pull Stalwart binary FOD or real arti.
   # arti = stock client-shaped fake (no surmountOnionServiceCapable).
   # artiOnionService = Surmount service-capable fake (passthru claim only).
+  # Cheap stand-in so vaultwarden enable does not pull real package FOD.
+  fakeVaultwarden =
+    let
+      bin = pkgs.writeShellScriptBin "vaultwarden" "exit 0";
+    in
+    bin
+    // {
+      pname = "vaultwarden-fake";
+      # Stock module: package.override { dbBackend = ... }.
+      override = _: bin // { pname = "vaultwarden-fake"; };
+      webvault = pkgs.writeTextDir "share/vaultwarden/vault/index.html" "ok";
+    };
+
   fakeOverlay = _final: prev: {
     stalwart-mail = (prev.writeShellScriptBin "stalwart" "exit 0") // {
       pname = "stalwart-mail-fake";
@@ -23,10 +36,28 @@ let
       webui = null;
     };
     stalwart-cli = prev.writeShellScriptBin "stalwart-cli" "exit 0";
+    # mail.nix puts pkgs.vandelay on systemPackages. t36 (and any
+    # systemPackages walk) forces that attr; keep it a cheap fake.
+    vandelay = prev.writeShellScriptBin "vandelay" "exit 0";
+    surmount-mail-import = prev.writeShellScriptBin "surmount-mail-import-maildir" "exit 0";
+    surmount-deploy-host = prev.writeShellScriptBin "surmount-deploy-host" "exit 0";
     surmount-management-ui = prev.writeShellScriptBin "surmount-management-ui" "exit 0";
+    # Packaged DNS-01 hook **code** (fake; real package is nix/packages/...).
+    acme-dns-hook-namecheap = prev.writeShellScriptBin "acme-dns-hook-namecheap" "exit 0";
+    # Packaged apex/www site (fake; real package is nix/packages/surmount-public-site.nix).
+    surmount-public-site =
+      (prev.writeTextDir "index.html" ''
+        <title>Surmount Systems</title>
+        BIP 360 Grok OSS
+      '')
+      // {
+        pname = "surmount-public-site";
+      };
+    vaultwarden = fakeVaultwarden;
     arti = prev.writeShellScriptBin "arti" "exit 0" // {
       pname = "arti";
     };
+    surmount-niced-builder = prev.writeShellScriptBin "surmount-niced-builder" "exit 0";
     artiOnionService = prev.writeShellScriptBin "arti" "exit 0" // {
       pname = "arti-onion-service";
       passthru = {
@@ -38,8 +69,14 @@ let
     };
   };
 
+  # extra is surmount attrs. Optional __extraModules: list of extra NixOS modules
+  # (for host-level services.* mkForce, etc.) stripped before surmount merge.
   evalSurmount =
     extra:
+    let
+      extraModules = extra.__extraModules or [ ];
+      surmountExtra = builtins.removeAttrs extra [ "__extraModules" ];
+    in
     lib.nixosSystem {
       system = pkgs.stdenv.hostPlatform.system;
       modules = [
@@ -70,11 +107,12 @@ let
                 artiHiddenService.startDaemon = lib.mkDefault false;
                 artiHiddenService.acceptIncompleteOnionConfig = lib.mkDefault false;
               }
-              extra
+              surmountExtra
             ];
           }
         )
-      ];
+      ]
+      ++ extraModules;
     };
 
   failedAssertions = eval: builtins.filter (a: !a.assertion) eval.config.assertions;
@@ -95,11 +133,87 @@ let
     assert e.config.surmount.artiHiddenService.backendAddress == null;
     assert e.config.surmount.managementUi.listenMode == "http";
     assert e.config.surmount.managementUi.allowCleartextHttpsEscape == false;
+    assert e.config.surmount.managementUi.consoleAccountsFile == "";
+    assert e.config.surmount.managementUi.nwcStoreFile == "";
+    assert e.config.surmount.managementUi.directory == "unavailable";
     # Product default: nginx transitional edge off (Axum-first public path).
     assert e.config.surmount.web.enable == false;
     assert e.config.services.nginx.enable == false;
+    # Remote builder cap is opt-in (host-local). Scaffold off.
+    assert e.config.surmount.remoteBuilder.enable == false;
+    # Paper trail default on: persistent journal with a size cap (not a SKU).
+    assert e.config.surmount.logging.enable == true;
+    assert e.config.surmount.logging.systemMaxUse == "1G";
+    assert e.config.surmount.logging.runtimeMaxUse == "256M";
+    assert e.config.surmount.remoteBuilder.memoryMax == "4G";
+    assert e.config.surmount.remoteBuilder.cpuQuota == "auto";
+    assert e.config.surmount.remoteBuilder.maxJobs == 8;
+    assert e.config.surmount.remoteBuilder.diskGuardPercent == 95;
+    assert e.config.surmount.lake.enable == false;
+    assert e.config.surmount.lake.jobs == 4;
+    assert e.config.surmount.logging.rateLimitBurst == "50000";
+    # Domain C Vaultwarden stays off on sample defaults (no production footgun).
+    assert e.config.surmount.vaultwarden.enable == false;
+    assert e.config.services.vaultwarden.enable or false == false;
+    assert e.config.surmount.managementUi.vaultwardenUrl == "";
     assert failedAssertions e == [ ];
     "t1-defaults-ok";
+
+  # P1: Stalwart free-public-443 apply template is installed for operators;
+  # product firewall SoT opens :443 for Axum edge; Stalwart openFirewall
+  # default stays false (mail.nix mkDefault).
+  t1b-p1-free-443-plan-and-firewall =
+    let
+      e = evalSurmount { };
+      etc = e.config.environment.etc;
+      planEntry = etc."surmount/stalwart/free-public-443-for-axum-edge.ndjson" or null;
+      readmeEntry = etc."surmount/stalwart/README-free-public-443.txt" or null;
+      planText =
+        if planEntry == null then
+          ""
+        else if planEntry ? source then
+          builtins.readFile planEntry.source
+        else if planEntry ? text then
+          planEntry.text
+        else
+          "";
+      fw = e.config.networking.firewall.allowedTCPPorts;
+    in
+    assert planEntry != null;
+    assert readmeEntry != null;
+    assert lib.hasInfix "NetworkListener" planText;
+    assert lib.hasInfix "https" planText;
+    assert lib.hasInfix "127.0.0.1:8080" planText;
+    assert lib.hasInfix "destroy" planText;
+    assert builtins.elem 80 fw;
+    assert builtins.elem 443 fw;
+    assert builtins.elem 25 fw;
+    assert e.config.services.stalwart.openFirewall == false;
+    assert failedAssertions e == [ ];
+    "t1b-p1-free-443-plan-and-firewall-ok";
+
+  # Mailbox password hashing: host README pins Stalwart Argon2id default.
+  t1c-mailbox-password-argon2id-readme =
+    let
+      e = evalSurmount { };
+      etc = e.config.environment.etc;
+      readmeEntry = etc."surmount/stalwart/README-mailbox-password-argon2id.txt" or null;
+      readmeText =
+        if readmeEntry == null then
+          ""
+        else if readmeEntry ? source then
+          builtins.readFile readmeEntry.source
+        else if readmeEntry ? text then
+          readmeEntry.text
+        else
+          "";
+    in
+    assert readmeEntry != null;
+    assert lib.hasInfix "argon2id" readmeText;
+    assert lib.hasInfix "passwordHashAlgorithm" readmeText;
+    assert lib.hasInfix "does not pre-hash" readmeText;
+    assert failedAssertions e == [ ];
+    "t1c-mailbox-password-argon2id-readme-ok";
 
   t2-require-empty-paths-asserts =
     let
@@ -196,6 +310,48 @@ let
     # Derived backend tracks managementUi defaults when backendAddress is null.
     assert lib.hasInfix "127.0.0.1:8090" toml;
     "t5-arti-enable-no-daemon-ok";
+
+  # Onion console surface: when Arti HS is enabled and management UI is on,
+  # derive hostname file + HS state dir env (never invent a live .onion).
+  t5b-arti-enable-derives-ui-onion-hostname-env =
+    let
+      e = evalSurmount {
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+        artiHiddenService.onionServiceStateDir = "/run/surmount-secrets/arti/onion-service";
+        managementUi.enable = true;
+      };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = lib.concatStringsSep "\n" envList;
+      hsDir = e.config.surmount.artiHiddenService.onionServiceStateDir;
+    in
+    assert failedAssertions e == [ ];
+    assert lib.hasInfix "SURMOUNT_ONION_HOSTNAME_FILE=${hsDir}/hostname" envBlob;
+    assert lib.hasInfix "SURMOUNT_ONION_HS_STATE_DIR=${hsDir}" envBlob;
+    # No invented onion URL env when onionUrl option empty.
+    assert !(lib.hasInfix "SURMOUNT_ONION_URL=" envBlob);
+    "t5b-arti-enable-derives-ui-onion-hostname-env-ok";
+
+  # Explicit managementUi.onionHostnameFile wins over Arti derive.
+  t5c-onion-hostname-file-option-wins =
+    let
+      e = evalSurmount {
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+        managementUi.enable = true;
+        managementUi.onionHostnameFile = "/run/surmount-secrets/arti/custom-hostname";
+      };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = lib.concatStringsSep "\n" envList;
+    in
+    assert failedAssertions e == [ ];
+    assert lib.hasInfix "SURMOUNT_ONION_HOSTNAME_FILE=/run/surmount-secrets/arti/custom-hostname"
+      envBlob;
+    assert
+      !(lib.hasInfix "SURMOUNT_ONION_HOSTNAME_FILE=/run/surmount-secrets/arti/onion-service/hostname" envBlob);
+    "t5c-onion-hostname-file-option-wins-ok";
 
   # Complete management-publish config: startDaemon does NOT need acceptIncomplete.
   t6-arti-start-daemon-complete-no-accept =
@@ -549,6 +705,8 @@ let
         managementUi.listenMode = "https";
         managementUi.listenAddress = "0.0.0.0";
         managementUi.port = 443;
+        # Public primary requires authMode=nostr (footgun guard).
+        managementUi.authMode = "nostr";
         managementUi.allowCleartextHttpsEscape = false;
         managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
         managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
@@ -579,6 +737,7 @@ let
         managementUi.listenMode = "https";
         managementUi.listenAddress = "0.0.0.0";
         managementUi.port = 443;
+        managementUi.authMode = "nostr";
         managementUi.allowCleartextHttpsEscape = false;
         managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
         managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
@@ -666,6 +825,7 @@ let
         managementUi.listenMode = "https";
         managementUi.listenAddress = "0.0.0.0";
         managementUi.port = 443;
+        managementUi.authMode = "nostr";
         managementUi.localCleartextListen = "127.0.0.1:9191";
         managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
         managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
@@ -705,6 +865,7 @@ let
         managementUi.listenMode = "https";
         managementUi.listenAddress = "0.0.0.0";
         managementUi.port = 8090;
+        managementUi.authMode = "nostr";
         managementUi.allowCleartextHttpsEscape = false;
         managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
         managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
@@ -860,6 +1021,7 @@ let
         managementUi.allowCleartextHttpsEscape = false;
         managementUi.listenAddress = "0.0.0.0";
         managementUi.port = 443;
+        managementUi.authMode = "nostr";
         managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
         managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
       };
@@ -890,6 +1052,113 @@ let
     assert builtins.elem "/run/surmount-secrets/tls/cert.pem" cond;
     assert builtins.elem "/run/surmount-secrets/tls/key.pem" cond;
     "t10-web-off-https-ui-no-nginx-ok";
+
+  # Public primary listen + authMode=off is refused (open-console footgun guard).
+  # Loopback auth-off remains OK; lab allowPublicAuthOff is the only escape.
+  t10b-public-listen-auth-off-asserts =
+    let
+      ePublicOff = evalSurmount {
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.listenAddress = "0.0.0.0";
+        managementUi.port = 443;
+        managementUi.authMode = "off";
+        managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
+      };
+      eLoopbackOff = evalSurmount {
+        managementUi.enable = true;
+        managementUi.listenMode = "http";
+        managementUi.listenAddress = "127.0.0.1";
+        managementUi.port = 8090;
+        managementUi.authMode = "off";
+      };
+      ePublicOffLab = evalSurmount {
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.listenAddress = "0.0.0.0";
+        managementUi.port = 443;
+        managementUi.authMode = "off";
+        managementUi.allowPublicAuthOff = true;
+        managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
+      };
+      ePublicNostr = evalSurmount {
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.listenAddress = "0.0.0.0";
+        managementUi.port = 443;
+        managementUi.authMode = "nostr";
+        managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
+      };
+      isAuthFootgun =
+        a:
+        lib.hasInfix "authMode" a.message
+        && (
+          lib.hasInfix "public" a.message || lib.hasInfix "loopback" a.message || lib.hasInfix "off" a.message
+        );
+      envLab = ePublicOffLab.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+    in
+    assert failedAssertions ePublicOff != [ ];
+    assert builtins.any isAuthFootgun (failedAssertions ePublicOff);
+    assert failedAssertions eLoopbackOff == [ ];
+    assert failedAssertions ePublicOffLab == [ ];
+    assert builtins.any (x: x == "SURMOUNT_ALLOW_PUBLIC_AUTH_OFF=1") envLab;
+    assert failedAssertions ePublicNostr == [ ];
+    assert builtins.any (
+      x: x == "SURMOUNT_AUTH_MODE=nostr"
+    ) ePublicNostr.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+    "t10b-public-listen-auth-off-asserts-ok";
+
+  # B4 public edge: allowlist file + session EnvironmentFile must be granted
+  # (ReadOnlyPaths) and missing files must keep the unit inactive (not restart).
+  t10c-nostr-allowlist-readonly-paths =
+    let
+      allowPath = "/var/lib/surmount/secrets/ui/nostr-allowlist";
+      sessPath = "/var/lib/surmount/secrets/ui/session-secret";
+      e = evalSurmount {
+        web.enable = false;
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.listenAddress = "0.0.0.0";
+        managementUi.port = 443;
+        managementUi.authMode = "nostr";
+        managementUi.tlsCertPath = "/var/lib/surmount/secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/var/lib/surmount/secrets/tls/key.pem";
+        managementUi.sessionSecretPath = sessPath;
+        managementUi.nostrAllowlistFile = allowPath;
+        managementUi.publicBaseUrl = "https://services.example.test";
+      };
+      sc = e.config.systemd.services.surmount-management-ui.serviceConfig;
+      uc = e.config.systemd.services.surmount-management-ui.unitConfig;
+      env = sc.Environment;
+      ro =
+        let
+          p = sc.ReadOnlyPaths or [ ];
+        in
+        if builtins.isList p then p else [ p ];
+      envFiles =
+        let
+          p = sc.EnvironmentFile or [ ];
+        in
+        if builtins.isList p then p else [ p ];
+      cond =
+        let
+          p = uc.ConditionPathExists or [ ];
+        in
+        if builtins.isList p then p else [ p ];
+    in
+    assert failedAssertions e == [ ];
+    assert builtins.any (x: x == "SURMOUNT_AUTH_MODE=nostr") env;
+    assert builtins.any (x: x == "SURMOUNT_NOSTR_ALLOWLIST_FILE=${allowPath}") env;
+    assert builtins.any (x: x == "SURMOUNT_PUBLIC_BASE_URL=https://services.example.test") env;
+    assert builtins.elem allowPath ro;
+    assert builtins.elem sessPath ro;
+    assert builtins.elem sessPath envFiles;
+    assert builtins.elem allowPath cond;
+    assert builtins.elem sessPath cond;
+    "t10c-nostr-allowlist-readonly-paths-ok";
 
   # Transitional escape: surmount.web.enable = true still wires nginx + ACME.
   # Documented shape: UI loopback http behind nginx (not public https).
@@ -966,6 +1235,7 @@ let
         managementUi.allowCleartextHttpsEscape = false;
         managementUi.listenAddress = "0.0.0.0";
         managementUi.port = 443;
+        managementUi.authMode = "nostr";
         managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
         managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
         managementUi.redirectHttpToHttps = true;
@@ -1369,12 +1639,962 @@ let
     assert lib.hasInfix "2001:db8::/64" envBlob;
     "t21-access-control-enforce-whitelist-env-ok";
 
+  # Domain C Vaultwarden: enable without admin token path fails closed at eval.
+  t22-vaultwarden-enable-needs-token-path =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "";
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "adminTokenEnvFile" a.message) failed;
+    "t22-vaultwarden-enable-needs-token-path-ok";
+
+  # Domain C: enable with host path wires stock VW, signups off, ConditionPathExists.
+  t23-vaultwarden-enable-with-token-path =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        managementUi.enable = true;
+      };
+      svc = e.config.systemd.services.vaultwarden;
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = lib.concatStringsSep "\n" envList;
+      vwCfg = e.config.services.vaultwarden.config;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.services.vaultwarden.enable == true;
+    assert e.config.services.vaultwarden.dbBackend == "sqlite";
+    assert e.config.services.vaultwarden.configureNginx == false;
+    assert vwCfg.SIGNUPS_ALLOWED == false;
+    assert vwCfg.ROCKET_ADDRESS == "127.0.0.1";
+    assert vwCfg.ROCKET_PORT == 8222;
+    # Admin token path is EnvironmentFile (not inline secret).
+    assert builtins.elem "/run/surmount-secrets/vaultwarden/admin.env" (
+      if builtins.isList e.config.services.vaultwarden.environmentFile then
+        e.config.services.vaultwarden.environmentFile
+      else
+        [ e.config.services.vaultwarden.environmentFile ]
+    );
+    # Missing host file => unit inactive (not restart thrash).
+    assert svc.unitConfig.ConditionPathExists != null;
+    assert lib.hasInfix "/run/surmount-secrets/vaultwarden/admin.env" (
+      if builtins.isList svc.unitConfig.ConditionPathExists then
+        lib.concatStringsSep " " svc.unitConfig.ConditionPathExists
+      else
+        toString svc.unitConfig.ConditionPathExists
+    );
+    # Console derives private loopback URL when vaultwardenUrl option empty.
+    assert lib.hasInfix "SURMOUNT_VAULTWARDEN_URL=http://127.0.0.1:8222" envBlob;
+    # Never put ADMIN_TOKEN value into UI Environment=.
+    assert !(lib.hasInfix "ADMIN_TOKEN=" envBlob);
+    "t23-vaultwarden-enable-with-token-path-ok";
+
+  # Explicit managementUi.vaultwardenUrl wins over rocket derive.
+  t24-vaultwarden-url-option-wins =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        managementUi.enable = true;
+        managementUi.vaultwardenUrl = "https://vault.example.test";
+      };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = lib.concatStringsSep "\n" envList;
+    in
+    assert failedAssertions e == [ ];
+    assert lib.hasInfix "SURMOUNT_VAULTWARDEN_URL=https://vault.example.test" envBlob;
+    assert !(lib.hasInfix "SURMOUNT_VAULTWARDEN_URL=http://127.0.0.1:8222" envBlob);
+    "t24-vaultwarden-url-option-wins-ok";
+
+  # Bad admin token path charset fails closed.
+  t25-vaultwarden-bad-token-path-asserts =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/tmp/evil;rm -rf /";
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a: lib.hasInfix "strict" a.message || lib.hasInfix "adminTokenEnvFile" a.message
+    ) failed;
+    "t25-vaultwarden-bad-token-path-asserts-ok";
+
+  # G1/S1: secret-bearing keys in extraConfig fail closed (store-bound env).
+  t26-vaultwarden-extra-config-secret-key-asserts =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        vaultwarden.extraConfig.ADMIN_TOKEN = "not-a-real-token-eval-only";
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a:
+      lib.hasInfix "ADMIN_TOKEN" a.message
+      || lib.hasInfix "secret-bearing" a.message
+      || lib.hasInfix "extraConfig" a.message
+    ) failed;
+    "t26-vaultwarden-extra-config-secret-key-asserts-ok";
+
+  # G3: extraConfig ROCKET_ADDRESS world bind is overridden to option loopback.
+  t27-vaultwarden-force-rocket-after-extra-config =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        vaultwarden.extraConfig.ROCKET_ADDRESS = "0.0.0.0";
+        vaultwarden.extraConfig.SIGNUPS_ALLOWED = true;
+      };
+      vwCfg = e.config.services.vaultwarden.config;
+    in
+    assert failedAssertions e == [ ];
+    # Force after extraConfig: option default wins; signup stays false.
+    assert vwCfg.ROCKET_ADDRESS == "127.0.0.1";
+    assert vwCfg.SIGNUPS_ALLOWED == false;
+    "t27-vaultwarden-force-rocket-after-extra-config-ok";
+
+  # S2: rocketAddress world bind fails unless allowNonLoopbackListen.
+  t28-vaultwarden-world-bind-asserts =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        vaultwarden.rocketAddress = "0.0.0.0";
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a:
+      lib.hasInfix "loopback" a.message
+      || lib.hasInfix "rocketAddress" a.message
+      || lib.hasInfix "allowNonLoopbackListen" a.message
+    ) failed;
+    "t28-vaultwarden-world-bind-asserts-ok";
+
+  # S2 escape: deliberate non-loopback with allow flag succeeds.
+  t29-vaultwarden-allow-non-loopback-ok =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        vaultwarden.rocketAddress = "0.0.0.0";
+        vaultwarden.allowNonLoopbackListen = true;
+      };
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.services.vaultwarden.config.ROCKET_ADDRESS == "0.0.0.0";
+    "t29-vaultwarden-allow-non-loopback-ok";
+
+  # S3: bad vaultwardenUrl charset/scheme fails when UI would publish env.
+  t30-vaultwarden-bad-url-asserts =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        managementUi.vaultwardenUrl = "javascript:alert(1)";
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a:
+      lib.hasInfix "vaultwardenUrl" a.message
+      || lib.hasInfix "http" a.message
+      || lib.hasInfix "charset" a.message
+    ) failed;
+    "t30-vaultwarden-bad-url-asserts-ok";
+
+  # G5: configureNginx force true fails closed.
+  t31-vaultwarden-configure-nginx-refused =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        __extraModules = [
+          (
+            { lib, ... }:
+            {
+              services.vaultwarden.configureNginx = lib.mkForce true;
+            }
+          )
+        ];
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a: lib.hasInfix "configureNginx" a.message || lib.hasInfix "nginx" a.message
+    ) failed;
+    "t31-vaultwarden-configure-nginx-refused-ok";
+
+  # G6: SMTP_PASSWORD in extraConfig also fails (second secret key).
+  t32-vaultwarden-smtp-password-extra-asserts =
+    let
+      e = evalSurmount {
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        vaultwarden.extraConfig.SMTP_PASSWORD = "not-a-real-password-eval-only";
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a: lib.hasInfix "SMTP_PASSWORD" a.message || lib.hasInfix "secret-bearing" a.message
+    ) failed;
+    "t32-vaultwarden-smtp-password-extra-asserts-ok";
+
+  # L2 Domain B: when in-process ACME is enabled, tmpfiles recreate writable
+  # parents for cert/key/account under deploy material dir (no PEM contents).
+  # ReadWritePaths covers those parents; ConditionPathExists on PEMs is skipped.
+  t33-acme-enable-tmpfiles-and-write-paths =
+    let
+      e = evalSurmount {
+        web.enable = false;
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
+        managementUi.acme.enable = true;
+        managementUi.acme.directory = "https://acme-staging-v02.api.letsencrypt.org/directory";
+        managementUi.acme.email = "ops@example.test";
+        managementUi.acme.domains = [ "services.example.test" ];
+        managementUi.acme.accountCredentialsPath = "/run/surmount-secrets/acme/account.json";
+        managementUi.acme.challenge = "dns-01";
+        managementUi.acme.dnsProvider = "mock";
+      };
+      sc = e.config.systemd.services.surmount-management-ui.serviceConfig;
+      uc = e.config.systemd.services.surmount-management-ui.unitConfig;
+      rules = e.config.systemd.tmpfiles.rules;
+      rwp = sc.ReadWritePaths;
+      env = sc.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      hasRule = needle: builtins.any (r: lib.hasInfix needle r) rules;
+    in
+    assert failedAssertions e == [ ];
+    # Durable /run parents for ACME write targets (owner surmount-ui).
+    assert hasRule "d /run/surmount-secrets 0755 root root";
+    assert hasRule "d /run/surmount-secrets/tls 0750 surmount-ui surmount-ui";
+    assert hasRule "d /run/surmount-secrets/acme 0750 surmount-ui surmount-ui";
+    # Parents on ReadWritePaths (create-on-issue under ProtectSystem=strict).
+    assert builtins.elem "/run/surmount-secrets/tls" rwp;
+    assert builtins.elem "/run/surmount-secrets/acme" rwp;
+    # First-issue path: no ConditionPathExists on PEMs when ACME on.
+    assert
+      !(builtins.hasAttr "ConditionPathExists" uc)
+      || uc.ConditionPathExists == null
+      || uc.ConditionPathExists == [ ];
+    assert
+      builtins.any (x: x == "SURMOUNT_ACME_ENABLE=true" || x == "SURMOUNT_ACME_ENABLE=1") envList
+      || builtins.any (x: lib.hasPrefix "SURMOUNT_ACME_" x) envList;
+    "t33-acme-enable-tmpfiles-and-write-paths-ok";
+
+  # external-hook defaults dnsHookPath to packaged Namecheap helper store path
+  # (code only; no Namecheap secrets on the host).
+  t33c-acme-external-hook-packaged-dns-hook =
+    let
+      e = evalSurmount {
+        web.enable = false;
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
+        managementUi.acme.enable = true;
+        managementUi.acme.directory = "https://acme-staging-v02.api.letsencrypt.org/directory";
+        managementUi.acme.email = "ops@example.test";
+        managementUi.acme.domains = [ "services.example.test" ];
+        managementUi.acme.accountCredentialsPath = "/run/surmount-secrets/acme/account.json";
+        managementUi.acme.challenge = "dns-01";
+        managementUi.acme.dnsProvider = "external-hook";
+        # dnsHookPath intentionally unset: module mkDefault to package store path.
+      };
+      hook = e.config.surmount.managementUi.acme.dnsHookPath;
+      sc = e.config.systemd.services.surmount-management-ui.serviceConfig;
+      env = sc.Environment;
+      envList = if builtins.isList env then env else [ env ];
+    in
+    assert failedAssertions e == [ ];
+    assert hook != "";
+    assert lib.hasInfix "acme-dns-hook-namecheap" hook;
+    assert builtins.any (x: lib.hasPrefix "SURMOUNT_ACME_DNS_HOOK=" x) envList;
+    "t33c-acme-external-hook-packaged-dns-hook-ok";
+
+  # H3: recoveryAdminEnvFile path-only EnvironmentFile on stalwart-mail unit.
+  t34-stalwart-recovery-envfile-path-only =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          {
+            services.stalwart.recoveryAdminEnvFile = "/var/lib/surmount/secrets/stalwart/recovery.env";
+          }
+        ];
+      };
+      sc = e.config.systemd.services.stalwart-mail.serviceConfig;
+      ef = sc.EnvironmentFile or null;
+      efList =
+        if ef == null then
+          [ ]
+        else if builtins.isList ef then
+          ef
+        else
+          [ ef ];
+      env = e.config.systemd.services.stalwart-mail.environment;
+    in
+    assert failedAssertions e == [ ];
+    assert
+      e.config.services.stalwart.recoveryAdminEnvFile
+      == "/var/lib/surmount/secrets/stalwart/recovery.env";
+    # Path only with soft-missing prefix; never password body.
+    assert builtins.any (p: lib.hasInfix "/var/lib/surmount/secrets/stalwart/recovery.env" p) efList;
+    assert builtins.any (p: lib.hasPrefix "-" p) efList;
+    assert !(builtins.any (p: lib.hasInfix "STALWART_RECOVERY_ADMIN=" p) efList);
+    assert !(env ? STALWART_RECOVERY_ADMIN);
+    "t34-stalwart-recovery-envfile-path-only-ok";
+
+  # H3: explicit empty recoveryAdminEnvFile opts out of unit EnvironmentFile.
+  t34b-stalwart-recovery-envfile-default-empty =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          {
+            services.stalwart.recoveryAdminEnvFile = "";
+          }
+        ];
+      };
+      sc = e.config.systemd.services.stalwart-mail.serviceConfig;
+      hasEf =
+        builtins.hasAttr "EnvironmentFile" sc && sc.EnvironmentFile != null && sc.EnvironmentFile != [ ];
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.services.stalwart.recoveryAdminEnvFile == "";
+    assert !hasEf;
+    "t34b-stalwart-recovery-envfile-default-empty-ok";
+
+  # Recommended product default (mail.nix): durable Domain B recovery path.
+  t34f-stalwart-recovery-recommended-durable-default =
+    let
+      e = evalSurmount { };
+      sc = e.config.systemd.services.stalwart-mail.serviceConfig;
+      ef = sc.EnvironmentFile or null;
+      efList =
+        if ef == null then
+          [ ]
+        else if builtins.isList ef then
+          ef
+        else
+          [ ef ];
+    in
+    assert failedAssertions e == [ ];
+    assert
+      e.config.services.stalwart.recoveryAdminEnvFile
+      == "/var/lib/surmount/secrets/stalwart/recovery.env";
+    assert builtins.any (p: lib.hasInfix "/var/lib/surmount/secrets/stalwart/recovery.env" p) efList;
+    assert builtins.any (p: lib.hasPrefix "-" p) efList;
+    "t34f-stalwart-recovery-recommended-durable-default-ok";
+
+  # Dual-sign File PEMs: mail unit must be able to read Domain B dkim dir
+  # under ProtectSystem=strict.
+  t35-stalwart-dkim-readonly-paths =
+    let
+      e = evalSurmount { };
+      sc = e.config.systemd.services.stalwart-mail.serviceConfig;
+      ro = sc.ReadOnlyPaths or [ ];
+      roList = if builtins.isList ro then ro else [ ro ];
+    in
+    assert failedAssertions e == [ ];
+    assert builtins.any (p: lib.hasInfix "/var/lib/surmount/secrets/mail/dkim" p) roList;
+    "t35-stalwart-dkim-readonly-paths-ok";
+
+  # Mail-plane TLS: Stalwart must be able to read the same durable Let's
+  # Encrypt PEMs Axum uses. ProtectSystem=strict needs ReadOnlyPaths, and
+  # 0640 surmount-tls group membership is the grant (not ignored settings).
+  t38-stalwart-mail-tls-pem-grant =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+      };
+      sc = e.config.systemd.services.stalwart-mail.serviceConfig;
+      ro = sc.ReadOnlyPaths or [ ];
+      roList = if builtins.isList ro then ro else [ ro ];
+      supp = sc.SupplementaryGroups or [ ];
+      suppList = if builtins.isList supp then supp else [ supp ];
+      extra = e.config.users.users.stalwart-mail.extraGroups or [ ];
+      uiExtra = e.config.users.users.surmount-ui.extraGroups or [ ];
+      etc = e.config.environment.etc;
+      planEntry = etc."surmount/stalwart/mail-plane-tls-le-pems.example.ndjson" or null;
+      readmeEntry = etc."surmount/stalwart/README-mail-plane-tls.txt" or null;
+      planText =
+        if planEntry == null then
+          ""
+        else if planEntry ? source then
+          builtins.readFile planEntry.source
+        else if planEntry ? text then
+          planEntry.text
+        else
+          "";
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.users.groups ? surmount-tls;
+    assert builtins.any (p: lib.hasInfix "/var/lib/surmount/secrets/tls" p) roList;
+    assert builtins.elem "surmount-tls" suppList;
+    assert builtins.elem "surmount-tls" extra;
+    assert builtins.elem "surmount-tls" uiExtra;
+    assert planEntry != null;
+    assert readmeEntry != null;
+    assert lib.hasInfix "Certificate" planText;
+    assert lib.hasInfix "/var/lib/surmount/secrets/tls/cert.pem" planText;
+    assert lib.hasInfix "/var/lib/surmount/secrets/tls/key.pem" planText;
+    assert lib.hasInfix "File" planText;
+    assert builtins.any (
+      r: lib.hasInfix "tls/cert.pem" r && lib.hasInfix "0640" r && lib.hasInfix "surmount-tls" r
+    ) e.config.systemd.tmpfiles.rules;
+    assert builtins.any (
+      r: lib.hasInfix "tls/key.pem" r && lib.hasInfix "0640" r && lib.hasInfix "surmount-tls" r
+    ) e.config.systemd.tmpfiles.rules;
+    "t38-stalwart-mail-tls-pem-grant-ok";
+
+  # Host convenience: btop is on PATH when surmount.enable (SSH / just btop).
+  t36-btop-system-package =
+    let
+      e = evalSurmount { };
+      pkgsList = e.config.environment.systemPackages;
+      isBtop =
+        p:
+        (p.pname or "") == "btop"
+        || lib.hasPrefix "btop-" (p.name or "")
+        || lib.hasSuffix "-btop" (p.name or "");
+    in
+    assert failedAssertions e == [ ];
+    assert builtins.any isBtop pkgsList;
+    "t36-btop-system-package-ok";
+
+  # Host convenience: inxi is on PATH when surmount.enable (SSH / just host-inxi).
+  t41-inxi-system-package =
+    let
+      e = evalSurmount { };
+      pkgsList = e.config.environment.systemPackages;
+      isInxi =
+        p:
+        (p.pname or "") == "inxi"
+        || lib.hasPrefix "inxi-" (p.name or "")
+        || lib.hasSuffix "-inxi" (p.name or "");
+    in
+    assert failedAssertions e == [ ];
+    assert builtins.any isInxi pkgsList;
+    "t41-inxi-system-package-ok";
+
+  # Host convenience: shipped btop.conf matches the operator laptop look
+  # (flat-remix by name, not the FHS theme path; no theme background).
+  t37-btop-local-config =
+    let
+      e = evalSurmount { };
+      etc = e.config.environment.etc;
+      entry = etc."xdg/btop/btop.conf" or null;
+      text =
+        if entry == null then
+          ""
+        else if entry ? source then
+          builtins.readFile entry.source
+        else if entry ? text then
+          entry.text
+        else
+          "";
+      rules = e.config.systemd.tmpfiles.rules;
+    in
+    assert entry != null;
+    assert lib.hasInfix "theme_background = false" text;
+    assert lib.hasInfix "rounded_corners = false" text;
+    assert lib.hasInfix ''graph_symbol = "block"'' text;
+    assert lib.hasInfix ''color_theme = "flat-remix"'' text;
+    assert !(lib.hasInfix "/usr/share/btop/themes/" text);
+    assert builtins.any (r: lib.hasInfix "/root/.config/btop/btop.conf" r) rules;
+    "t37-btop-local-config-ok";
+
+  serviceMemoryMax =
+    e: name:
+    let
+      svc = e.config.systemd.services.${name} or { };
+      sc = svc.serviceConfig or { };
+    in
+    sc.MemoryMax or null;
+
+  serviceSlice =
+    e: name:
+    let
+      svc = e.config.systemd.services.${name} or { };
+      sc = svc.serviceConfig or { };
+    in
+    sc.Slice or null;
+
+  serviceNice =
+    e: name:
+    let
+      svc = e.config.systemd.services.${name} or { };
+      sc = svc.serviceConfig or { };
+    in
+    sc.Nice or null;
+
+  etcText =
+    e: name:
+    let
+      entry = e.config.environment.etc.${name} or null;
+    in
+    if entry == null then
+      ""
+    else if entry ? source then
+      builtins.readFile entry.source
+    else if entry ? text then
+      entry.text
+    else
+      "";
+
+  # SHC ticket 261: ssh-ng builder path gets MemoryMax + about-95-percent
+  # CPU/RAM/storage guards. Mail/critical units stay unstarved.
+  # Lake is not part of this mail-host module.
+  t39-remote-builder-enable-memory-cap =
+    let
+      e = evalSurmount {
+        remoteBuilder.enable = true;
+        managementUi.enable = true;
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = true;
+        artiHiddenService.packageIsOnionServiceCapable = true;
+      };
+      slice = e.config.systemd.slices."surmount-builder".sliceConfig or { };
+      userSliceName = "user-${toString e.config.users.users.nixbuilder.uid}";
+      userSlice = e.config.systemd.slices.${userSliceName}.sliceConfig or { };
+      helperSrc = toString (e.config.environment.etc."surmount/niced-builder".source or "");
+      stdio = etcText e "surmount/niced-nix-daemon-stdio";
+      trusted = e.config.nix.settings.extra-trusted-users or [ ];
+      critical = [
+        "stalwart-mail"
+        "surmount-management-ui"
+        "surmount-arti-hidden-service"
+        "sshd"
+      ];
+      criticalNotCapped = builtins.all (
+        name:
+        let
+          mem = serviceMemoryMax e name;
+          sl = serviceSlice e name;
+        in
+        (mem == null || mem == "" || mem == "infinity")
+        && (sl == null || sl != "surmount-builder.slice")
+        && (serviceNice e name == null)
+      ) critical;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.remoteBuilder.enable == true;
+    assert e.config.users.users ? nixbuilder;
+    assert e.config.users.users.nixbuilder.isNormalUser == true;
+    assert !(builtins.elem "wheel" (e.config.users.users.nixbuilder.extraGroups or [ ]));
+    assert builtins.elem "nixbuilder" trusted;
+    assert slice.MemoryMax or null == "4G";
+    assert !(slice ? CPUQuota);
+    assert userSlice.MemoryMax or null == "4G";
+    assert !(userSlice ? CPUQuota);
+    assert (e.config.systemd.services.nix-daemon.serviceConfig.MemoryMax or null) == "4G";
+    assert (e.config.systemd.services.nix-daemon.serviceConfig.Nice or null) == 19;
+    assert e.config.nix.settings.max-jobs == 8;
+    assert e.config.nix.settings.max-jobs != 64;
+    assert e.config.environment.etc ? "surmount/niced-builder";
+    assert e.config.environment.etc ? "surmount/niced-nix-daemon-stdio";
+    assert !(e.config.environment.etc ? "surmount/niced-lake");
+    assert !(e.config.systemd.services ? surmount-lake);
+    assert !(e.config.programs.nix-ld.enable or false);
+    assert lib.hasInfix "surmount-niced-builder" helperSrc;
+    assert !(lib.hasInfix "lake" (lib.toLower helperSrc));
+    assert lib.hasInfix "nix-daemon" stdio;
+    assert lib.hasInfix "niced-builder" stdio;
+    assert lib.hasInfix "MemoryMax" stdio;
+    assert criticalNotCapped;
+    assert serviceMemoryMax e "stalwart-mail" != "4G";
+    assert serviceSlice e "stalwart-mail" != "surmount-builder.slice";
+    assert serviceMemoryMax e "surmount-management-ui" != "4G";
+    assert serviceSlice e "surmount-management-ui" != "surmount-builder.slice";
+    assert serviceMemoryMax e "surmount-arti-hidden-service" != "4G";
+    assert serviceNice e "stalwart-mail" == null;
+    assert serviceNice e "surmount-management-ui" == null;
+    assert serviceNice e "surmount-arti-hidden-service" == null;
+    "t39-remote-builder-enable-memory-cap-ok";
+
+  t39b-remote-builder-custom-budget-not-sku =
+    let
+      e = evalSurmount {
+        remoteBuilder.enable = true;
+        remoteBuilder.memoryMax = "1500M";
+        remoteBuilder.cpuQuota = "95%";
+        remoteBuilder.diskGuardPercent = 95;
+      };
+      slice = e.config.systemd.slices."surmount-builder".sliceConfig or { };
+    in
+    assert failedAssertions e == [ ];
+    assert slice.MemoryMax or null == "1500M";
+    assert slice.CPUQuota or null == "95%";
+    assert !(e.config.systemd.services ? surmount-lake);
+    # Scaffold / override must not bake a published guest RAM integer SKU.
+    assert !(lib.hasInfix "65536" (e.config.surmount.remoteBuilder.memoryMax));
+    assert serviceMemoryMax e "stalwart-mail" != "1500M";
+    "t39b-remote-builder-custom-budget-not-sku-ok";
+
+  t39c-remote-builder-off-no-builder-slice-cap =
+    let
+      e = evalSurmount { };
+      hasBuilderSlice = e.config.systemd.slices ? "surmount-builder";
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.remoteBuilder.enable == false;
+    assert !hasBuilderSlice;
+    assert !(e.config.environment.etc ? "surmount/niced-builder");
+    assert !(e.config.environment.etc ? "surmount/niced-nix-daemon-stdio");
+    assert !(e.config.environment.etc ? "surmount/niced-lake");
+    assert !(e.config.systemd.services ? surmount-lake);
+    "t39c-remote-builder-off-no-builder-slice-cap-ok";
+
+  # enable=true with empty MemoryMax is uncapped. Refuse at eval.
+  t39d-remote-builder-empty-memory-max-asserts =
+    let
+      e = evalSurmount {
+        remoteBuilder.enable = true;
+        remoteBuilder.memoryMax = "";
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a: lib.hasInfix "memoryMax" a.message && lib.hasInfix "MemoryMax" a.message
+    ) failed;
+    "t39d-remote-builder-empty-memory-max-asserts-ok";
+
+  # Overlay that introduces a Lake unit without surmount.lake.enable fails.
+  t39e-remote-builder-refuses-lake-unit =
+    let
+      e = evalSurmount {
+        remoteBuilder.enable = true;
+        __extraModules = [
+          {
+            systemd.services.surmount-lake.wantedBy = lib.mkForce [ "multi-user.target" ];
+          }
+        ];
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "surmount-lake" a.message) failed;
+    "t39e-remote-builder-refuses-lake-unit-ok";
+
+  # remoteBuilder does not enable nix-ld (that was Lake-only).
+  t39f-remote-builder-no-nix-ld =
+    let
+      e = evalSurmount {
+        remoteBuilder.enable = true;
+      };
+    in
+    assert failedAssertions e == [ ];
+    assert !(e.config.programs.nix-ld.enable or false);
+    assert !(e.config.environment.etc ? "surmount/niced-lake");
+    assert !(e.config.systemd.services ? surmount-lake);
+    "t39f-remote-builder-no-nix-ld-ok";
+
+  # rustc lives under system nix-daemon on trusted ssh-ng. Cap that unit.
+  t39g-nix-daemon-is-the-real-build-cgroup =
+    let
+      e = evalSurmount { remoteBuilder.enable = true; };
+      d = e.config.systemd.services.nix-daemon.serviceConfig or { };
+    in
+    assert failedAssertions e == [ ];
+    assert d.MemoryMax or null == e.config.surmount.remoteBuilder.memoryMax;
+    assert d.Nice or null == 19;
+    assert (d.IOSchedulingClass or "") == "idle";
+    "t39g-nix-daemon-is-the-real-build-cgroup-ok";
+
+  t39h-max-jobs-tracks-cores-not-fake-64 =
+    let
+      e = evalSurmount { remoteBuilder.enable = true; };
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.remoteBuilder.maxJobs == 8;
+    assert e.config.nix.settings.max-jobs == 8;
+    assert e.config.nix.settings.max-jobs != 64;
+    "t39h-max-jobs-tracks-cores-not-fake-64-ok";
+
+  t39o-builder-is-preferred-oom-victim =
+    let
+      e = evalSurmount { remoteBuilder.enable = true; };
+      d = e.config.systemd.services.nix-daemon.serviceConfig or { };
+      mail = e.config.systemd.services.stalwart-mail.serviceConfig or { };
+      sshd = e.config.systemd.services.sshd.serviceConfig or { };
+      ui = e.config.systemd.services.surmount-management-ui.serviceConfig or { };
+    in
+    assert failedAssertions e == [ ];
+    assert (d.OOMScoreAdjust or 0) > 0;
+    assert (mail.OOMScoreAdjust or 0) < 0;
+    assert (sshd.OOMScoreAdjust or 0) < 0;
+    assert (ui.OOMScoreAdjust or 0) < 0;
+    assert !(mail ? Nice);
+    "t39o-builder-is-preferred-oom-victim-ok";
+
+  # H3: bad recovery path charset fails closed.
+  t34c-stalwart-recovery-envfile-bad-path-asserts =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          {
+            services.stalwart.recoveryAdminEnvFile = "/tmp/evil;rm -rf /";
+          }
+        ];
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a:
+      lib.hasInfix "recoveryAdminEnvFile" a.message
+      || lib.hasInfix "strict" a.message
+      || lib.hasInfix "metacharacters" a.message
+    ) failed;
+    "t34c-stalwart-recovery-envfile-bad-path-asserts-ok";
+
+  # H3: STALWART_RECOVERY_ADMIN in extraEnvironment fails closed (store secret ban).
+  t34d-stalwart-recovery-extra-env-password-asserts =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          {
+            services.stalwart.extraEnvironment.STALWART_RECOVERY_ADMIN = "admin:not-a-real-password";
+          }
+        ];
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a:
+      lib.hasInfix "STALWART_RECOVERY_ADMIN" a.message
+      || lib.hasInfix "extraEnvironment" a.message
+      || lib.hasInfix "recoveryAdminEnvFile" a.message
+    ) failed;
+    "t34d-stalwart-recovery-extra-env-password-asserts-ok";
+
+  # H3: direct unit environment.STALWART_RECOVERY_ADMIN also fails closed.
+  t34e-stalwart-recovery-unit-env-password-asserts =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          {
+            systemd.services.stalwart-mail.environment.STALWART_RECOVERY_ADMIN = "admin:not-a-real-password";
+          }
+        ];
+      };
+      failed = failedAssertions e;
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a:
+      lib.hasInfix "STALWART_RECOVERY_ADMIN" a.message
+      || lib.hasInfix "environment" a.message
+      || lib.hasInfix "recoveryAdminEnvFile" a.message
+    ) failed;
+    "t34e-stalwart-recovery-unit-env-password-asserts-ok";
+
+  # ACME off: no ACME parent tmpfiles under /run/surmount-secrets/tls (only stateDir/ui).
+  t33b-acme-off-no-acme-tmpfiles =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
+        managementUi.acme.enable = false;
+      };
+      rules = e.config.systemd.tmpfiles.rules;
+      hasTlsAcme = builtins.any (
+        r: lib.hasInfix "/run/surmount-secrets/tls" r || lib.hasInfix "/run/surmount-secrets/acme" r
+      ) rules;
+    in
+    assert failedAssertions e == [ ];
+    assert !hasTlsAcme;
+    "t33b-acme-off-no-acme-tmpfiles-ok";
+
+  # Apex/www default document root is the packaged SurmountSystems/site store
+  # path when the overlay provides pkgs.surmount-public-site.
+  t40-apex-public-root-packaged-site =
+    let
+      e = evalSurmount { managementUi.enable = true; };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = builtins.unsafeDiscardStringContext (lib.concatStringsSep "\n" envList);
+      root = builtins.unsafeDiscardStringContext (toString e.config.surmount.managementUi.apexPublicRoot);
+      ro = e.config.systemd.services.surmount-management-ui.serviceConfig.ReadOnlyPaths or [ ];
+      roList = map (p: builtins.unsafeDiscardStringContext (toString p)) (
+        if builtins.isList ro then ro else [ ro ]
+      );
+    in
+    assert failedAssertions e == [ ];
+    assert root != "";
+    assert lib.hasInfix "SURMOUNT_APEX_PUBLIC_ROOT=${root}" envBlob;
+    assert builtins.any (p: p == root) roList;
+    # Store path from overlay package, not the mutable /var/lib fallback.
+    assert lib.hasPrefix "/nix/store/" root;
+    assert !(lib.hasInfix "/var/lib/surmount/public-site" root);
+    "t40-apex-public-root-packaged-site-ok";
+
+  # Extra static Hosts: env JSON file + ReadOnlyPaths for extra roots.
+  t41-static-vhosts-env-and-readonly-paths =
+    let
+      extraRoot = "/var/lib/surmount/static-sites/extra";
+      e = evalSurmount {
+        managementUi.enable = true;
+        managementUi.staticVhosts = {
+          "extra.example.test" = {
+            root = extraRoot;
+          };
+          "www.extra.example.test" = {
+            root = extraRoot;
+          };
+        };
+      };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = builtins.unsafeDiscardStringContext (lib.concatStringsSep "\n" envList);
+      ro = e.config.systemd.services.surmount-management-ui.serviceConfig.ReadOnlyPaths or [ ];
+      roList = map (p: builtins.unsafeDiscardStringContext (toString p)) (
+        if builtins.isList ro then ro else [ ro ]
+      );
+      # Keep store context on the writeText path so eval can realize the JSON.
+      fileLine = lib.findFirst (s: lib.hasPrefix "SURMOUNT_STATIC_VHOSTS_FILE=" s) null envList;
+      jsonPath =
+        if fileLine == null then "" else lib.removePrefix "SURMOUNT_STATIC_VHOSTS_FILE=" fileLine;
+      jsonBody =
+        if jsonPath == "" then "" else builtins.unsafeDiscardStringContext (builtins.readFile jsonPath);
+    in
+    assert failedAssertions e == [ ];
+    assert lib.hasInfix "SURMOUNT_STATIC_VHOSTS_FILE=" envBlob;
+    assert jsonPath != "";
+    assert lib.hasInfix "extra.example.test" jsonBody;
+    assert lib.hasInfix extraRoot jsonBody;
+    assert lib.hasInfix "www.extra.example.test" jsonBody;
+    assert builtins.any (p: p == extraRoot) roList;
+    "t41-static-vhosts-env-and-readonly-paths-ok";
+
+  t41b-static-vhosts-default-proven-roots =
+    let
+      e = evalSurmount { managementUi.enable = true; };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = builtins.unsafeDiscardStringContext (lib.concatStringsSep "\n" envList);
+      ro = e.config.systemd.services.surmount-management-ui.serviceConfig.ReadOnlyPaths or [ ];
+      roList = map (p: builtins.unsafeDiscardStringContext (toString p)) (
+        if builtins.isList ro then ro else [ ro ]
+      );
+      fileLine = lib.findFirst (s: lib.hasPrefix "SURMOUNT_STATIC_VHOSTS_FILE=" s) null envList;
+      jsonPath =
+        if fileLine == null then "" else lib.removePrefix "SURMOUNT_STATIC_VHOSTS_FILE=" fileLine;
+      jsonBody =
+        if jsonPath == "" then "" else builtins.unsafeDiscardStringContext (builtins.readFile jsonPath);
+      keepRoots = [
+        "/var/lib/surmount/static-sites/cryptoquick"
+        "/var/lib/surmount/static-sites/baxterartworks"
+        "/var/lib/surmount/static-sites/btcfur"
+        "/var/lib/surmount/static-sites/exophiles"
+        "/var/lib/surmount/static-sites/iantuckerstudios"
+        "/var/lib/surmount/static-sites/nostrfurs"
+        "/var/lib/surmount/static-sites/yiffa"
+      ];
+      dropRoots = [
+        "/var/lib/surmount/static-sites/btcdragonlord"
+        "/var/lib/surmount/static-sites/btckitties"
+        "/var/lib/surmount/static-sites/denverspace"
+        "/var/lib/surmount/static-sites/justsaybits"
+      ];
+      keepHosts = [
+        "cryptoquick.com"
+        "baxterartworks.com"
+        "btcfur.com"
+        "exophiles.org"
+        "iantuckerstudios.com"
+        "nostrfurs.com"
+        "yiffa.app"
+      ];
+      dropHosts = [
+        "btcdragonlord.com"
+        "btckitties.com"
+        "denver.space"
+        "justsaybits.org"
+      ];
+    in
+    assert failedAssertions e == [ ];
+    assert lib.hasInfix "SURMOUNT_STATIC_VHOSTS_FILE=" envBlob;
+    assert jsonPath != "";
+    assert lib.all (p: builtins.any (r: r == p) roList) keepRoots;
+    assert lib.all (p: !(builtins.any (r: r == p) roList)) dropRoots;
+    assert lib.all (h: lib.hasInfix h jsonBody) keepHosts;
+    assert lib.all (h: !(lib.hasInfix h jsonBody)) dropHosts;
+    "t41b-static-vhosts-default-proven-roots-ok";
+
+  t42-journal-persistent-when-logging-on =
+    let
+      e = evalSurmount { };
+      extra = e.config.services.journald.extraConfig or "";
+      blob = builtins.replaceStrings [ "\n" ] [ " " ] extra;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.logging.enable == true;
+    assert lib.hasInfix "Storage=persistent" blob;
+    assert lib.hasInfix "SystemMaxUse=1G" blob;
+    assert lib.hasInfix "RuntimeMaxUse=256M" blob;
+    assert lib.hasInfix "RateLimitIntervalSec=30s" blob;
+    assert lib.hasInfix "RateLimitBurst=50000" blob;
+    assert lib.hasInfix "ForwardToSyslog=no" blob;
+    assert (e.config.services.openssh.settings.LogLevel or "") == "VERBOSE";
+    "t42-journal-persistent-when-logging-on-ok";
+
+  t44-lake-default-off =
+    let
+      e = evalSurmount { };
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.lake.enable == false;
+    assert !(e.config.systemd.services ? surmount-lake);
+    assert !(e.config.systemd.slices ? "surmount-lake");
+    "t44-lake-default-off-ok";
+
+  t44b-lake-enable-memory-cap =
+    let
+      e = evalSurmount {
+        lake.enable = true;
+        lake.package = pkgs.writeShellScriptBin "lake" "exit 0";
+      };
+      s = e.config.systemd.services.surmount-lake.serviceConfig or { };
+    in
+    assert failedAssertions e == [ ];
+    assert s.MemoryMax or null == "4G";
+    assert s.Nice or null == 19;
+    assert (s.OOMScoreAdjust or 0) > 0;
+    assert builtins.elem "multi-user.target" (e.config.systemd.services.surmount-lake.wantedBy or [ ]);
+    assert serviceNice e "stalwart-mail" == null;
+    assert serviceNice e "sshd" == null;
+    "t44b-lake-enable-memory-cap-ok";
+
   results = [
     t1-defaults
+    t1b-p1-free-443-plan-and-firewall
+    t1c-mailbox-password-argon2id-readme
     t2-require-empty-paths-asserts
     t3-bad-path-charset-asserts
     t4-require-paths-wires-check
     t5-arti-enable-no-daemon
+    t5b-arti-enable-derives-ui-onion-hostname-env
+    t5c-onion-hostname-file-option-wins
     t6-arti-start-daemon-complete-no-accept
     t6b-arti-start-daemon-ok
     t6c-arti-start-daemon-needs-package
@@ -1402,6 +2622,8 @@ let
     t9-https-with-escape-ok
     t9b-escape-without-https-asserts
     t10-web-off-https-ui-no-nginx
+    t10b-public-listen-auth-off-asserts
+    t10c-nostr-allowlist-readonly-paths
     t11-web-dual-run-escape-nginx-on
     t12-dual-run-public-https-asserts
     t13-http-redirect-bind-env-and-caps
@@ -1420,9 +2642,50 @@ let
     t20e-access-control-nft-helper-needs-nft-bin
     t20f-access-control-nft-helper-needs-backend-nft
     t21-access-control-enforce-whitelist-env
+    t22-vaultwarden-enable-needs-token-path
+    t23-vaultwarden-enable-with-token-path
+    t24-vaultwarden-url-option-wins
+    t25-vaultwarden-bad-token-path-asserts
+    t26-vaultwarden-extra-config-secret-key-asserts
+    t27-vaultwarden-force-rocket-after-extra-config
+    t28-vaultwarden-world-bind-asserts
+    t29-vaultwarden-allow-non-loopback-ok
+    t30-vaultwarden-bad-url-asserts
+    t31-vaultwarden-configure-nginx-refused
+    t32-vaultwarden-smtp-password-extra-asserts
+    t33-acme-enable-tmpfiles-and-write-paths
+    t33c-acme-external-hook-packaged-dns-hook
+    t33b-acme-off-no-acme-tmpfiles
+    t34-stalwart-recovery-envfile-path-only
+    t34b-stalwart-recovery-envfile-default-empty
+    t34c-stalwart-recovery-envfile-bad-path-asserts
+    t34d-stalwart-recovery-extra-env-password-asserts
+    t34e-stalwart-recovery-unit-env-password-asserts
+    t34f-stalwart-recovery-recommended-durable-default
+    t35-stalwart-dkim-readonly-paths
+    t38-stalwart-mail-tls-pem-grant
+    t36-btop-system-package
+    t41-inxi-system-package
+    t37-btop-local-config
+    t39-remote-builder-enable-memory-cap
+    t39b-remote-builder-custom-budget-not-sku
+    t39c-remote-builder-off-no-builder-slice-cap
+    t39d-remote-builder-empty-memory-max-asserts
+    t39e-remote-builder-refuses-lake-unit
+    t39f-remote-builder-no-nix-ld
+    t39g-nix-daemon-is-the-real-build-cgroup
+    t39h-max-jobs-tracks-cores-not-fake-64
+    t39o-builder-is-preferred-oom-victim
+    t40-apex-public-root-packaged-site
+    t41-static-vhosts-env-and-readonly-paths
+    t41b-static-vhosts-default-proven-roots
+    t42-journal-persistent-when-logging-on
+    t44-lake-default-off
+    t44b-lake-enable-memory-cap
   ];
 in
 {
   inherit results;
   ok = results;
+  inherit t41b-static-vhosts-default-proven-roots;
 }

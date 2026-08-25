@@ -1,5 +1,6 @@
 # Stalwart CLI (schema-driven JMAP admin). Separate upstream repo from the server.
-# Needed for `stalwart-cli apply` / import / day-to-day admin on 0.16+.
+# Needed for `stalwart-cli apply` / directory / day-to-day admin on 0.16+.
+# Maildir import is Vandelay, not this CLI (1.0.x has no import subcommand).
 #
 # Packaging mode: pinned upstream release binary FODs. Source builds need a
 # newer rustc than older host channels' defaults (unsigned_is_multiple_of, etc.).

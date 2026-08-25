@@ -28,6 +28,9 @@ serde_json.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
+# Direct dep so the HTTPS accept path can parse ClientHello SNI on failure.
+# Feature-unified with axum-server's tokio-rustls 0.26 (lock).
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws-lc-rs"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
@@ -40,8 +43,16 @@ hmac.workspace = true
 sha2.workspace = true
 base64.workspace = true
 getrandom.workspace = true
+# In-process ACME (DNS-01). Default-off at config; live LE never required for CI.
+instant-acme.workspace = true
+x509-parser.workspace = true
+# Hermetic mock issuer PEMs (lab SURMOUNT_ACME_DNS_PROVIDER=mock + tests).
+rcgen.workspace = true
+time.workspace = true
+libc.workspace = true
+# Vaultwarden WebSocket upgrade tunnel (already in lock via axum/reqwest).
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
-rcgen.workspace = true
-# Pin kept for reproducible PEMs; crane rustc is 1.88+ (Leptos).
-time.workspace = true
+# rcgen/time are normal deps (mock ACME issuer + expiry checks).

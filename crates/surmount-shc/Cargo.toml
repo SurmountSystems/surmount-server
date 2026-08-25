@@ -1,0 +1,22 @@
+[package]
+name = "surmount-shc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sovereign Hybrid Compute customer user-api client (rDNS PTR and support tickets)"
+publish = false
+
+[[bin]]
+name = "surmount-shc"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_shc"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+reqwest.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

@@ -1,0 +1,33 @@
+# Host cutover gates (A0) — machine-readable ordered checklist
+# Living prose: docs/OPS.md section "Host cutover gates" + "Laptop-driven cutover ladder"
+# Driver: script/host-cutover.sh (default dry-run; --step ladder offline ship P0-P7)
+# Hermetic: script/test-host-cutover.sh
+# Never put real IPs, tokens, PEMs, or onions in this file.
+#
+# Status legend: OFFLINE_DONE | DRIVER | OPERATOR_VALUE | HOST_PROOF
+#
+G1 material_present         DRIVER        host-material-inventory / cutover --inventory-only / --step material
+G2 secrets_install          DRIVER        secrets-install-host / cutover --step install / deploy --install-secrets
+G3 unit_start               HOST_PROOF    systemctl after deploy-host switch / --step deploy
+G4 public_tls               HOST_PROOF    PEMs or ACME; just e2e-host when BASE_URL set / --step prove
+G5 http_redirect_80         HOST_PROOF    redirect-only listener; e2e-host / manual
+G6 mdwe                     HOST_PROOF    e2e-host MemoryDenyWriteExecute
+G7 optional_hybrid          HOST_PROOF    just check-tls-hybrid after B1 (never live CI)
+G8 vw_admin_token_s7b       DRIVER+VALUE  kind vaultwarden-admin; --with-vaultwarden inventory
+G9 vw_enable_fragment_s7b   DRIVER        private host-local surmount-vaultwarden-enable.nix
+G10 vw_unit_smoke_s7b       HOST_PROOF    systemctl is-active vaultwarden; loopback curl
+#
+# Ladder steps (offline DRIVER; live still HOST_PROOF / OPERATOR_VALUE):
+# L_material   DRIVER        --step material
+# L_prep       DRIVER        --step prep (host-profile -> host-local-acme.nix)
+# L_install    DRIVER        --step install (laptop -> short-lived /run)
+# L_free443    DRIVER        --step free-443 (remote SSH when --target)
+# L_dns        DRIVER        --step dns (laptop zone plan; dry-run default)
+# L_deploy     DRIVER        --step deploy
+# L_prove      DRIVER+HOST   --step prove checklist; HOST_PROOF when e2e-host green
+# L_le_prod    DRIVER        --step le-prod (explicit production LE; no auto-flip)
+#
+# S7a_offline_module        OFFLINE_DONE  modules/vaultwarden.nix + management UI (do not rebuild)
+# S6_values_on_host         OPERATOR_VALUE material values once; install scripted after
+# Public_sample_host_vw     enable=false  hosts/mail-vps stays off
+# Ladder_offline_P0_P7      OFFLINE_DONE  2026-08-11; live H1-H3 residual

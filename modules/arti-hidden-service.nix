@@ -150,6 +150,11 @@ let
     [storage.permissions]
     trust_user = ":current"
 
+    # stdout -> journald via the unit. Never log HS keys.
+    [logging]
+    console = "info"
+    log_sensitive_information = false
+
     # Lean default: one onion service reverse-proxying to management UI.
     # Backend is cleartext TCP or unix: (not TLS). Stalwart admin/JMAP publish
     # options default false and do not add stanzas yet.

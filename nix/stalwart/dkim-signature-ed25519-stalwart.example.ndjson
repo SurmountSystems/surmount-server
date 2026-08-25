@@ -1,0 +1,1 @@
+{"@type":"create","object":"DkimSignature","value":{"@type":"Dkim1Ed25519Sha256","domainId":"DOMAIN_ID_PLACEHOLDER","selector":"stalwart","privateKey":{"@type":"File","filePath":"/var/lib/surmount/secrets/mail/dkim/stalwart-ed25519.pem"},"stage":"active","report":true,"canonicalization":"relaxed/relaxed"}}

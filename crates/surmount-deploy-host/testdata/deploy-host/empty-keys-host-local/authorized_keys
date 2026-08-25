@@ -1,0 +1,2 @@
+# Comments and short placeholders only: lockout check must fail.
+# TODO: "ssh-ed25519 AAAA... you@workstation"

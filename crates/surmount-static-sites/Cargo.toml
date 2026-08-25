@@ -1,0 +1,19 @@
+[package]
+name = "surmount-static-sites"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Publish apex/www and proven DS3018xs extra vhost trees"
+publish = false
+
+[[bin]]
+name = "surmount-deploy-static-sites"
+path = "src/bin/surmount-deploy-static-sites.rs"
+
+[[bin]]
+name = "surmount-sync-static-sites"
+path = "src/bin/surmount-sync-static-sites.rs"
+
+[lib]
+name = "surmount_static_sites"
+path = "src/lib.rs"

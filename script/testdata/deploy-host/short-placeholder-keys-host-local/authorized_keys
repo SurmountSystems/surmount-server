@@ -1,0 +1,2 @@
+# Non-comment short placeholder: must fail usable-key check (not a real key blob).
+ssh-ed25519 AAAA... you@workstation

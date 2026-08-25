@@ -1,0 +1,19 @@
+[package]
+name = "surmount-secrets-install"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Domain A to Domain B deploy-secrets install bridge and Vaultwarden export-to-staging"
+publish = false
+
+[[bin]]
+name = "secrets-install-host"
+path = "src/bin/secrets-install-host.rs"
+
+[[bin]]
+name = "secrets-export-bw-to-staging"
+path = "src/bin/secrets-export-bw-to-staging.rs"
+
+[lib]
+name = "surmount_secrets_install"
+path = "src/lib.rs"

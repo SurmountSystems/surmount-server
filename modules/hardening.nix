@@ -14,6 +14,12 @@
 # Do not expand aggressive mail jails here without that design + false-positive
 # review. Stalwart owns mail anti-abuse first.
 #
+# SSH host keys: advertise and generate ed25519 only. NixOS 26.05 default
+# also offers RSA; this module stops that. Existing RSA files on disk are
+# not deleted by dropping rsa from hostKeys. Classical SSH hygiene only:
+# Ed25519 is not post-quantum; OpenSSH host keys are not PQ; PQConnect is
+# not a host-key swap.
+#
 # When surmount.accessControl.enable: named nft sets are installed (empty).
 # That is not "live bans work" without operator nft load + enforcement wiring.
 # Set names match crates/management-ui/src/ban.rs constants.
@@ -41,6 +47,12 @@ in
     (mkIf (cfg.enable && cfg.hardening.enable) {
       services.openssh = {
         enable = true;
+        hostKeys = [
+          {
+            type = "ed25519";
+            path = "/etc/ssh/ssh_host_ed25519_key";
+          }
+        ];
         settings = {
           PasswordAuthentication = cfg.hardening.allowPasswordAuth;
           KbdInteractiveAuthentication = false;
@@ -76,6 +88,12 @@ in
       security.sudo.execWheelOnly = mkDefault true;
     })
 
+    # SHC 261: guest agent so the hypervisor can inject a command when
+    # SSH is stuck. Default off; host-local enables on this QEMU VPS.
+    (mkIf (cfg.enable && cfg.hardening.enable && cfg.hardening.qemuGuestAgent.enable) {
+      services.qemuGuest.enable = true;
+    })
+
     # Access-control nft fragment: opt-in, lean private default off.
     (mkIf (cfg.enable && ac.enable && ac.nftSets) {
       networking.nftables.enable = true;
@@ -106,8 +124,18 @@ in
             type filter hook input priority -10; policy accept;
             ip saddr @${nftWl4} accept
             ip6 saddr @${nftWl6} accept
-            ip saddr @${nftBan4} drop
-            ip6 saddr @${nftBan6} drop
+            ${
+              if (cfg.logging.enable or false) then
+                ''
+                  ip saddr @${nftBan4} log prefix "surmount-nft-ban-drop: " drop
+                  ip6 saddr @${nftBan6} log prefix "surmount-nft-ban-drop: " drop
+                ''
+              else
+                ''
+                  ip saddr @${nftBan4} drop
+                  ip6 saddr @${nftBan6} drop
+                ''
+            }
           }
         '';
       };

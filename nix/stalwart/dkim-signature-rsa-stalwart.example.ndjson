@@ -1,0 +1,1 @@
+{"@type":"create","object":"DkimSignature","value":{"@type":"Dkim1RsaSha256","domainId":"DOMAIN_ID_PLACEHOLDER","selector":"stalwart-rsa","privateKey":{"@type":"File","filePath":"/var/lib/surmount/secrets/mail/dkim/stalwart-rsa4096.pem"},"stage":"active","report":true,"canonicalization":"relaxed/relaxed"}}

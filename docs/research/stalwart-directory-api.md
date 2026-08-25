@@ -69,7 +69,8 @@ RocksDB for mailboxes.
 
 **Shipped (2026-08-07):** directory trait + hermetic mock + **live** Stalwart
 management JMAP client (`x:Account/query` + `x:Account/get` against
-`SURMOUNT_STALWART_URL/api` with Bearer token). Selection:
+`SURMOUNT_STALWART_URL/jmap` with Bearer token; Stalwart 0.16.15
+`POST /api` is HTTP 404). Selection:
 
 | `SURMOUNT_DIRECTORY` | Backend |
 |----------------------|---------|
@@ -93,17 +94,32 @@ Nix: `surmount.managementUi.directory` (default `unavailable`),
 `allowDirectoryUnauthenticated`. Token file: non-empty raw line, regular file,
 owner-only mode (e.g. 0600). HTTP error notes are status-code only (no body).
 
-**Mutations shipped (2026-08-07):** `Directory::create_account` /
-`update_account`; HTTP `POST /api/v1/accounts` and `PATCH /api/v1/accounts/{id}`;
-mock fixture mutates in-memory; live uses management JMAP `x:Account/set`
-(create/update; lean fields: name + domainId + optional description; no
-password/credentials in this surface). Gate: `AUTH_MODE=nostr` or lab
-`SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED=1`; CSRF double-submit when session
-cookie present. No HTML create form (API only). Hermetic wire-mock covers
-happy path + fail-closed HTTP.
+**Mutations shipped (2026-08-07; portal 2026-08-14):**
+`Directory::create_account` / `update_account`; HTTP `POST /api/v1/accounts`
+and `PATCH /api/v1/accounts/{id}`; mock fixture mutates in-memory; live uses
+management JMAP `x:Account/set` (create/update; lean fields: name +
+server-looked-up Domain id + optional description). Create is
+Administrator-only on `/mail` (session-bound CSRF). `StalwartPasswordOnly`
+now delegates create to the inner client (list stays empty). Gate:
+`AUTH_MODE=nostr` Administrator (or lab
+`SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED=1`); auth-off without the escape
+is 403. Hermetic wire-mock covers happy path + fail-closed HTTP. `/accounts`
+still has no create form.
 
-**Still residual:** full Q-AUTH-1 product answers; UDS to Stalwart; mail
-password / credential rotation product UX (stay stalwart-cli for secrets).
+**Mailbox password shipped (2026-08-14):** `Directory::set_mailbox_password`;
+HTTP `POST /api/v1/accounts/password`; `/mail` HTML form. Lookup by
+`emailAddress`, then `x:Account/set` update with
+`credentials.0 @type Password`. Not `x:AccountPassword/set` (that singleton
+is the API-token principal). Listing may stay `unavailable`; password set
+still uses the host token + `SURMOUNT_STALWART_URL` when present
+(`StalwartPasswordOnly`). Password never in JSON responses or logs.
+Surmount sends plaintext; Stalwart 0.16.15 hashes with
+`Authentication.passwordHashAlgorithm` (default **Argon2id**; see
+[SECURITY.md](../SECURITY.md) *Mailbox password hashing*). `/mail` card
+keeps `#mailbox-password`; the password INPUT id is
+`mailbox-password-input`.
+
+**Still residual:** full Q-AUTH-1 product answers; UDS to Stalwart.
 
 ## Migration note
 
@@ -118,10 +134,14 @@ replace that bootstrap step.
   second implementation.
 - **Not claimed:** host cutover, live Tor ownership, live ban drop, or that
   default production exposes live inventory (default remains unavailable).
-- **In-tree mutations:** create/update API is implemented behind auth + CSRF
-  (no HTML form; no password fields). Host live mutation proof still residual.
+- **In-tree mutations:** create/update API is implemented behind auth + CSRF.
+  `/mail` **Create mailbox** form (Administrator) + mailbox password form +
+  `POST /api/v1/accounts/password` shipped (2026-08-14). Host live IMAP login
+  after the operator sets a password is operator-side proof (do not invent a
+  password in-tree).
 - **Do not invent Q-AUTH-1** (key-loss, durable session store, first-operator
   bootstrap). Live directory and mutations require `authMode=nostr` unless lab
   escape (`allowDirectoryUnauthenticated` / `SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED`).
 - Port 8080 vs UI 8090: module defaults use Stalwart HTTP on loopback 8080 and
-  UI on 8090; confirm on your host.
+  UI on 8090; confirm on your host. Management JMAP path is `POST /jmap`
+  (live 0.16.15); `POST /api` is HTTP 404.

@@ -1,0 +1,15 @@
+[package]
+name = "surmount-mail-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Operator Maildir++ import into Stalwart via Vandelay (no stalwart-cli import)"
+publish = false
+
+[[bin]]
+name = "surmount-mail-import-maildir"
+path = "src/bin/surmount-mail-import-maildir.rs"
+
+[lib]
+name = "surmount_mail_import"
+path = "src/lib.rs"

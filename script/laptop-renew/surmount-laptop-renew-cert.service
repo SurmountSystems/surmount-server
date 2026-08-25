@@ -1,0 +1,14 @@
+[Unit]
+Description=Surmount laptop Let's Encrypt renew (production; host ACME stays off)
+Documentation=file:docs/OPS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Copy this unit to the laptop user systemd dir, then fill ExecStart via:
+#   just laptop-renew-cert -- --install-timer --directory production --target root@YOUR_HOST
+# Namecheap env stays on the laptop. Do not install this on the VPS.
+# Do not enable host ACME (SURMOUNT_ACME_ENABLE=0).
+# --target is required so weekly --live can install PEMs.
+ExecStart=/usr/bin/env bash -lc 'just laptop-renew-cert -- --live --directory production --target root@YOUR_HOST'

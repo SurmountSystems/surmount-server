@@ -362,21 +362,21 @@ ports; docs lag is called out per row where it matters.
 - **Claim the tree currently implies:** Synology MailPlus migration uses
   **nested Maildir** as source of truth (not MailPlus SQLite). Staging path
   **`/var/lib/surmount/import/maildir`**. Helper
-  `surmount-mail-import-maildir` calls `stalwart-cli import messages
-  --format maildir-nested`. **Never** auto-import in activation scripts.
+  `surmount-mail-import-maildir` runs **Vandelay** (`import maildir` then
+  `export` to loopback JMAP). **Never** auto-import in activation scripts.
   Import staging is disposable after verified import; live authority is
   Stalwart store only.
 - **Where it lives:** `modules/mail.nix` (helper + tmpfiles),
+  `nix run .#surmount-mail-import-maildir`, `nix/packages/vandelay.nix`,
   `docs/MIGRATION.md`, `docs/DATASTORES.md`, `docs/open-choices.md`,
   `README.md`.
 - **Why someone might have put it there:** Lossless content recovery; operator
   control; avoid silent data mutation on every rebuild.
-- **Status:** Helper and staging dir are **in working code** (template).
-  Exact 0.16 CLI import subcommands are **unknown / needs confirm** per
-  packaging join (schema-driven CLI may differ from older `import messages`).
-- **Should revisit now that Stalwart is 0.16.15?** **Yes.** Validate real
-  import path against `stalwart-cli --help` and 0.16 docs before any
-  production MailPlus cutover. MIGRATION.md ports mopped to **8080** (2026-08-07).
+- **Status:** Live `stalwart-cli` **1.0.12** has **no** `import` subcommand
+  (confirmed 2026-08-13). Official 0.16 path is Vandelay 1.0.7. Wrapper +
+  hermetic test shipped. MIGRATION.md ports mopped to **8080**.
+- **Should revisit now that Stalwart is 0.16.15?** Import CLI question
+  answered. Remaining: copy 1029 Maildir, then operator-run the wrapper.
 - **Open question for operator:** Is Maildir-nested still the only import
   path you need at cutover, and who runs the verified trial import?
 

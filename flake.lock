@@ -12,6 +12,7 @@
       "original": {
         "owner": "ipetkov",
         "repo": "crane",
+        "rev": "756d6d07c3818ea95d1e2cdac63fa7d02fe3e61b",
         "type": "github"
       }
     },
@@ -52,7 +53,8 @@
         "crane": "crane",
         "nixpkgs": "nixpkgs",
         "nixpkgs-rust": "nixpkgs-rust",
-        "sops-nix": "sops-nix"
+        "sops-nix": "sops-nix",
+        "surmount-site": "surmount-site"
       }
     },
     "sops-nix": {
@@ -72,6 +74,23 @@
       "original": {
         "owner": "Mic92",
         "repo": "sops-nix",
+        "rev": "f1406619a3884cd5c47992a70b8b35c9c0fcb4c9",
+        "type": "github"
+      }
+    },
+    "surmount-site": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787605156,
+        "narHash": "sha256-QQH6o/rbQjBheRpO+orVnUC0X2xkHxRDUikgGDmWHcQ=",
+        "owner": "SurmountSystems",
+        "repo": "site",
+        "rev": "eee7ec234c7243cae130ad1ebae44f7ac1a28ef8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "SurmountSystems",
+        "repo": "site",
         "type": "github"
       }
     }

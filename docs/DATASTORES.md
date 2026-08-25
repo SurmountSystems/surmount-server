@@ -4,7 +4,9 @@ Intentional design of every durable and semi-durable store in the Surmount
 mail + web stack. Written for a senior database engineer: precise, no
 "defaults are fine," explicit unknowns, load-test honesty.
 
-**Last updated:** 2026-08-07
+**Last updated:** 2026-08-19 (sshd host keys: module generates ed25519 only;
+leftover RSA files on a live host are not deleted by hostKeys). Prior
+2026-08-17 (Arti HS identity dir + optional onion map file)
 
 > **Operator direction 2026-07-30:** RocksDB for all roles is **fine for now**;
 > co-location OK this phase; internal FTS good enough for now; in-memory on
@@ -444,7 +446,8 @@ section 2.
 | RocksDB directory | `/var/lib/stalwart-mail/db` |
 | systemd unit | `stalwart-mail.service` |
 | User | `stalwart-mail` (static user; avoids chown storms) |
-| Import staging | `/var/lib/surmount/import/maildir` (Maildir **source**, not runtime) |
+| Import staging | `/var/lib/surmount/import/maildir/<uid>/<uid>/Maildir` (Maildir **source**, not runtime; copy with `just mailplus-copy-uid`) |
+| Vandelay archive | `/var/lib/surmount/import/vandelay` (SQLite **staging**, not runtime) |
 
 ### 5.4 Spam-filter FOD is not the message store
 
@@ -459,14 +462,23 @@ wiring through a TOML `settings` key.
 ### 5.5 Import path vs live store
 
 ```text
-MailPlus Maildir  --operator rsync-->  /var/lib/surmount/import/...
+MailPlus Maildir (DS1513 or DS3018xs; pass --host)
+  --operator copy-uid-->  /var/lib/surmount/import/maildir/...
                                             |
-                          stalwart-cli import (operator-run)
+                    vandelay import maildir (operator-run)
+                                            |
+                                            v
+                         /var/lib/surmount/import/vandelay/*.sqlite
+                                            |
+                    vandelay export JMAP loopback :8080
                                             |
                                             v
                               Stalwart data + blob (+ FTS)
                               /var/lib/stalwart-mail/db
 ```
+
+`stalwart-cli` 1.0.x has no `import` subcommand. Do not document
+`stalwart-cli import messages`.
 
 After successful import and verification, import staging is disposable.
 Live authority is only the Stalwart store. Never auto-import on activation.
@@ -545,19 +557,25 @@ wired in modules yet.
 | MailPlus import staging | Maildir files | `/var/lib/surmount/import/...` | Files | Optional until import done | May contain mail | Operator |
 | Surmount state root | dir | `/var/lib/surmount` | Files | restic `stateDir` | Future sessions etc. | Surmount |
 | Management UI durable state | Optional ban/whitelist-last-used JSON; future sessions | default `stateDir/ui/ban-state.json` when accessControl.enable; no secrets | Files | With `stateDir` | Session secrets via sops (future); ban state is IPs only | Surmount management-ui |
+| Console account map | Versioned JSON list | `/var/lib/surmount/console/accounts.json` (Nix `consoleAccountsFile` / `SURMOUNT_CONSOLE_ACCOUNTS`; owner `surmount-ui` mode 0600) | Files | With `stateDir` | Optional npub hex + mailbox + role; **never nsec**; not the host allowlist | Surmount management-ui |
+| Contributor NWC store | Versioned JSON list | `/var/lib/surmount/secrets/ui/nwc.json` (Nix `nwcStoreFile` / `SURMOUNT_NWC_STORE`; owner `surmount-ui` mode 0600) | Files | With durable Domain B | NIP-47 `nostr+walletconnect` URIs per mailbox; **never nsec**; never echoed in HTML/JSON/logs | Surmount management-ui |
+| Extra static site document roots | Static HTML/CSS/JS/media | `/var/lib/surmount/static-sites/<slug>` (Nix `managementUi.staticVhosts`; env `SURMOUNT_STATIC_VHOSTS_FILE`) | Files | Operator copy from DS3018xs GVFS; not git | Public site files (no deploy secrets) | surmount-management-ui |
+| Arti HS identity | Arti onion-service keystore | `surmount.artiHiddenService.onionServiceStateDir` (module default `/run/surmount-secrets/arti/onion-service` is **ephemeral**; live host uses durable Domain B under `/var/lib/surmount/secrets/arti/onion-service`) | Files; **reboot-safe only if not `/run`** | **Operator offline backup** (still residual). Never public git | **HS private keys** (0700 keystore). Onion **hostname** is not a secret | `surmount-arti`; module does not create the dir |
+| Arti process cache / HOME | Arti cache + `port_info.json` | `/var/lib/surmount/arti` (tmpfiles 0750 `surmount-arti`). Live host-local sets unit `HOME=` here | Files | Optional / skip | No keys | `surmount-arti` |
+| Optional onion map file | JSON host-to-onion overrides | `SURMOUNT_ONION_MAP_FILE` only if set; not required when auto-derive apex/www/services | Files | With operator path | Onion hostnames only; never HS keys | Operator / management-ui (loaded at process start) |
 | nft surmount_guard sets | nftables sets (empty at install) | kernel nft when accessControl.nftSets | Host firewall | N/A (rebuilt from app/helper) | No | hardening.nix |
-| Product auth (npub allowlist) | Config/sops (TBD implementation) | sops +/or stateDir | As designed | sops + state | Mapping may be sensitive | Surmount |
+| Product auth (npub allowlist) | Host file / env | `nostrAllowlistFile` Domain B path | As designed | sops + state | Bootstrap Administrator npubs; not User map rows | Surmount |
 | nginx (transitional) / future Axum-first edge state | certs + conf | conf in Nix; see EDGE_AND_TLS / tls research | Cert material | `/var/lib/acme` (scaffold) | Private keys | Edge module |
 | ACME certificates | Let's Encrypt via `security.acme` | `/var/lib/acme/<name>/` | Files (mode-restricted) | restic optional; re-issueable | **Private keys** | Edge / ACME |
 | sops age key (host) | age identity file | `/var/lib/sops-nix/key.txt` (default) | File | **Offline copies**; not only restic on same disk | **Critical** | Operator + secrets.nix |
 | Deploy secrets (sops scaffold) | age-encrypted YAML or plain files on host | Host paths only (e.g. `/var/lib/surmount/secrets/`); **never public git** | Host + operator channels | Host backup / offline; not the public repo | **Critical**; never commit | Operator + secrets.nix |
-| SSH host keys | OpenSSH | `/etc/ssh/ssh_host_*` | Files | Backup carefully; rotation story | **Private keys**; also sops ssh-to-age | OS |
+| SSH host keys | OpenSSH | Module generates `/etc/ssh/ssh_host_ed25519_key` only (`hardening.nix` `hostKeys`). Leftover `ssh_host_rsa_key*` on a live host are not deleted by dropping rsa from `hostKeys` | Files | Backup the ed25519 host key carefully; rotation story | **Private keys**; sops ssh-to-age uses ed25519 | OS + hardening.nix |
 | machine-id | systemd | `/etc/machine-id` | File | Low value; regenerable with care | No | OS |
-| journald | journal files | `/var/log/journal` | Ring buffer / vacuum | Usually not full fidelity backup | May leak metadata if mis-logged | OS; host sets `SystemMaxUse` |
+| journald | journal files | `/var/log/journal` (persistent when `surmount.logging.enable`) | Size + age vacuum (`SystemMaxUse` scaffold 1G, `RuntimeMaxUse` 256M, `MaxRetentionSec` 30day) plus explicit RateLimitIntervalSec/Burst (scaffold 30s / 50000; not 0; burst at least 20000). Completeness over vacuum. Not published guest disk. | Usually not full fidelity backup | May leak metadata if mis-logged; never secrets | OS + `modules/logging.nix` |
 | fail2ban | SQLite (typical) + systemd | under `/var/lib/fail2ban` | Local | Optional | No | hardening.nix |
 | restic repository | restic encrypted | remote URL (S3/etc.) | Object store | **Is** the backup | Repo password in sops | backups.nix |
 | restic cache (local) | cache dir | default restic cache | Disposable | Skip | No | restic |
-| Vaultwarden (planned) | **SQLite recommended** for single VPS; Postgres optional | e.g. `/var/lib/bitwarden_rs` (nixpkgs-typical) | DB file or PG | **Critical** restic path | VW admin token + DB from sops; vault contents encrypted client-side | Planned module |
+| Vaultwarden (S7a module offline; host enable residual) | **SQLite recommended** for single VPS; Postgres optional | `/var/lib/vaultwarden` (stateVersion 26.05 stock StateDirectory) | DB file or PG | **Critical** restic path when live | VW admin token via host EnvironmentFile under `/run/surmount-secrets/vaultwarden/`; vault contents encrypted client-side | `modules/vaultwarden.nix` (enable default false) |
 | LUKS2 headers / unlock | LUKS2 | disk header + passphrase/key | Header damage = data loss | Header backup + offline passphrase | **Highest** | Install / SECURITY.md |
 | Nix store / generations | Nix | `/nix/store`, profiles | Content-addressed | Not a data backup | Build secrets must not land here plaintext | NixOS |
 | Static legacy sites | Files | vhost root TBD | Files | With site content | Usually public | web.nix / open-choices |
@@ -638,7 +656,7 @@ A backup never restored is theater ([SECURITY.md](SECURITY.md)).
 1. Snapshot/export Maildir consistently (MIGRATION.md).
 2. Create Stalwart account (directory) first.
 3. Import into live store via `surmount-mail-import-maildir` /
-   `stalwart-cli`.
+   Vandelay (not `stalwart-cli import`).
 4. Verify folder counts, Sent/Drafts, spot-check bodies and attachments.
 5. Keep Maildir until verification + backup of **new** store passes.
 6. Cut MX only after dual-run confidence.

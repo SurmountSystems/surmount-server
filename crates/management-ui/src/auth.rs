@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,8 +31,12 @@ use sha2::Sha256;
 /// Cookie name for the scaffold signed session.
 pub const SESSION_COOKIE_NAME: &str = "surmount_session";
 
-/// Double-submit CSRF cookie (not HttpOnly; JS or API clients echo into header/body).
-/// Paired with [`CSRF_HEADER_NAME`]. Session cookie stays HttpOnly + SameSite=Lax.
+/// Double-submit CSRF cookie (**HttpOnly**, Path=/, SameSite=Lax).
+///
+/// The mail page (and session JSON) embeds the token so the client can send
+/// `X-CSRF-Token` without reading `document.cookie`. HttpOnly matches
+/// `surmount_session` so browsers that drop JS-readable cookies still keep
+/// this one. Paired with [`CSRF_HEADER_NAME`].
 pub const CSRF_COOKIE_NAME: &str = "surmount_csrf";
 
 /// Request header clients must send with cookie-authenticated mutations (logout, …).
@@ -118,6 +123,71 @@ impl AuthConfig {
         }
         Ok(())
     }
+
+    /// Start-time auth validation: secret when nostr, plus public-edge footgun guard.
+    ///
+    /// Call with the primary `SURMOUNT_LISTEN` address. Lab escape
+    /// `allow_public_auth_off` mirrors `SURMOUNT_ALLOW_PUBLIC_AUTH_OFF` (never
+    /// production default).
+    pub fn validate_for_listen(
+        &self,
+        listen: SocketAddr,
+        allow_public_auth_off: bool,
+    ) -> Result<(), String> {
+        self.validate()?;
+        require_auth_when_public_edge(self.mode, listen, allow_public_auth_off)
+    }
+}
+
+/// True when the primary listen address is a public-facing edge bind.
+///
+/// - Unspecified (`0.0.0.0` / `::`): world bind => public.
+/// - Loopback, RFC1918 / unique-local private, link-local: lab-safe for auth-off.
+/// - Other addresses (global unicast, including TEST-NET docs ranges): public.
+pub fn listen_is_public_primary_edge(addr: SocketAddr) -> bool {
+    use std::net::IpAddr;
+    match addr.ip() {
+        IpAddr::V4(v4) => {
+            if v4.is_unspecified() {
+                return true;
+            }
+            // Loopback, RFC1918 private, link-local: not a public edge for this guard.
+            !(v4.is_loopback() || v4.is_private() || v4.is_link_local())
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_unspecified() {
+                return true;
+            }
+            // Loopback, unique local (fc00::/7), link-local: lab-safe for auth-off.
+            !(v6.is_loopback() || v6.is_unique_local() || v6.is_unicast_link_local())
+        }
+    }
+}
+
+/// Refuse `AuthMode::Off` on a public primary listen (open-console footgun).
+///
+/// Loopback / private binds may keep auth-off for local `just dev` and CI.
+/// Public bind requires `AuthMode::Nostr` (or lab-only `allow_public_auth_off`).
+pub fn require_auth_when_public_edge(
+    mode: AuthMode,
+    listen: SocketAddr,
+    allow_public_auth_off: bool,
+) -> Result<(), String> {
+    if mode != AuthMode::Off {
+        return Ok(());
+    }
+    if allow_public_auth_off {
+        return Ok(());
+    }
+    if !listen_is_public_primary_edge(listen) {
+        return Ok(());
+    }
+    Err(format!(
+        "SURMOUNT_AUTH_MODE=off is not allowed on public primary listen {listen} \
+         (open console is not public-safe). Set SURMOUNT_AUTH_MODE=nostr with \
+         SURMOUNT_SESSION_SECRET + allowlist, bind loopback/private only, or \
+         lab-only SURMOUNT_ALLOW_PUBLIC_AUTH_OFF=1 (fail-closed)"
+    ))
 }
 
 /// Parse `SURMOUNT_NOSTR_ALLOWLIST`: comma/space/newline separated bech32 npub or hex.
@@ -192,13 +262,19 @@ pub fn auth_error_kind(err: &AuthError) -> &'static str {
 }
 
 /// Normalize one npub (bech32) or hex pubkey to lowercase hex.
+///
+/// Never echo the raw token. `nsec1` is refused with a fixed phrase.
 pub fn normalize_pubkey_token(token: &str) -> Result<String, String> {
     let t = token.trim();
     if t.is_empty() {
-        return Err("empty pubkey token".into());
+        return Err("invalid npub".into());
     }
-    // PublicKey::parse accepts hex and bech32 npub.
-    let pk = PublicKey::parse(t).map_err(|e| format!("invalid npub/hex {t:?}: {e}"))?;
+    if t.to_ascii_lowercase().starts_with("nsec1") {
+        return Err("nsec is not allowed".into());
+    }
+    // PublicKey::parse accepts hex and bech32 npub. Do not include the token
+    // or parser text in the error (create/grant return this string in JSON).
+    let pk = PublicKey::parse(t).map_err(|_| "invalid npub".to_string())?;
     Ok(pk.to_hex().to_ascii_lowercase())
 }
 
@@ -294,17 +370,16 @@ pub fn decode_event_b64_or_json(input: &str) -> Result<Event, AuthError> {
     Event::from_json(bytes).map_err(|_| AuthError::Malformed)
 }
 
-/// Verify NIP-98 event against expected absolute URL, HTTP method, skew, and allowlist.
+/// Verify NIP-98 event (kind, signature, skew, u, method). Does not check allowlist.
 ///
-/// Skew policy (documented): `|now - created_at| <= max_skew_secs` (default 300).
-/// Symmetric window (past and future) for clock skew. Tests cover both sides.
-pub fn verify_nip98_event(
+/// Callers then accept the key if it is on the host allowlist **or** the
+/// Surmount console account map.
+pub fn verify_nip98_event_unlisted(
     event: &Event,
     expected_url: &str,
     expected_method: &str,
     now_unix: u64,
     max_skew_secs: u64,
-    allowlist: &HashSet<String>,
 ) -> Result<VerifiedIdentity, AuthError> {
     if event.kind != Kind::HttpAuth && u16::from(event.kind) != NIP98_KIND {
         return Err(AuthError::WrongKind);
@@ -345,11 +420,32 @@ pub fn verify_nip98_event(
     }
 
     let hex_pubkey = event.pubkey.to_hex().to_ascii_lowercase();
-    if !allowlist_contains(allowlist, &hex_pubkey) {
+    Ok(VerifiedIdentity { hex_pubkey })
+}
+
+/// Verify NIP-98 event against expected absolute URL, HTTP method, skew, and allowlist.
+///
+/// Skew policy (documented): `|now - created_at| <= max_skew_secs` (default 300).
+/// Symmetric window (past and future) for clock skew. Tests cover both sides.
+pub fn verify_nip98_event(
+    event: &Event,
+    expected_url: &str,
+    expected_method: &str,
+    now_unix: u64,
+    max_skew_secs: u64,
+    allowlist: &HashSet<String>,
+) -> Result<VerifiedIdentity, AuthError> {
+    let identity = verify_nip98_event_unlisted(
+        event,
+        expected_url,
+        expected_method,
+        now_unix,
+        max_skew_secs,
+    )?;
+    if !allowlist_contains(allowlist, &identity.hex_pubkey) {
         return Err(AuthError::NotAllowlisted);
     }
-
-    Ok(VerifiedIdentity { hex_pubkey })
+    Ok(identity)
 }
 
 /// Loose URL compare: normalize trailing slash on path-only roots.
@@ -472,17 +568,19 @@ pub fn new_csrf_token() -> Result<String, AuthError> {
 
 /// Build `Set-Cookie` for CSRF double-submit token.
 ///
-/// Not HttpOnly so browser clients can echo the value into `X-CSRF-Token`.
-/// SameSite=Lax + optional Secure (mirrors session cookie policy).
+/// HttpOnly + Path=/ + SameSite=Lax + optional Secure (same jar policy as
+/// the session cookie). The HTML form embeds the token for the header.
 pub fn csrf_set_cookie_header(token: &str, max_age_secs: u64, secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
-    format!("{CSRF_COOKIE_NAME}={token}; Path=/; SameSite=Lax; Max-Age={max_age_secs}{secure_flag}")
+    format!(
+        "{CSRF_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}{secure_flag}"
+    )
 }
 
-/// Clear CSRF cookie.
+/// Clear CSRF cookie (must match Path / HttpOnly / SameSite / Secure).
 pub fn csrf_clear_cookie_header(secure: bool) -> String {
     let secure_flag = if secure { "; Secure" } else { "" };
-    format!("{CSRF_COOKIE_NAME}=; Path=/; SameSite=Lax; Max-Age=0{secure_flag}")
+    format!("{CSRF_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure_flag}")
 }
 
 /// Constant-time equality for token strings (length must match).
@@ -511,6 +609,49 @@ pub fn verify_csrf_double_submit(
     let submitted = submitted_token.map(str::trim).filter(|s| !s.is_empty());
     match (cookie, submitted) {
         (Some(c), Some(s)) if constant_time_eq_str(c, s) => Ok(()),
+        _ => Err(AuthError::Csrf),
+    }
+}
+
+/// Purpose bytes for session-bound CSRF HMAC (distinct from the session MAC).
+/// Present in the running binary so deploy proof can grep this exact string.
+pub const CSRF_SESSION_MAC_PURPOSE: &[u8] = b"surmount-csrf-session-v1";
+
+/// CSRF synchronizer token bound to a session cookie via HMAC-SHA256.
+///
+/// Not the session MAC. The mail page embeds this value; POST compares the
+/// submitted header/body to it. A second `surmount_csrf` cookie is optional.
+pub fn session_bound_csrf_token(session_cookie: &str, secret: &[u8]) -> Result<String, AuthError> {
+    if secret.is_empty() || session_cookie.is_empty() {
+        return Err(AuthError::Config);
+    }
+    let mut mac = HmacSha256::new_from_slice(secret).map_err(|_| AuthError::Config)?;
+    mac.update(CSRF_SESSION_MAC_PURPOSE);
+    mac.update(&[0u8]);
+    mac.update(session_cookie.as_bytes());
+    Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+}
+
+/// Session-bound CSRF: submitted token must match HMAC(session cookie).
+///
+/// Missing session, missing/empty submitted token, or mismatch is
+/// [`AuthError::Csrf`]. Does not require a `surmount_csrf` cookie.
+pub fn verify_csrf_session_bound(
+    session_cookie: Option<&str>,
+    secret: &[u8],
+    submitted_token: Option<&str>,
+) -> Result<(), AuthError> {
+    let session = session_cookie.map(str::trim).filter(|s| !s.is_empty());
+    let submitted = submitted_token.map(str::trim).filter(|s| !s.is_empty());
+    match (session, submitted) {
+        (Some(sess), Some(got)) => {
+            let expected = session_bound_csrf_token(sess, secret)?;
+            if constant_time_eq_str(&expected, got) {
+                Ok(())
+            } else {
+                Err(AuthError::Csrf)
+            }
+        }
         _ => Err(AuthError::Csrf),
     }
 }
@@ -637,6 +778,8 @@ pub fn is_public_path(path: &str) -> bool {
             | "/api/v1/auth/session"
             | "/api/v1/auth/logout"
             | "/login"
+            // MTA-STS policy body (RFC 8461); receivers fetch without session.
+            | "/.well-known/mta-sts.txt"
     )
 }
 
@@ -706,6 +849,26 @@ mod tests {
     fn parse_allowlist_rejects_garbage() {
         let err = parse_allowlist("not-a-key").unwrap_err();
         assert!(err.contains("invalid"), "{err}");
+    }
+
+    /// Named contract: nsec is refused without echoing the token; other
+    /// parse failures are a fixed "invalid npub" with no token.
+    #[test]
+    fn normalize_pubkey_token_refuses_nsec_without_echo() {
+        let nsec = concat!("nsec", "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq").to_string();
+        let err = normalize_pubkey_token(nsec).unwrap_err();
+        assert_eq!(err, "nsec is not allowed");
+        assert!(!err.contains(nsec), "must not echo nsec: {err}");
+        let mixed = "NSEC1not-a-real-secret-token";
+        let err = normalize_pubkey_token(mixed).unwrap_err();
+        assert_eq!(err, "nsec is not allowed");
+        assert!(!err.to_ascii_lowercase().contains("nsec1not"));
+        let garbage = "not-an-npub-or-hex";
+        let err = normalize_pubkey_token(garbage).unwrap_err();
+        assert_eq!(err, "invalid npub");
+        assert!(!err.contains(garbage), "must not echo token: {err}");
+        let err = normalize_pubkey_token("").unwrap_err();
+        assert_eq!(err, "invalid npub");
     }
 
     /// Named contract: env non-empty wins over file; empty both = fail-closed empty.
@@ -903,11 +1066,63 @@ mod tests {
         assert!(cfg.validate().is_ok());
     }
 
+    /// Named contract: public primary edge + AuthMode::Off is refused (footgun guard).
+    /// Loopback/private binds may keep auth-off for lab/CI; world bind / global IP may not.
+    #[test]
+    fn public_primary_edge_auth_off_is_refused() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+        let loopback = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8090);
+        let private = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)), 8090);
+        let wildcard = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 443);
+        let public = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)), 443);
+        let v6_wildcard = SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 443);
+
+        assert!(!listen_is_public_primary_edge(loopback));
+        assert!(!listen_is_public_primary_edge(private));
+        assert!(listen_is_public_primary_edge(wildcard));
+        assert!(listen_is_public_primary_edge(public));
+        assert!(listen_is_public_primary_edge(v6_wildcard));
+
+        // Auth off on loopback / private is OK (local just dev / lab).
+        assert!(require_auth_when_public_edge(AuthMode::Off, loopback, false).is_ok());
+        assert!(require_auth_when_public_edge(AuthMode::Off, private, false).is_ok());
+
+        // Public bind + off must fail closed.
+        let err = require_auth_when_public_edge(AuthMode::Off, wildcard, false).unwrap_err();
+        assert!(
+            err.contains("AUTH_MODE") && (err.contains("public") || err.contains("off")),
+            "{err}"
+        );
+        let err_pub = require_auth_when_public_edge(AuthMode::Off, public, false).unwrap_err();
+        assert!(
+            err_pub.contains("AUTH_MODE") || err_pub.contains("public"),
+            "{err_pub}"
+        );
+
+        // Nostr on public is OK (secret checked separately by validate).
+        assert!(require_auth_when_public_edge(AuthMode::Nostr, wildcard, false).is_ok());
+
+        // Lab escape allows intentional public+off (tests only; never production default).
+        assert!(require_auth_when_public_edge(AuthMode::Off, wildcard, true).is_ok());
+
+        // AuthConfig::validate_for_listen wires the same contract.
+        let off = AuthConfig::off();
+        assert!(off.validate_for_listen(loopback, false).is_ok());
+        let err = off.validate_for_listen(wildcard, false).unwrap_err();
+        assert!(
+            err.contains("AUTH_MODE") || err.contains("public") || err.contains("off"),
+            "{err}"
+        );
+        assert!(off.validate_for_listen(wildcard, true).is_ok());
+    }
+
     #[test]
     fn public_paths_include_health_and_auth() {
         assert!(is_public_path("/health"));
         assert!(is_public_path("/api/v1/auth/session"));
         assert!(is_public_path("/login"));
+        assert!(is_public_path("/.well-known/mta-sts.txt"));
         assert!(!is_public_path("/"));
         assert!(!is_public_path("/api/v1/domains"));
     }
@@ -986,12 +1201,46 @@ mod tests {
     }
 
     #[test]
-    fn csrf_cookie_header_not_httponly_samesite_lax() {
+    fn session_bound_csrf_matches_same_session_rejects_wrong() {
+        let secret = b"unit-test-session-secret-csrf-v1!!";
+        let sess = "payload.sig-not-verified-here";
+        let a = session_bound_csrf_token(sess, secret).unwrap();
+        let b = session_bound_csrf_token(sess, secret).unwrap();
+        assert_eq!(a, b);
+        assert_ne!(
+            a,
+            session_bound_csrf_token("other.session", secret).unwrap()
+        );
+        assert!(verify_csrf_session_bound(Some(sess), secret, Some(&a)).is_ok());
+        assert_eq!(
+            verify_csrf_session_bound(Some(sess), secret, Some("nope")).unwrap_err(),
+            AuthError::Csrf
+        );
+        assert_eq!(
+            verify_csrf_session_bound(Some(sess), secret, Some("")).unwrap_err(),
+            AuthError::Csrf
+        );
+        assert_eq!(
+            verify_csrf_session_bound(None, secret, Some(&a)).unwrap_err(),
+            AuthError::Csrf
+        );
+        assert!(
+            std::str::from_utf8(CSRF_SESSION_MAC_PURPOSE).unwrap() == "surmount-csrf-session-v1"
+        );
+    }
+
+    #[test]
+    fn csrf_cookie_header_httponly_samesite_lax() {
         let h = csrf_set_cookie_header("secret-token", 3600, true);
         assert!(h.starts_with(&format!("{CSRF_COOKIE_NAME}=secret-token")));
         assert!(h.contains("SameSite=Lax"));
         assert!(h.contains("; Secure"));
-        assert!(!h.to_ascii_lowercase().contains("httponly"));
+        assert!(h.to_ascii_lowercase().contains("httponly"));
+        assert!(h.contains("Path=/"));
+        let clear = csrf_clear_cookie_header(true);
+        assert!(clear.to_ascii_lowercase().contains("httponly"));
+        assert!(clear.contains("Path=/"));
+        assert!(clear.contains("Max-Age=0"));
     }
 
     #[test]

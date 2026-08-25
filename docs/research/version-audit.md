@@ -372,7 +372,7 @@ nix eval --impure --expr 'let np=builtins.getFlake (toString ./.); pkgs=import n
 ```
 
 Update this file's **Living host + crane refresh** date and tables when
-re-running. Keep reports short under `.agents/reports/`.
+re-running. Keep reports short under `~/.agents/reports/`.
 
 ---
 

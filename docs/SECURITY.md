@@ -4,11 +4,28 @@ Defense-in-depth notes for the Surmount mail VPS. Design notes:
 [open-choices.md](open-choices.md). Secrets detail: [SECRETS.md](SECRETS.md).
 Data plane: [DATASTORES.md](DATASTORES.md). Ops: [OPS.md](OPS.md).
 
-**Last updated:** 2026-08-02
+**Last updated:** 2026-08-20 (extra mailbox domains get the same
+mail-auth DNS **and** the same hosted DNSSEC as the primary; leftover
+parent DS is a SERVFAIL class to clear then sign, not leftover-unsigned).
+Prior 2026-08-19 (sshd host keys: module advertises/generates
+ed25519 only; live host still offers RSA until a deploy. Journald paper
+trail size-capped; request log still omits Authorization/Cookie;
+Onion-Location + Alt-Svc on Axum HTTPS; live Arti unit active; Tor
+Browser verify still residual)
 
 This document is posture and design, not a penetration-test report. Open
 implementation details are marked honestly. Not operator-accepted unless you
 say so.
+
+### Host security elevation ladder (B0-B7)
+
+Enabling already-shipped modules on a real box is **operator host work** with
+proof gates. Sample `#mail-vps` keeps public HTTPS, `requireDeployMaterial`,
+Arti, ban enforce, and production Nostr **commented** so eval needs no host
+PEMs. Ordered stages (B0 preserve SSH access through B7 shrink transitional
+fail2ban), proof columns, and D1 hybrid TLS honesty:
+[deploy-host-local.md](deploy-host-local.md) section 6. Day-one automation:
+[OPS.md](OPS.md). Residual host rows: [RESIDUAL.md](../RESIDUAL.md).
 
 ## Goals
 
@@ -23,7 +40,11 @@ say so.
 
 ## Non-goals (this doc)
 
-- Full Vaultwarden production hardening checklist as code (module comes later).
+- Live Vaultwarden unit / first admin user (S7b host residual after token;
+  S7a module offline done; A0 `host-cutover --with-vaultwarden` scripts
+  install kind + enable fragment; sample host stays enable=false).
+- Full public / onion exposure design for VW (operator residual; no invented
+  Q-ARTI answers).
 - Actually reformatting a live VPS with LUKS this turn.
 - Claiming FDE stops a malicious cloud hypervisor with live memory access.
 - Claiming Vaultwarden encrypts Stalwart/RocksDB mail data.
@@ -55,28 +76,109 @@ See [EDGE_AND_TLS.md](EDGE_AND_TLS.md) and open-choices.
 ## Network and edge
 
 - Public: 25, 465, 587, 993, 4190, 80/443 (and SSH on a chosen port).
-- Loopback only: management-ui, Stalwart HTTP, future Vaultwarden.
+- Loopback only: management-ui, Stalwart HTTP, Vaultwarden (when enabled;
+  default rocket 127.0.0.1:8222; world bind needs allowNonLoopbackListen).
 - Edge: nginx transitional-to-delete -> Rust target (operator direction
   2026-07-30); UDS preferred for local backends. See EDGE_AND_TLS.md.
 - Hardening: `modules/hardening.nix` (SSH, light fail2ban; optional
-  `accessControl` nft sets). Edge: rate limit + ban decide (`ban.rs`),
+  `accessControl` nft sets). When hardening is on, sshd **hostKeys** is
+  exactly one ed25519 key at `/etc/ssh/ssh_host_ed25519_key`. The
+  daemon used to also offer RSA (NixOS 26.05 default is rsa-4096 +
+  ed25519). Clients already preferred ssh-ed25519. This module stops
+  generating and advertising rsa. Live deploy is leftover: the running
+  host still advertises RSA until a `deploy-host` switch. Dropping rsa
+  from `hostKeys` does **not** delete leftover RSA files on disk.
+  **PQ honesty:** dropping RSA host keys is classical SSH hygiene.
+  Ed25519 is not post-quantum. OpenSSH host keys are not PQ. PQConnect
+  is a separate userspace path; it is not a host-key swap. Do not claim
+  this change is PQ. Ban path: rate limit + ban decide (`ban.rs`),
   enforcement default off. Target remains merciless ban + whitelist +
   last-used; Q-ACL-* open. See
   [research/access-control-fail2ban.md](research/access-control-fail2ban.md)
   and [EDGE_AND_TLS.md](EDGE_AND_TLS.md) operator end-to-end recipes
   (`nix run .#e2e` / `nix run .#e2e-host`, or `just e2e` / `just e2e-host`).
   Not a full WAF and not Cloudflare-dependent.
-- PQC: TLS hybrid KEX on Axum/rustls where available; PQConnect as separate
-  path layer research
-  ([research/pqconnect-and-pqc.md](research/pqconnect-and-pqc.md)).
+- PQC: management-ui **rustls + aws-lc-rs** with `prefer-post-quantum` offers
+  hybrid **X25519MLKEM768** first among default kx groups (**D1**; hermetic
+  unit proof of provider groups, not automatic live-host hybrid negotiation).
+  Host probe after B1: `nix run .#surmount-tls-hybrid` (env
+  `SURMOUNT_E2E_BASE_URL`; exit 2 BLOCKED if unset; not CI cutover).
+  PQConnect is a **separate** path-layer track (**D2**;
+  not a substitute for D1). Research:
+  [research/pqconnect-and-pqc.md](research/pqconnect-and-pqc.md); dual-pin
+  [EDGE_AND_TLS.md](EDGE_AND_TLS.md), [deploy-host-local.md](deploy-host-local.md).
+- **Mail auth classical dual-sign (operator direction 2026-08-11):** Day-1
+  DKIM is **Ed25519 + RSA-4096** (selectors `stalwart` / `stalwart-rsa`).
+  Best algorithms receivers accept today. **Neither is post-quantum**; larger
+  RSA does not buy meaningful quantum resistance (Shor). Do not claim PQ from
+  RSA-4096. When IETF/receivers support PQ or hybrid mail auth, Surmount
+  tracks that residual separately from D1 TLS hybrid and D2 PQConnect.
+  Checklist and paths: [DNS.md](DNS.md) *Hardness and quantum honesty*.
+- **Mail records on every mailbox domain (operator 2026-08-20):** extra
+  domains this host sends or receives through (examples:
+  `cryptoquick.com`, `baxterartworks.com`) get the **same** mail-auth DNS
+  as the primary, **including primary-class DNSSEC** (Namecheap hosted
+  **DNSSEC Status ON**; ECDSA P-256 SHA-256 algorithm 13 acceptable for
+  now): working Namecheap hosted DNS, SPF, dual DKIM TXT, DMARC
+  at the operator-directed policy (live mailbox `_dmarc` is
+  `p=quarantine`; do **not** use `p=reject`; Baxter intended is
+  `p=quarantine`; public `_dmarc.baxterartworks.com` may stay NXDOMAIN
+  while EmailType is FWD), TLS-RPT, CAA, MTA-STS on names this cert and
+  this host actually serve. Do **not** harden only `surmount.systems`.
+  A leftover parent **DS** with no matching child DNSKEY is a DNSSEC
+  honesty fail: validating resolvers SERVFAIL the zone (`cryptoquick.com`
+  was that class). That leftover is a SERVFAIL **bug to clear then
+  sign**, not a reason to leave the zone unsigned. We asked cryptoquick
+  OFF only because leftover DS 2368 (alg 13, digest type 1 SHA-1) had no
+  DNSKEY. Operator wants ON same as `surmount.systems`. Do **not** re-add
+  2368 by hand. DS digest type 1 (SHA-1) is also a fail, even if a
+  DNSKEY exists. Static-site-only extra vhosts are not automatically
+  mail domains. Public MX on registrar eforward is a **fail** for a
+  claimed mailbox (`domain-audit`; `--live set-mx` is not a flip while
+  EmailType is FWD). Dual-pin: [DNS.md](DNS.md),
+  [COMPACTION-PIN.md](COMPACTION-PIN.md), [../AGENTS.md](../AGENTS.md).
 - **Arti onion/hidden services (REQUIRED):** services must be reachable via
   Arti HS alongside clearnet; HS keys never in git; not a clearnet edge
-  replacement. [research/arti-and-secrets-manager.md](research/arti-and-secrets-manager.md),
-  [COMPACTION-PIN.md](COMPACTION-PIN.md) section 7.
+  replacement. Clearnet HTTPS advertises the onion with **Onion-Location**
+  and **Alt-Svc** (apex, www, services, extra static Hosts, MTA-STS;
+  same v3; `/_o/{host}` on non-console Onion-Location; process-start load;
+  restart after hostname/env/map/static-vhost change). Live unit
+  `surmount-arti-hidden-service` is **active** (2026-08-17); Tor Browser
+  verify and operator HS backup remain residual. Do **not** claim B3 fully
+  closed. [research/arti-and-secrets-manager.md](research/arti-and-secrets-manager.md),
+  [COMPACTION-PIN.md](COMPACTION-PIN.md) section 7,
+  [EDGE_AND_TLS.md](EDGE_AND_TLS.md).
 
 ## Identity: Nostr product auth (high level)
 
-Proposed direction (open-choices).
+Proposed direction (open-choices). Product mode for operators is **Nostr** at
+the Axum edge (not HTTP Basic, not a password farm).
+
+### Public edge policy (2026-08-12)
+
+| Situation | Required |
+|-----------|----------|
+| **Public** product HTTPS / non-loopback operator console (services Host) | `authMode = "nostr"` + host session secret + allowlist |
+| Loopback / lab / `just dev` | `authMode = "off"` allowed (open console; not public-safe) |
+| Apex / www Host | Public packaged SurmountSystems/site (not the console); orthogonal to Nostr gate |
+
+When mode is **off**, middleware does **not** gate routes: anonymous visitors
+see full console HTML and inventory APIs. That is **lab only**. Do not leave
+the live services Host on auth-off.
+
+**Host enable (B4):** install `session-secret` and `nostr-allowlist` on Domain
+B, set private host-local `authMode = "nostr"` (plus paths and
+`publicBaseUrl`), switch, prove login redirect / API 401 / health 200. Full
+operator runbook and proof curls: [OPS.md](OPS.md) section *Production Nostr
+auth on the public edge (B4)*. Secrets shapes: [SECRETS.md](SECRETS.md).
+Edge wording: [EDGE_AND_TLS.md](EDGE_AND_TLS.md).
+
+**Footgun guard (product):** public primary edge + auth-off is refused
+(binary + Nix assert). Lab/CI keep auth-off on loopback.
+**Live B4 (2026-08-12):** public services is Nostr-gated (anon `/` login,
+`/api/v1/domains` 401, `/health` 200). Apex/www serve packaged
+`SurmountSystems/site` (2026-08-18).
+Q-AUTH-1 still open. Report: `.agents/reports/impl-auth-live-b4-switch.md`.
 
 ### What we do
 
@@ -91,8 +193,9 @@ Proposed direction (open-choices).
   cookie (`SURMOUNT_SESSION_SECRET` host-only). Allowlist via
   `SURMOUNT_NOSTR_ALLOWLIST` (env) or optional `SURMOUNT_NOSTR_ALLOWLIST_FILE`
   (same parse rules; **env wins** when non-empty). Empty allowlist is
-  fail-closed. Mode `off` default for local dev. Full Q-AUTH-1 (durable store,
-  bootstrap UX, key-loss) still residual (do not invent product answers here).
+  fail-closed. Mode `off` default for local dev / loopback only. Full Q-AUTH-1
+  (durable store, bootstrap UX, key-loss) still residual (do not invent product
+  answers here).
 - After login, **sessions** (cookie or server-side) are expected so SSR pages
   are usable without signing every GET (exact design open).
 - **[NIP-42](https://nips.nostr.com/42)** is relay AUTH; relevant if we speak
@@ -106,6 +209,44 @@ Proposed direction (open-choices).
   ([OIDC backend](https://stalw.art/docs/auth/backend/oidc/)) and can act as
   OIDC provider/client. That is **not** the same as Nostr.
 - **Does not** natively verify Nostr npub signatures unless we build a bridge.
+
+### Mailbox password hashing (Stalwart 0.16.15)
+
+The management UI does **not** hash mailbox passwords in the browser or in
+Axum. `POST /api/v1/accounts/password` sends the plaintext secret only over
+the already-authenticated operator session to loopback Stalwart
+(`x:Account/set` `credentials.0` `@type Password`). The engine hashes.
+
+Stalwart 0.16.15 (this repo pin in `nix/packages/stalwart-mail.nix`) uses
+`Authentication.passwordHashAlgorithm`. The enum and singleton default are
+**Argon2id**. Source (tag `v0.16.15`):
+
+- `crates/registry/src/schema/enums.rs`: `PasswordHashAlgorithm` `#[default]
+  Argon2id`
+- `crates/registry/src/schema/structs_impl.rs`: `impl Default for
+  Authentication` sets `password_hash_algorithm:
+  PasswordHashAlgorithm::Argon2id`
+- `crates/directory/src/core/secret.rs`: `hash_secret` for `Argon2id` calls
+  `Argon2::default().hash_password`
+
+Public docs (same default; accessed: 2026-08-14):
+[Passwords](https://stalw.art/docs/auth/authentication/password/) and
+[Authentication.passwordHashAlgorithm](https://stalw.art/docs/ref/object/authentication/#passwordhashalgorithm)
+(`argon2id` | `bcrypt` | `scrypt` | `pbkdf2`).
+
+Policy runs at **set time**. Existing empty mailbox credentials stay empty
+until the operator sets a password. Changing the algorithm later does not
+rewrite stored hashes; IMAP still verifies known prefixes (`$argon2`, and
+others listed on the Passwords page).
+
+Optional host pin (not auto-applied; default is already Argon2id):
+
+```bash
+stalwart-cli update Authentication --field passwordHashAlgorithm=argon2id
+```
+
+Verify: `stalwart-cli get Authentication` and confirm
+`passwordHashAlgorithm` is `argon2id`.
 
 ### Bridge pattern
 
@@ -126,7 +267,7 @@ Full write-up: [SECRETS.md](SECRETS.md). Summary:
 | Layer | Tool | Protects | Does not replace |
 |-------|------|----------|------------------|
 | **A. Deploy** | sops-nix + age (host-local) | Service secrets on host at activation; **never in public git** | Human UX vault; FDE |
-| **B. Human vault** | Vaultwarden (planned) | Operator passwords/TOTP/notes | sops at rebuild; mail store crypto |
+| **B. Human vault** | Vaultwarden (S7a offline done; S7b scripted by host-cutover after token) | Operator passwords/TOTP/notes | Deploy secrets at rebuild; mail store crypto |
 | **C. Disk** | LUKS2 | Offline disk/snapshot; unlock material **never in git** | Running OS compromise |
 
 **NEVER secrets in git** (plain or ciphertext). [hygiene.md](hygiene.md).
@@ -135,11 +276,32 @@ Full write-up: [SECRETS.md](SECRETS.md). Summary:
 
 **Vaultwarden** ([upstream](https://github.com/dani-garcia/vaultwarden/)):
 
-- nixpkgs: `services.vaultwarden` (config via env / module options).
-- Reverse-proxy behind our edge on a private hostname; **no public signup**;
-  admin token from sops; backups of vault data are critical.
-- Chicken-and-egg: needs sops secrets to start; cannot supply secrets to
-  pure flake eval.
+- Surmount wrap: `surmount.vaultwarden.*` over stock `services.vaultwarden`
+  (default enable false on sample host). Offline S7a shipped; S7b enable path
+  scripted by A0 host-cutover after token (live unit host-gated). Detail:
+  [SECRETS.md](SECRETS.md) section 5.
+- Defaults: SQLite, loopback Rocket (`127.0.0.1:8222`), `SIGNUPS_ALLOWED`
+  forced false, `configureNginx` refused (Axum-first edge; no nginx product
+  edge for VW).
+- **Public path (optional):** `managementUi.vaultwardenProxyEnable` reverse-
+  proxies `/vault/` (configurable) on the Axum edge to loopback Rocket.
+  Vaultwarden login is SoT on that path day-one (no Nostr gate). WebSocket
+  Upgrade is forwarded. Admin CSP is not applied to proxied VW responses
+  (frame denial still applied; do not iframe VW into the console). Prefer
+  after public https edge is real. Console Open vault becomes same-origin
+  path when proxy is on. Default off on sample host.
+- Without path proxy: console still surfaces operator-published URL / loopback
+  derive as an external link ("not reverse-proxied here").
+- **Admin token:** host EnvironmentFile path only
+  (`adminTokenEnvFile`, e.g. `/run/surmount-secrets/vaultwarden/admin.env`
+  via `nix run .#secrets-install-host`). Never inline in Nix config /
+  `extraConfig` (stock config is store-bound and world-readable). Not
+  "sops-inline secret string" as the product path. Never log ADMIN_TOKEN
+  through the path proxy.
+- Backups of `/var/lib/vaultwarden` are critical when live (restic paths are
+  operator residual until enable).
+- Chicken-and-egg: needs domain B host file to start; cannot supply secrets to
+  pure flake eval; never activation feed for other units.
 
 ## LUKS2 full disk encryption on NixOS VPS
 
@@ -234,24 +396,68 @@ surfaces must raise the hook) remains open.
   **SameSite=Lax**, **Path=/**; **Secure** is set when listen mode is HTTPS
   (`secure_cookies` from `listen_mode.is_https()`). SameSite=Lax already
   blocks most cross-site POSTs from carrying the cookie.
-- **CSRF (shipped):** cookie-authenticated mutations use **double-submit**.
-  Session exchange sets non-HttpOnly `surmount_csrf` (SameSite=Lax, Secure
-  when HTTPS) and returns `csrf` in the JSON body. `POST /api/v1/auth/logout`
-  always requires cookie value to match `X-CSRF-Token` (or JSON body field
-  `csrf`); mismatch or missing token is **403**. Account mutations
-  (`POST /api/v1/accounts`, `PATCH /api/v1/accounts/{id}`) require the same
-  when a session cookie is present (NIP-98-only or lab auth-off escape skips
-  CSRF). Shared helper `require_csrf_double_submit`.
+- **CSRF (shipped):** cookie-authenticated mutations use **double-submit**
+  except mailbox password, create mailbox, and grant-console. Session
+  exchange and authenticated `GET /mail` set **HttpOnly** `surmount_csrf`
+  (Path=/, SameSite=Lax, Secure when HTTPS) as a belt. `GET /mail` embeds a
+  **session-bound** token (HMAC of the session cookie with purpose
+  `surmount-csrf-session-v1`) in `#mailbox-csrf` / `#mailbox-create-csrf` /
+  `#mailbox-grant-csrf` and is `Cache-Control: no-store`.
+  `POST /api/v1/accounts/password`, `POST /api/v1/accounts`, and
+  `POST /api/v1/accounts/console` verify `X-CSRF-Token` / JSON `csrf`
+  against that session HMAC (constant-time). The CSRF cookie may be absent;
+  session + matching hidden/header token is enough. Session + empty/wrong
+  token is **403**. No session is **401**.
+  `POST /api/v1/auth/logout` still requires double-submit cookie+header.
+  `PATCH /api/v1/accounts/{id}` still requires double-submit when a session
+  cookie is present (NIP-98-only or lab auth-off escape skips CSRF).
+- **Create mailbox is Administrator only (2026-08-14).** No public signup.
+  Auth-off create is **403** without the lab directory escape. Console User
+  is **403** even if they POST the form. Stalwart create is always engine
+  **User** (never Stalwart Admin from the portal). Reserved local-part
+  `admin` is refused. Map file
+  `/var/lib/surmount/console/accounts.json` is owner `surmount-ui` mode
+  **0600**; writes are temp-then-rename; existing symlink, directory, or
+  world-writable inode is refused. Role is re-read from the map on every
+  request. Cookie stays `{ sub, exp }` only. Host allowlist keys with no
+  map row stay Administrator. User npubs are not copied to the allowlist.
+- **Attach npub is Administrator only (2026-08-20).** `/mail` Grant console
+  login posts `POST /api/v1/accounts/console` with session-bound CSRF.
+  Bech32 `npub1...` (or hex) is validated; garbage and nsec are refused
+  without echoing the token. Directory listing may stay unavailable; the
+  bind writes the console map so that npub can log into the services
+  portal (AuthMode nostr). User npubs stay in the map, not the host
+  allowlist. Q-AUTH-1 is unchanged.
 - **Baseline security headers (shipped on management router):**
   `Content-Security-Policy` lean for SSR admin (`default-src 'self'`, no
   third-party hosts; `script-src` with per-request nonce for `/login`
   NIP-07 inline script; `style-src 'self' 'unsafe-inline'` for DOGE CSS;
   `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
+  **Onion-Location + Alt-Svc (2026-08-17, every public Host 2026-08-20):**
+  emitted on mapped HTTPS 2xx/3xx (apex, www, services, extra static
+  Hosts, MTA-STS; same v3; `/_o/{host}` discriminator for non-console).
+  Not on `.onion` Host, not on the `:80` redirect router, not on the
+  local Arti cleartext bind. Mail unmapped. 4xx/5xx emit nothing.
+  Mapping is loaded at process start (no hot-reload). Dump on
+  `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on).
+  Header presence is not a Tor Browser Alt-Svc upgrade proof.
 - Full webmail CSP / attachment sandbox remains residual (hostile email HTML).
 - Rate-limit auth endpoints at edge and app.
 - Do not expose Stalwart admin on the public internet long-term.
 - Attachments: size limits, content-type caution, no drive-by exec paths.
+- **Operator-only request and TLS logs (journald).** The Axum edge writes
+  structured `http_request` and `tls_handshake_failed` lines to journald
+  (`surmount-management-ui`; info on stdout, WARN+ on stderr). They are
+  not world-readable and are not dumped on any HTTP route (`/health` and
+  `/api/health` stay status JSON only). Do not add a public log viewer or
+  write access logs under `/var/log` / `/var/lib/surmount`. Operators
+  read via `just host-logs` or `journalctl -u surmount-management-ui`
+  over SSH. Fields omit query content, cookies, Authorization, PEM, and
+  cert bytes. Peer IP is a journal field only. Persistent journal is
+  size-capped (`surmount.logging`; scaffold SystemMaxUse 1G, not a guest
+  disk SKU). Never log passwords, tokens, or HS keys. Detail:
+  [OPS.md](OPS.md) *Logging*.
 
 ## Backups and recovery (security-relevant)
 
@@ -275,15 +481,15 @@ surfaces must raise the hook) remains open.
            | HTTPS (our edge)                              | (human apps)
            v                                               v
   +------------------+                           +------------------+
-  | Axum + Leptos    |                           | Vaultwarden      |
-  | Nostr verify     |                           | (Bitwarden API)  |
-  | admin + webmail  |                           | passwords/TOTP   |
+  | Axum + Leptos    |  optional /vault/ path    | Vaultwarden      |
+  | Nostr verify     |  proxy to loopback Rocket | (Bitwarden API)  |
+  | admin + webmail  |  (or console link only)  | passwords/TOTP   |
   +--------+---------+                           +--------+---------+
            | service tokens / JMAP                         ^
            v                                               |
-  +------------------+                           sops supplies VW
-  | Stalwart         |                           admin/DB secrets
-  | mail + RocksDB   |
+  +------------------+                    host EnvironmentFile
+  | Stalwart         |                    (domain B ADMIN_TOKEN)
+  | mail + RocksDB   |                    never store-bound secret
   +--------+---------+
            |
   =========+==========  LUKS2 (preferred) wraps block device
@@ -295,7 +501,8 @@ surfaces must raise the hook) remains open.
   public git: ZERO secrets (plain or ciphertext)
   LUKS unlock material: never in git
   no required Cloudflare hop
-  Arti onion/HS REQUIRED (alongside clearnet; module residual)
+  Arti onion/HS REQUIRED (alongside clearnet; live unit + discovery
+  headers 2026-08-17; Tor verify / HS backup residual)
   single VPS (multi-host deferred)
 ```
 
@@ -303,7 +510,7 @@ surfaces must raise the hook) remains open.
 
 | Path | Role |
 |------|------|
-| `modules/hardening.nix` | SSH / transitional fail2ban sketch; merciless target in header |
+| `modules/hardening.nix` | SSH (ed25519 host key only; no rsa generate/advertise) / transitional fail2ban sketch; merciless target in header |
 | `modules/networking.nix` | Firewall ports |
 | `modules/secrets.nix` | sops-nix wiring |
 | `modules/web.nix` | edge TLS (transitional nginx) |

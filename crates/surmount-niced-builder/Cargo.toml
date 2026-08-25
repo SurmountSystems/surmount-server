@@ -1,0 +1,15 @@
+[package]
+name = "surmount-niced-builder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Niced, memory-capped ssh-ng nix-daemon helper. Not a mail unit wrapper."
+publish = false
+
+[[bin]]
+name = "surmount-niced-builder"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_niced_builder"
+path = "src/lib.rs"

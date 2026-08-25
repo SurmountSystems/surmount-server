@@ -1,0 +1,2 @@
+# Synthetic SSH public key for deploy-host self-test only.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeTestKeyMaterialOnlyForDeployHostSelfTest00 deploy-host-fixture@test

@@ -23,18 +23,21 @@ in
       allowedTCPPorts = [
         22 # SSH (consider restrict-to-admin nets later)
         25 # SMTP inbound
-        80 # HTTP (ACME + redirect / Axum upgrade)
-        443 # HTTPS (nginx transitional or Axum edge)
+        80 # HTTP (product redirect-only / dual-run ACME; not Stalwart)
+        443 # HTTPS product edge (Axum management-ui; nginx dual-run escape only)
         465 # SMTPS submission
         587 # SMTP submission (STARTTLS)
         993 # IMAPS
         4190 # ManageSieve
       ];
+      # P1: :80/:443 are product clearnet edge (Axum when web.enable false).
+      # Stalwart is not the product public HTTPS owner. First-boot may still
+      # insert engine HTTPS :443 until operator apply plan
+      # /etc/surmount/stalwart/free-public-443-for-axum-edge.ndjson (or WebUI).
       # Do not expose Stalwart HTTP (:8080 default) or UI loopback ports
-      # publicly without intent. 0.16 first-boot defaults bind HTTP on
-      # [::]:8080; rebind to loopback or UDS for production. Public HTTPS:
-      # management-ui rustls when web.enable is false (default); dual-run
-      # nginx only if surmount.web.enable = true. See docs/EDGE_AND_TLS.md.
+      # publicly without intent. Rebind HTTP management to 127.0.0.1:8080.
+      # Dual-run nginx only if surmount.web.enable = true.
+      # See docs/EDGE_AND_TLS.md, nix/stalwart/README.md.
       #
       # Merciless ban: when accessControl.enable+nftSets, inet surmount_guard
       # holds surmount-ban4/6 + whitelist sets (hardening.nix). App-level bans

@@ -1,0 +1,21 @@
+[package]
+name = "surmount-secrets-prompt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Interactive no-echo secret intake into Domain A staging (and optional secret-tool)"
+publish = false
+
+[[bin]]
+name = "surmount-secrets-prompt"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_secrets_prompt"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+getrandom.workspace = true
+rpassword = "7"

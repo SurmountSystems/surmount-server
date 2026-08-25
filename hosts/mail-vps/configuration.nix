@@ -6,47 +6,80 @@
 # Flake primary attr: mail-vps. Alias: surmount-mail (same config).
 # Host channel / stateVersion: nixos-26.05.
 #
+# Host-local overlay contract (hardware, SSH keys, net, real hostname, PEMs):
+#   docs/deploy-host-local.md  -- private ./host-local at flake root; gitignored;
+#   flake auto-imports when present (path: rebuild after deploy-host rsync).
+#   Never copy into this tracked hosts/ path.
+# Operator deploy driver (public rsync + host-local + path: rebuild; not CI):
+#   nix run .#surmount-deploy-host / just deploy-host
+# Security ladder B0-B7 (host-gated; leave https/Arti/ban commented here):
+#   docs/deploy-host-local.md section 6
+#
 # First-deploy checklist (operator; do not invent material in git):
 #   Private keys, PEMs, age identities, real public IPs, and long SSH pubs:
 #   paste on the HOST only. Never commit them. Pre-commit scans patterns via
-#   script/check-private-data.sh (see docs/hygiene.md).
+#   surmount-private-data (see docs/hygiene.md).
 #   1. Generate hardware-configuration.nix on the real machine (or disko) and
-#      import it; replace install-time placeholders below (qemu-guest, GRUB
-#      device, root by-label). LUKS day-one vs plain disk is Q-HOST-2 open.
+#      import it (prefer host-local overlay; do not commit hardware-config here);
+#      replace install-time placeholders below (qemu-guest, GRUB device, root
+#      by-label). LUKS day-one vs plain disk is Q-HOST-2 open.
 #   2. Paste SSH public keys for root and/or user surmount BEFORE switch with
 #      password auth off (hardening default). Empty keys = lockout risk.
+#      deploy-host fails loud if host-local authorized_keys is empty.
 #   3. Set real public IPv4/IPv6 and DNS when known (docs/DNS.md). No invented IPs.
 #   4. Install age key at /var/lib/sops-nix/key.txt (or rely on SSH host key).
 #
 #   --- (A) Product public edge (default: web.enable false) ---
-#   5. Place TLS PEMs on the HOST only (never in git), e.g.
+#   P1: Axum (management-ui) owns public :80 and :443. Stalwart is backend
+#   mail only; do not leave Stalwart as permanent product clearnet HTTPS.
+#   5. After Stalwart first boot, free engine HTTPS :443 if present:
+#      query NetworkListener; apply
+#      /etc/surmount/stalwart/free-public-443-for-axum-edge.ndjson
+#      (or WebUI). Rebind HTTP management to 127.0.0.1:8080. See
+#      nix/stalwart/README.md and docs/EDGE_AND_TLS.md.
+#   6. Place TLS PEMs on the HOST only (never in git), e.g.
 #      /run/surmount-secrets/tls/{cert,key}.pem (key mode 0600).
-#   6. Uncomment managementUi listenMode=https + public bind + PEM paths below.
-#   7. Set surmount.secrets.requireDeployMaterial = true and list PEM (and
+#   7. Uncomment managementUi listenMode=https + public bind + PEM paths below
+#      (port 443; redirectHttpToHttps for product :80).
+#   7b. B4 BEFORE treating public services as production-safe: private
+#      host-local authMode = "nostr" + sessionSecretPath + nostrAllowlistFile
+#      + publicBaseUrl. Install Domain B session-secret (EnvironmentFile
+#      SURMOUNT_SESSION_SECRET=...) and nostr-allowlist (npubs only). Default
+#      authMode=off in this sample is loopback/lab only, NOT public-safe.
+#      Never bake secrets or real npubs into this public file. See docs/OPS.md
+#      (B4) and managementUi comments below.
+#   8. Set surmount.secrets.requireDeployMaterial = true and list PEM (and
 #      Arti) paths in requiredHostPaths (loud activation gate). Unit also
 #      uses ConditionPathExists on PEMs for https and restart caps.
-#   8. Host smoke: RESIDUAL.md highest-value next / Validation SoT
+#   9. Host smoke: RESIDUAL.md highest-value next / Validation SoT
 #      (`nix run .#e2e-host` / just e2e-host with SURMOUNT_E2E_HOST=1): MDWE, curl /health over
-#      TLS, nginx inactive when web off, UI no CAP_NET_ADMIN.
+#      TLS, nginx inactive when web off, UI no CAP_NET_ADMIN, Stalwart not
+#      holding product :443. After B4: anonymous console gated (OPS proof curls).
 #
 #   --- (B) Dual-run escape only (transitional nginx) ---
-#   9. Set surmount.web.enable = true; keep managementUi listenMode=http
+#  10. Set surmount.web.enable = true; keep managementUi listenMode=http
 #      on loopback (module asserts against dual-run + public UI https).
-#  10. Point ACME DNS A/AAAA at services/mail/apex for nginx vhosts.
+#  11. Point ACME DNS A/AAAA at services/mail/apex for nginx vhosts.
 #
-#  11. Import Maildir via surmount-mail-import-maildir (docs/MIGRATION.md).
-#  12. Configure Stalwart TLS cert paths once certs exist on host.
-#  13. Review fail2ban/ssh exposure; lock SSH to admin nets if possible.
-#  14. Enable surmount.artiHiddenService when HS identity is on host (later).
+#  12. Import Maildir via surmount-mail-import-maildir / Vandelay (docs/MIGRATION.md).
+#  13. Mail-plane TLS: after deploy-host (ReadOnlyPaths + surmount-tls) and
+#      a production leaf that names mail.<apex>, run
+#      `just point-stalwart-mail-tls -- --live --restart` on the host.
+#      Same durable PEMs as Axum. Not product browser :443.
+#  14. Review fail2ban/ssh exposure; lock SSH to admin nets if possible.
+#  15. Enable surmount.artiHiddenService when HS identity is on host (later).
 #      With https UI, leave arti backendAddress null so the module auto-
 #      binds loopback cleartext API for the onion reverse-proxy (or set
 #      managementUi.localCleartextListen / explicit backend).
 #
 # Apply (on the host, after first boot with nixos-anywhere / manual install):
 #   nixos-rebuild switch --flake github:SurmountSystems/surmount-server#mail-vps
-#   # or from a checkout:
-#   nixos-rebuild switch --flake .#mail-vps
+#   # path flake (includes untracked host-local; preferred on deploy checkout):
+#   nixos-rebuild switch --flake path:/root/surmount-server#mail-vps
 #   # alias (same config): #surmount-mail
+#   # or operator driver (host-local checks + public sync + path: switch):
+#   nix run .#surmount-deploy-host -- --target root@YOUR_HOST --host-local /path/to/host-local
+#   # hang on "reloading user units for root": docs/deploy-host-local.md section 5
 
 {
   config,
@@ -91,8 +124,10 @@
 
     managementUi = {
       enable = true;
-      # Product public edge (web.enable default false): in-process rustls.
-      # Place PEMs on the HOST only (never in git), then uncomment:
+      # P1 product public edge (web.enable default false): Axum owns :80/:443.
+      # Stalwart must not permanently bind public :443 (free via
+      # /etc/surmount/stalwart/free-public-443-for-axum-edge.ndjson after first
+      # boot). Place PEMs on the HOST only (never in git), then uncomment:
       #   listenMode = "https";
       #   listenAddress = "0.0.0.0";  # or the public address
       #   port = 443;
@@ -108,6 +143,26 @@
       # Until PEMs exist, leave listenMode=http (loopback) and use SSH tunnel.
       # Unit: StartLimitBurst/Interval + ConditionPathExists on PEMs (https);
       # CAP_NET_BIND_SERVICE when :80/:443. ACME HTTP-01 on product :80 parked.
+      #
+      # ---- B4 / public edge auth (REQUIRED when public HTTPS is live) ----
+      # Default authMode = "off" is LOOPBACK / LAB ONLY. With mode off the
+      # middleware does not gate routes: anonymous visitors get the full
+      # operator console on the services Host. That is NOT public-safe.
+      # Public product edge (listenMode=https on non-loopback / :443) MUST
+      # use authMode = "nostr" plus host-local secret paths. Do NOT bake
+      # secrets, real npubs, or nsec into this public sample. Put B4 knobs
+      # in PRIVATE host-local only (gitignored). See docs/OPS.md (B4),
+      # docs/SECRETS.md (session-secret + nostr-allowlist), docs/SECURITY.md,
+      # docs/EDGE_AND_TLS.md.
+      #
+      # Private host-local fragment example (placeholders only; never commit):
+      #   authMode = "nostr";
+      #   # EnvironmentFile body must be: SURMOUNT_SESSION_SECRET=<hex>
+      #   sessionSecretPath = "/var/lib/surmount/secrets/ui/session-secret";
+      #   nostrAllowlistFile = "/var/lib/surmount/secrets/ui/nostr-allowlist";
+      #   publicBaseUrl = "https://services.example.test";
+      # Install kinds: session-secret (wrap generate as KEY=value),
+      # nostr-allowlist (npub/hex lines only; never nsec).
       #
       # Dual-run escape (transitional nginx owns public :80/:443):
       #   listenMode = "http";  # loopback only -- not public https
@@ -164,6 +219,38 @@
     # backups.enable = true;
     # backups.repository = "s3:s3.example/surmount-mail";
     # backups.passwordFile = config.sops.secrets."backups/restic_password".path;
+
+    # ---- Domain C Vaultwarden (human vault; S7a offline module shipped) ----
+    # Default off. Not deploy-secret activation for other units; not Bitwarden
+    # Secrets Manager API. When ready on a real host (S7b / with S6 material):
+    #   1. Generate ADMIN_TOKEN offline; store in Secret Service / staging.
+    #   2. Install host EnvironmentFile (mode 0600), e.g.
+    #        /run/surmount-secrets/vaultwarden/admin.env
+    #      with a line ADMIN_TOKEN=... (never commit; use nix run .#secrets-install-host).
+    #   3. Uncomment enable + adminTokenEnvFile below. Optional domain for
+    #      client base URL; optional managementUi.vaultwardenUrl for console
+    #      link (else UI derives http://127.0.0.1:8222 when VW enable is true).
+    #   4. Optional Axum path proxy (no nginx, no new subdomain): after public
+    #      https edge is real, set managementUi.vaultwardenProxyEnable = true
+    #      so /vault/ reverse-proxies to loopback Rocket. DOMAIN / console URL
+    #      default to https://{servicesHostname}/vault when unset.
+    #   5. Include /var/lib/vaultwarden in restic paths when live.
+    #   6. First admin account: VW admin UI after unit is active (signups off).
+    # vaultwarden = {
+    #   enable = true;
+    #   adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+    #   # rocketAddress = "127.0.0.1";  # default loopback
+    #   # rocketPort = 8222;
+    #   # domain = "https://services.surmount.systems/vault";  # or leave empty when proxy on
+    # };
+    # managementUi.vaultwardenUrl = "http://127.0.0.1:8222";  # or public URL
+    # managementUi.vaultwardenProxyEnable = true;  # /vault/ on Axum edge
+
+    # ssh-ng hard memory cap (SHC 261). Default off. Enable from private
+    # host-local only. Scaffold memoryMax 4G is not guest RAM. Lake is not
+    # part of this mail-host module. See docs/OPS.md.
+    # remoteBuilder.enable = true;
+    # remoteBuilder.memoryMax = "4G";
   };
 
   # ---- Base system ---------------------------------------------------------
@@ -246,8 +333,7 @@
     git
   ];
 
-  # journald retention so mail logs stay available for abuse review.
-  services.journald.extraConfig = ''
-    SystemMaxUse=1G
-  '';
+  # Journal persistence + size cap live in modules/logging.nix
+  # (surmount.logging; Storage=persistent, SystemMaxUse scaffold 1G).
+  # Do not duplicate extraConfig here.
 }

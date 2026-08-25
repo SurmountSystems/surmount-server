@@ -7,6 +7,10 @@
     ./secrets.nix
     ./networking.nix
     ./hardening.nix
+    # Eternal Terminal (etserver) for reconnecting operator SSH.
+    ./eternal-terminal.nix
+    # Persistent size-capped journald paper trail (sshd VERBOSE, journal group).
+    ./logging.nix
     # Surmount 0.16+ service (dual-disables stock stalwart-mail.nix +
     # stalwart.nix; owns services.stalwart). Before mail.nix.
     ./stalwart-service.nix
@@ -15,6 +19,16 @@
     ./management-ui.nix
     # Arti onion/hidden service (REQUIRED product surface; management-publish).
     ./arti-hidden-service.nix
+    # Domain C human vault (Vaultwarden; sample host stays enable=false).
+    ./vaultwarden.nix
     ./backups.nix
+    # Operator host console: pkgs.btop (SSH / just btop).
+    ./btop.nix
+    # Operator host hardware probe: pkgs.inxi (SSH / just host-inxi; no sudo).
+    ./inxi.nix
+    # ssh-ng remote builder + MemoryMax on nix-daemon (opt-in).
+    ./remote-builder.nix
+    # Optional Lean/Lake: default off, niced, MemoryMax on the lake unit.
+    ./lake.nix
   ];
 }

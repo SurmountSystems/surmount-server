@@ -1,14 +1,46 @@
 //! Runtime configuration from environment (set by systemd unit / Nix module).
 
+use std::collections::BTreeMap;
 use std::env;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use serde::Serialize;
+
+use crate::acme::AcmeConfig;
+use crate::mta_sts::MtaStsMode;
+use crate::proxy_vaultwarden::VaultwardenProxyConfig;
 use crate::tls::{ListenMode, TlsPaths};
 use surmount_management_ui::auth::{AuthConfig, AuthMode, resolve_allowlist};
 use surmount_management_ui::ban::{BanConfig, ban_config_from_env};
 use surmount_management_ui::rate_limit::{DEFAULT_MAX_KEYS, FixedWindowRateLimiter};
+
+/// Unique unused map path for hermetic tests. Never a host secret.
+#[cfg(test)]
+pub fn unused_console_accounts_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "surmount-console-accounts-unused-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ))
+}
+
+/// Unique unused NWC store path for hermetic tests. Never a host secret.
+#[cfg(test)]
+pub fn unused_nwc_store_path() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "surmount-nwc-unused-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ))
+}
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -27,13 +59,40 @@ pub struct AppConfig {
     pub redirect_allowed_hosts: Vec<String>,
     /// Dangerous escape: allow cleartext bind when listen_mode is https (default false).
     pub https_allow_cleartext_escape: bool,
+    /// In-process ACME (default off). See `crate::acme`.
+    pub acme: AcmeConfig,
+    /// MTA-STS policy mode (default off). See `crate::mta_sts`.
+    pub mta_sts_mode: MtaStsMode,
+    /// RFC max_age for MTA-STS policy body when mode is enabled.
+    pub mta_sts_max_age: u64,
     pub primary_domain: String,
     pub mail_hostname: String,
     pub services_hostname: String,
     pub stalwart_url: String,
-    /// Operator-published onion URL for display (env or hostname file). Never invented.
-    /// Normalized to `http://….onion` when a bare hostname is provided.
+    /// Structured onion surface (configured / hostname missing / not provisioned).
+    /// Never invents a live .onion; only host material or lab override.
+    pub onion_surface: OnionSurface,
+    /// Operator-published onion URL when [`OnionSurface::Configured`]; else None.
+    /// Convenience for links; same as `onion_surface.url()`.
     pub onion_url: Option<String>,
+    /// Clearnet Host -> onion discovery (`Onion-Location` + `Alt-Svc`).
+    /// Loaded once at process start. No SIGHUP or file-watch hot-reload;
+    /// restart the unit after mapping or hostname-file changes.
+    pub onion_discovery: crate::onion_discovery::OnionDiscoveryConfig,
+    /// Operator-published Vaultwarden URL for console link (domain C human vault).
+    /// Never invented; empty env = unset. No admin token, never log secrets.
+    pub vaultwarden_url: Option<String>,
+    /// Optional Axum path reverse-proxy to loopback Vaultwarden (default off).
+    pub vaultwarden_proxy: VaultwardenProxyConfig,
+    /// Host directory for the public apex/www static site. None = coming soon.
+    /// Env `SURMOUNT_APEX_PUBLIC_ROOT` (empty/unset = None). Served only when
+    /// that directory contains `index.html`.
+    pub apex_public_root: Option<PathBuf>,
+    /// Extra clearnet Host -> document root (not apex/www, not services).
+    /// Env `SURMOUNT_STATIC_VHOSTS` (JSON object hostname -> root) or
+    /// `SURMOUNT_STATIC_VHOSTS_FILE` (same JSON on disk). Empty = none.
+    /// Do not overload `SURMOUNT_APEX_PUBLIC_ROOT` for these names.
+    pub static_vhosts: BTreeMap<String, PathBuf>,
     /// Max requests per client key per window (0 disables limiter).
     pub rate_limit_max_requests: u32,
     pub rate_limit_window: Duration,
@@ -46,6 +105,69 @@ pub struct AppConfig {
     /// `auth_mode=off`. Never production default. Env
     /// `SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED`.
     pub allow_directory_unauthenticated: bool,
+    /// Lab escape: when true, public primary listen may run with
+    /// `auth_mode=off`. Never production default. Env
+    /// `SURMOUNT_ALLOW_PUBLIC_AUTH_OFF`. Prefer loopback/private binds for
+    /// auth-off lab instead of this flag.
+    pub allow_public_auth_off: bool,
+    /// Surmount console account map (optional npub + Administrator/User).
+    /// Env `SURMOUNT_CONSOLE_ACCOUNTS`; default
+    /// `/var/lib/surmount/console/accounts.json`. Not the Nostr allowlist.
+    pub console_accounts_path: PathBuf,
+    /// Contributor NWC URI store (Domain B). Env `SURMOUNT_NWC_STORE`; default
+    /// `/var/lib/surmount/secrets/ui/nwc.json`. Never nsec. Never git.
+    pub nwc_store_path: PathBuf,
+}
+
+/// Product onion status for console + `GET /api/v1/system`.
+///
+/// Host path is real Arti HS material under `surmount.artiHiddenService`, not a
+/// local demo. Lab overrides (`SURMOUNT_ONION_URL` / hostname file) remain for
+/// tests but are not the primary operator story.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum OnionSurface {
+    /// Hostname or URL present; safe to show as operator-published address.
+    Configured { url: String },
+    /// Module/env pointed at a path, but hostname material is missing/empty.
+    HostnameMissing {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hs_state_dir: Option<String>,
+    },
+    /// No onion surface configured for this process (Arti HS not provisioned).
+    NotProvisioned,
+}
+
+impl OnionSurface {
+    pub fn not_provisioned() -> Self {
+        Self::NotProvisioned
+    }
+
+    /// Build from an optional URL (fixtures / tests). None = not provisioned.
+    pub fn from_url_opt(url: Option<String>) -> Self {
+        match url {
+            Some(url) => Self::Configured { url },
+            None => Self::NotProvisioned,
+        }
+    }
+
+    pub fn url(&self) -> Option<&str> {
+        match self {
+            Self::Configured { url } => Some(url.as_str()),
+            Self::HostnameMissing { .. } | Self::NotProvisioned => None,
+        }
+    }
+
+    /// Stable API slug: `configured` | `hostname_missing` | `not_provisioned`.
+    pub fn status_slug(&self) -> &'static str {
+        match self {
+            Self::Configured { .. } => "configured",
+            Self::HostnameMissing { .. } => "hostname_missing",
+            Self::NotProvisioned => "not_provisioned",
+        }
+    }
 }
 
 /// Normalize an operator onion string for display and links.
@@ -75,23 +197,156 @@ pub fn onion_url_from_file(path: &Path) -> Option<String> {
     normalize_onion_url(line)
 }
 
-/// Resolve onion URL: `SURMOUNT_ONION_URL` wins when non-empty; else readable
-/// non-empty `SURMOUNT_ONION_HOSTNAME_FILE`. Unreadable file = unset.
-pub fn resolve_onion_url_from_env() -> Option<String> {
+/// Walk an Arti HS state directory for a `hostname` or `*.onion` file.
+///
+/// Bounded depth/file count so a mis-pointed tree cannot hang the process.
+/// Does not invent an address; only reads host material if present.
+pub fn onion_url_from_hs_state_dir(dir: &Path) -> Option<String> {
+    const MAX_DEPTH: u32 = 4;
+    const MAX_FILES: usize = 64;
+    let mut stack: Vec<(PathBuf, u32)> = vec![(dir.to_path_buf(), 0)];
+    let mut seen = 0usize;
+    while let Some((path, depth)) = stack.pop() {
+        if seen >= MAX_FILES {
+            break;
+        }
+        let entries = match std::fs::read_dir(&path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for ent in entries.flatten() {
+            if seen >= MAX_FILES {
+                break;
+            }
+            let p = ent.path();
+            let ft = match ent.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                if depth < MAX_DEPTH {
+                    stack.push((p, depth + 1));
+                }
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            seen += 1;
+            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if (name == "hostname" || name.ends_with(".onion"))
+                && let Some(url) = onion_url_from_file(&p)
+            {
+                return Some(url);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve structured onion surface from env + host paths.
+///
+/// Priority: `SURMOUNT_ONION_URL` (lab/override) when non-empty; else readable
+/// `SURMOUNT_ONION_HOSTNAME_FILE`; else walk `SURMOUNT_ONION_HS_STATE_DIR` for
+/// hostname material (real Arti HS dir). Path set but empty/unreadable =>
+/// [`OnionSurface::HostnameMissing`]. Nothing set =>
+/// [`OnionSurface::NotProvisioned`]. Never invents a live onion.
+pub fn resolve_onion_surface_from_env() -> OnionSurface {
     if let Ok(v) = env::var("SURMOUNT_ONION_URL")
         && let Some(n) = normalize_onion_url(&v)
     {
-        return Some(n);
+        return OnionSurface::Configured { url: n };
     }
-    match env::var("SURMOUNT_ONION_HOSTNAME_FILE") {
-        Ok(p) => {
-            let p = p.trim();
-            if p.is_empty() {
-                None
-            } else {
-                onion_url_from_file(Path::new(p))
-            }
-        }
+
+    let hostname_file = env::var("SURMOUNT_ONION_HOSTNAME_FILE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let hs_state_dir = env::var("SURMOUNT_ONION_HS_STATE_DIR")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Some(ref p) = hostname_file
+        && let Some(url) = onion_url_from_file(Path::new(p))
+    {
+        return OnionSurface::Configured { url };
+    }
+    if let Some(ref d) = hs_state_dir
+        && let Some(url) = onion_url_from_hs_state_dir(Path::new(d))
+    {
+        return OnionSurface::Configured { url };
+    }
+
+    if hostname_file.is_some() || hs_state_dir.is_some() {
+        return OnionSurface::HostnameMissing {
+            path: hostname_file,
+            hs_state_dir,
+        };
+    }
+    OnionSurface::NotProvisioned
+}
+
+/// Normalize an operator Vaultwarden URL for display and external links.
+///
+/// Accepts `http(s)://…`, bare `host:port`, or whitespace-padded forms.
+/// Empty / whitespace-only -> `None`. Bare host becomes `http://…`.
+/// Refuses non-http(s) schemes (`javascript:`, `data:`, `file:`, …),
+/// mid-string whitespace / control chars, and Environment=-unsafe characters.
+/// Does not invent a live vault; does not read admin tokens.
+pub fn normalize_vaultwarden_url(raw: &str) -> Option<String> {
+    let t = raw.trim().trim_end_matches('/').trim();
+    if t.is_empty() {
+        return None;
+    }
+    // Env / HTML href hygiene: no control chars, whitespace mid-string, or
+    // shell/env breakers after the outer trim.
+    if t.chars().any(|c| {
+        c.is_control()
+            || c.is_whitespace()
+            || matches!(c, '"' | '\'' | '`' | '$' | ';' | '\\' | '\0')
+    }) {
+        return None;
+    }
+    let normalized = if t.starts_with("http://") || t.starts_with("https://") {
+        t.to_string()
+    } else if t.contains("://") {
+        // Other schemes (javascript:, data:, file:, …) refused.
+        return None;
+    } else {
+        format!("http://{t}")
+    };
+    // Charset aligned with Nix management-ui vaultwardenUrlShapeOk.
+    if !normalized.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                ':' | '/'
+                    | '.'
+                    | '_'
+                    | '~'
+                    | '-'
+                    | '%'
+                    | '@'
+                    | '&'
+                    | '='
+                    | '+'
+                    | '['
+                    | ']'
+                    | '?'
+                    | '#'
+            )
+    }) {
+        return None;
+    }
+    Some(normalized)
+}
+
+/// Resolve Vaultwarden URL from `SURMOUNT_VAULTWARDEN_URL` only.
+/// Empty / unset = residual not configured. Configured marker is non-empty URL.
+pub fn resolve_vaultwarden_url_from_env() -> Option<String> {
+    match env::var("SURMOUNT_VAULTWARDEN_URL") {
+        Ok(v) => normalize_vaultwarden_url(&v),
         Err(_) => None,
     }
 }
@@ -191,13 +446,27 @@ impl AppConfig {
             })
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| {
+                // Default open-redirect allowlist: services (operator console),
+                // apex + www (public COMING SOON; same-host HTTPS upgrade),
+                // mail name, MTA-STS policy host.
                 vec![
                     services_hostname.clone(),
                     primary_domain.clone(),
                     format!("www.{primary_domain}"),
                     mail_hostname.clone(),
+                    format!("mta-sts.{primary_domain}"),
                 ]
             });
+
+        // MTA-STS skeleton: default off until public HTTPS policy host is ready.
+        let mta_sts_mode = match env::var("SURMOUNT_MTA_STS_MODE") {
+            Ok(s) => MtaStsMode::parse(&s)?,
+            Err(_) => MtaStsMode::Off,
+        };
+        let mta_sts_max_age = env::var("SURMOUNT_MTA_STS_MAX_AGE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(86_400);
 
         let rate_limit_max_requests = env::var("SURMOUNT_RATE_LIMIT_MAX")
             .ok()
@@ -215,17 +484,55 @@ impl AppConfig {
         // Invalid ban env fails closed (not optional skip).
         let ban = ban_config_from_env(|k| env::var(k).ok())?;
 
-        // Onion: env wins; else hostname file. Never invent a live onion.
-        let onion_url = resolve_onion_url_from_env();
+        // Extra static Hosts first so onion auto-map can include them.
+        // JSON object hostname -> root. Env wins over file.
+        let static_vhosts = static_vhosts_from_env()?;
+        let redirect_allowed_hosts =
+            union_static_vhost_hosts(redirect_allowed_hosts, &static_vhosts);
+        let extra_onion_hosts: Vec<String> = static_vhosts.keys().cloned().collect();
+
+        // Onion: structured surface from env + host HS paths. Never invent.
+        let onion_surface = resolve_onion_surface_from_env();
+        let onion_url = onion_surface.url().map(str::to_string);
+        // Discovery map is start-of-process only (no hot-reload).
+        let onion_discovery = crate::onion_discovery::onion_discovery_from_env(
+            &primary_domain,
+            &services_hostname,
+            onion_url.as_deref(),
+            &extra_onion_hosts,
+        );
+        // Vaultwarden: operator-published URL only. Never invent; no admin token.
+        let vaultwarden_url = resolve_vaultwarden_url_from_env();
+        // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
+        let vaultwarden_proxy = VaultwardenProxyConfig::from_env()?;
+
+        // Public apex/www document root. Empty/unset = coming-soon fallback.
+        let apex_public_root = match env::var("SURMOUNT_APEX_PUBLIC_ROOT") {
+            Ok(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(t))
+                }
+            }
+            Err(_) => None,
+        };
 
         let auth = auth_config_from_env()?;
-        auth.validate()?;
+        // Prefer bind detection: public primary + auth off fails closed.
+        // Lab-only SURMOUNT_ALLOW_PUBLIC_AUTH_OFF=1 for intentional public+off tests.
+        let allow_public_auth_off = env_bool("SURMOUNT_ALLOW_PUBLIC_AUTH_OFF", false);
+        auth.validate_for_listen(listen, allow_public_auth_off)?;
 
         // Single SoT with directory process-start coupling (same env + truthy parser).
         let allow_directory_unauthenticated =
             crate::directory::directory_allow_unauthenticated_from_env();
 
-        Ok(Self {
+        // ACME default-off; validate() fails closed when enable is incomplete.
+        let acme = AcmeConfig::from_env()?;
+
+        let cfg = Self {
             listen,
             http_redirect_listen,
             local_cleartext_listen,
@@ -233,19 +540,68 @@ impl AppConfig {
             redirect_http_to_https,
             redirect_allowed_hosts,
             https_allow_cleartext_escape: env_bool("SURMOUNT_HTTPS_ALLOW_CLEARTEXT_ESCAPE", false),
+            acme,
+            mta_sts_mode,
+            mta_sts_max_age,
             primary_domain,
             mail_hostname,
             services_hostname,
             stalwart_url: env::var("SURMOUNT_STALWART_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8081".into()),
+            onion_surface,
             onion_url,
+            onion_discovery,
+            vaultwarden_url,
+            vaultwarden_proxy,
+            apex_public_root,
+            static_vhosts,
             rate_limit_max_requests,
             rate_limit_window: Duration::from_secs(rate_limit_window_secs.max(1)),
             rate_limit_max_keys: rate_limit_max_keys.max(1),
             ban,
             auth,
             allow_directory_unauthenticated,
-        })
+            allow_public_auth_off,
+            console_accounts_path:
+                surmount_management_ui::console_accounts::console_accounts_path_from_env(),
+            nwc_store_path: surmount_management_ui::nwc::nwc_store_path_from_env(),
+        };
+        // ACME enable requires HTTPS listen + absolute TLS paths (mirrors Nix).
+        cfg.validate_acme_listen()?;
+        Ok(cfg)
+    }
+
+    /// When ACME is enabled, require HTTPS listen mode and absolute cert/key paths.
+    ///
+    /// Env-only ACME under plain HTTP would otherwise no-op silently at startup
+    /// (`ensure_tls_material` only runs when `tls_paths()` is Some). Fail closed.
+    pub fn validate_acme_listen(&self) -> Result<(), String> {
+        if !self.acme.enable {
+            return Ok(());
+        }
+        let Some(paths) = self.tls_paths() else {
+            return Err(
+                "SURMOUNT_ACME_ENABLE requires SURMOUNT_LISTEN_MODE=https and \
+                 absolute SURMOUNT_TLS_CERT / SURMOUNT_TLS_KEY paths (fail-closed; \
+                 ACME under plain HTTP is not supported)"
+                    .into(),
+            );
+        };
+        if !paths.cert_path.is_absolute() {
+            return Err(format!(
+                "SURMOUNT_TLS_CERT must be an absolute host path when ACME is enabled \
+                 (got {:?}; fail-closed)",
+                paths.cert_path
+            ));
+        }
+        if !paths.key_path.is_absolute() {
+            return Err(format!(
+                "SURMOUNT_TLS_KEY must be an absolute host path when ACME is enabled \
+                 (got {:?}; fail-closed)",
+                paths.key_path
+            ));
+        }
+        Ok(())
     }
 
     /// Validate local cleartext bind constraints (loopback, not primary, not redirect).
@@ -323,6 +679,107 @@ pub fn parse_env_flag_truthy(raw: &str) -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+/// Parse extra static vhosts from `SURMOUNT_STATIC_VHOSTS` (JSON object) or
+/// `SURMOUNT_STATIC_VHOSTS_FILE` (same JSON). Env wins when non-empty.
+pub fn static_vhosts_from_env() -> Result<BTreeMap<String, PathBuf>, String> {
+    if let Ok(raw) = env::var("SURMOUNT_STATIC_VHOSTS") {
+        let t = raw.trim();
+        if !t.is_empty() {
+            return parse_static_vhosts_json(t);
+        }
+    }
+    match env::var("SURMOUNT_STATIC_VHOSTS_FILE") {
+        Ok(p) => {
+            let path = p.trim();
+            if path.is_empty() {
+                return Ok(BTreeMap::new());
+            }
+            let body = std::fs::read_to_string(path)
+                .map_err(|e| format!("SURMOUNT_STATIC_VHOSTS_FILE={path:?} is unreadable: {e}"))?;
+            parse_static_vhosts_json(&body)
+        }
+        Err(_) => Ok(BTreeMap::new()),
+    }
+}
+
+/// JSON object: `{ "extra.test": "/var/lib/surmount/static-sites/extra" }`.
+/// Keys are lowercased DNS hostnames (port stripped). Values are document roots.
+pub fn parse_static_vhosts_json(raw: &str) -> Result<BTreeMap<String, PathBuf>, String> {
+    let value: serde_json::Value = serde_json::from_str(raw.trim()).map_err(|e| {
+        format!("SURMOUNT_STATIC_VHOSTS must be a JSON object hostname -> root: {e}")
+    })?;
+    let obj = value.as_object().ok_or_else(|| {
+        "SURMOUNT_STATIC_VHOSTS must be a JSON object (hostname -> document root)".to_string()
+    })?;
+    let mut out = BTreeMap::new();
+    for (host, root_val) in obj {
+        let host = normalize_static_vhost_hostname(host)?;
+        let root = root_val.as_str().ok_or_else(|| {
+            format!("SURMOUNT_STATIC_VHOSTS[{host:?}] must be a string document-root path")
+        })?;
+        let root = root.trim();
+        if root.is_empty() {
+            return Err(format!(
+                "SURMOUNT_STATIC_VHOSTS[{host:?}] document root must not be empty"
+            ));
+        }
+        if root.contains('\0') {
+            return Err(format!(
+                "SURMOUNT_STATIC_VHOSTS[{host:?}] document root must not contain NUL"
+            ));
+        }
+        out.insert(host, PathBuf::from(root));
+    }
+    Ok(out)
+}
+
+/// Lowercase Host, strip port, refuse empty / control / path characters.
+pub fn normalize_static_vhost_hostname(raw: &str) -> Result<String, String> {
+    let host = crate::redirect::host_for_url_authority(raw)
+        .trim()
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return Err("static vhost hostname must not be empty".into());
+    }
+    if host.len() > 253 {
+        return Err(format!("static vhost hostname too long ({})", host.len()));
+    }
+    if host.contains("..") || host.starts_with('.') || host.ends_with('.') {
+        return Err(format!("static vhost hostname refused: {host}"));
+    }
+    if !host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(format!(
+            "static vhost hostname has invalid characters: {host}"
+        ));
+    }
+    if !host.contains('.') {
+        return Err(format!(
+            "static vhost hostname must be a DNS name with a dot: {host}"
+        ));
+    }
+    Ok(host)
+}
+
+/// Ensure configured extra Hosts can :80-upgrade even when the operator set
+/// `SURMOUNT_REDIRECT_ALLOWED_HOSTS` without listing them.
+pub fn union_static_vhost_hosts(
+    mut allowed: Vec<String>,
+    vhosts: &BTreeMap<String, PathBuf>,
+) -> Vec<String> {
+    for host in vhosts.keys() {
+        if !allowed
+            .iter()
+            .any(|a| crate::redirect::host_is_allowlisted(host, std::slice::from_ref(a)))
+        {
+            allowed.push(host.clone());
+        }
+    }
+    allowed
 }
 
 fn env_bool(key: &str, default: bool) -> bool {
@@ -431,12 +888,31 @@ mod tests {
             "SURMOUNT_LOCAL_CLEARTEXT_LISTEN",
             "SURMOUNT_REDIRECT_ALLOWED_HOSTS",
             "SURMOUNT_HTTPS_ALLOW_CLEARTEXT_ESCAPE",
+            "SURMOUNT_MTA_STS_MODE",
+            "SURMOUNT_MTA_STS_MAX_AGE",
+            "SURMOUNT_ACME_ENABLE",
+            "SURMOUNT_ACME_DIRECTORY",
+            "SURMOUNT_ACME_EMAIL",
+            "SURMOUNT_ACME_DOMAINS",
+            "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH",
+            "SURMOUNT_ACME_CHALLENGE",
+            "SURMOUNT_ACME_DNS_PROVIDER",
+            "SURMOUNT_ACME_DNS_HOOK",
+            "SURMOUNT_ACME_DNS_HOOK_TIMEOUT_SECS",
+            "SURMOUNT_ACME_RENEW_DAYS_BEFORE_EXPIRY",
             "SURMOUNT_PRIMARY_DOMAIN",
             "SURMOUNT_MAIL_HOSTNAME",
             "SURMOUNT_SERVICES_HOSTNAME",
             "SURMOUNT_STALWART_URL",
             "SURMOUNT_ONION_URL",
             "SURMOUNT_ONION_HOSTNAME_FILE",
+            "SURMOUNT_ONION_HS_STATE_DIR",
+            "SURMOUNT_ONION_MAP_FILE",
+            "SURMOUNT_ONION_LOCATION_ENABLED",
+            "SURMOUNT_ONION_ALT_SVC_ENABLED",
+            "SURMOUNT_ONION_LOCATION_DISABLED_HOSTS",
+            "SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS",
+            "SURMOUNT_VAULTWARDEN_URL",
             "SURMOUNT_RATE_LIMIT_MAX",
             "SURMOUNT_RATE_LIMIT_WINDOW_SECS",
             "SURMOUNT_RATE_LIMIT_MAX_KEYS",
@@ -455,10 +931,83 @@ mod tests {
             "SURMOUNT_SESSION_TTL_SECS",
             "SURMOUNT_PUBLIC_BASE_URL",
             "SURMOUNT_NIP98_MAX_SKEW_SECS",
+            "SURMOUNT_ALLOW_PUBLIC_AUTH_OFF",
+            "SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED",
+            "SURMOUNT_APEX_PUBLIC_ROOT",
+            "SURMOUNT_STATIC_VHOSTS",
+            "SURMOUNT_STATIC_VHOSTS_FILE",
+            "SURMOUNT_CONSOLE_ACCOUNTS",
+            "SURMOUNT_NWC_STORE",
         ] {
             // SAFETY: EnvGuard mutex serializes process env mutation in this module's tests.
             unsafe { std::env::remove_var(k) }
         }
+    }
+
+    #[test]
+    fn apex_public_root_from_env_trim_empty_unset() {
+        let _g = EnvGuard::acquire();
+        assert_eq!(AppConfig::from_env().unwrap().apex_public_root, None);
+        set_env("SURMOUNT_APEX_PUBLIC_ROOT", "   ");
+        assert_eq!(AppConfig::from_env().unwrap().apex_public_root, None);
+        set_env("SURMOUNT_APEX_PUBLIC_ROOT", "/var/lib/surmount/public-site");
+        assert_eq!(
+            AppConfig::from_env().unwrap().apex_public_root.as_deref(),
+            Some(std::path::Path::new("/var/lib/surmount/public-site"))
+        );
+    }
+
+    /// Named contract: extra static Hosts come from JSON env; keys lowercased.
+    #[test]
+    fn static_vhosts_from_json_env_and_union_allowlist() {
+        let _g = EnvGuard::acquire();
+        assert!(AppConfig::from_env().unwrap().static_vhosts.is_empty());
+        set_env(
+            "SURMOUNT_STATIC_VHOSTS",
+            r#"{"Extra.TEST":"/var/lib/surmount/static-sites/extra","www.extra.test":"/var/lib/surmount/static-sites/extra"}"#,
+        );
+        let cfg = AppConfig::from_env().unwrap();
+        assert_eq!(
+            cfg.static_vhosts.get("extra.test").map(|p| p.as_path()),
+            Some(std::path::Path::new("/var/lib/surmount/static-sites/extra"))
+        );
+        assert_eq!(
+            cfg.static_vhosts.get("www.extra.test").map(|p| p.as_path()),
+            Some(std::path::Path::new("/var/lib/surmount/static-sites/extra"))
+        );
+        assert!(
+            cfg.redirect_allowed_hosts.iter().any(|h| h == "extra.test"),
+            "default :80 allowlist must include extra static Host: {:?}",
+            cfg.redirect_allowed_hosts
+        );
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "www.extra.test"),
+            "default :80 allowlist must include www alias: {:?}",
+            cfg.redirect_allowed_hosts
+        );
+        assert!(
+            crate::redirect::redirect_http_to_https(
+                true,
+                "extra.test",
+                "/",
+                None,
+                &cfg.redirect_allowed_hosts,
+                &cfg.primary_domain,
+                &cfg.services_hostname,
+            ) == crate::redirect::HttpToHttps::Redirect {
+                location: "https://extra.test/".into()
+            }
+        );
+    }
+
+    #[test]
+    fn static_vhosts_invalid_json_fails_closed() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_STATIC_VHOSTS", "[1,2]");
+        let err = AppConfig::from_env().unwrap_err();
+        assert!(err.contains("JSON object"), "{err}");
     }
 
     #[test]
@@ -467,6 +1016,30 @@ mod tests {
         let cfg = AppConfig::from_env().unwrap();
         assert_eq!(cfg.auth.mode, AuthMode::Off);
         assert!(cfg.auth.allowlist.is_empty());
+    }
+
+    /// Named contract: console map path comes from env or the host default.
+    #[test]
+    fn console_accounts_path_from_env_or_default() {
+        let _g = EnvGuard::acquire();
+        assert_eq!(
+            AppConfig::from_env()
+                .unwrap()
+                .console_accounts_path
+                .as_os_str(),
+            std::ffi::OsStr::new("/var/lib/surmount/console/accounts.json")
+        );
+        set_env(
+            "SURMOUNT_CONSOLE_ACCOUNTS",
+            "/tmp/surmount-console-accounts-fixture.json",
+        );
+        assert_eq!(
+            AppConfig::from_env()
+                .unwrap()
+                .console_accounts_path
+                .as_os_str(),
+            std::ffi::OsStr::new("/tmp/surmount-console-accounts-fixture.json")
+        );
     }
 
     #[test]
@@ -488,6 +1061,46 @@ mod tests {
         let cfg = AppConfig::from_env().unwrap();
         assert_eq!(cfg.auth.mode, AuthMode::Nostr);
         assert!(!cfg.auth.session_secret.as_ref().unwrap().is_empty());
+    }
+
+    /// Named contract: public primary listen + authMode=off fails at from_env
+    /// (start-time refuse). Loopback default still allows auth-off.
+    #[test]
+    fn public_listen_auth_off_is_config_error() {
+        let _g = EnvGuard::acquire();
+        // Default listen is loopback; auth-off remains OK.
+        let cfg = AppConfig::from_env().unwrap();
+        assert_eq!(cfg.auth.mode, AuthMode::Off);
+        assert!(!cfg.allow_public_auth_off);
+
+        set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        let err = AppConfig::from_env().unwrap_err();
+        assert!(
+            err.contains("AUTH_MODE") || err.contains("public") || err.contains("off"),
+            "{err}"
+        );
+
+        set_env("SURMOUNT_LISTEN", "203.0.113.10:443");
+        let err2 = AppConfig::from_env().unwrap_err();
+        assert!(
+            err2.contains("AUTH_MODE") || err2.contains("public"),
+            "{err2}"
+        );
+
+        // Lab escape for intentional public+off (tests only).
+        set_env("SURMOUNT_ALLOW_PUBLIC_AUTH_OFF", "1");
+        let cfg_lab = AppConfig::from_env().unwrap();
+        assert!(cfg_lab.allow_public_auth_off);
+        assert_eq!(cfg_lab.auth.mode, AuthMode::Off);
+
+        // Public + nostr is OK when secret present.
+        // SAFETY: EnvGuard serializes env mutation in this module.
+        unsafe { std::env::remove_var("SURMOUNT_ALLOW_PUBLIC_AUTH_OFF") };
+        set_env("SURMOUNT_AUTH_MODE", "nostr");
+        set_env("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
+        let cfg_nostr = AppConfig::from_env().unwrap();
+        assert_eq!(cfg_nostr.auth.mode, AuthMode::Nostr);
+        assert!(cfg_nostr.listen.ip().is_unspecified() || !cfg_nostr.listen.ip().is_loopback());
     }
 
     /// Named contract: allowlist file loads when env empty; env wins when set.
@@ -538,6 +1151,7 @@ mod tests {
         assert_eq!(cfg.listen_mode, ListenMode::PlainHttp);
         assert!(!cfg.redirect_http_to_https);
         assert!(!cfg.https_allow_cleartext_escape);
+        assert!(!cfg.acme.enable, "ACME must default off");
         assert!(cfg.rate_limiter().is_some());
         assert_eq!(cfg.ban.enforcement, BanEnforcement::Off);
         assert!(
@@ -545,6 +1159,92 @@ mod tests {
                 .iter()
                 .any(|h| h == "services.surmount.systems")
         );
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "surmount.systems"),
+            "default allowlist includes apex for public COMING SOON surface"
+        );
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "www.surmount.systems"),
+            "default allowlist includes www for public COMING SOON surface"
+        );
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "mta-sts.surmount.systems"),
+            "default allowlist includes MTA-STS policy host"
+        );
+        assert_eq!(cfg.mta_sts_mode, crate::mta_sts::MtaStsMode::Off);
+        assert_eq!(cfg.mta_sts_max_age, 86_400);
+    }
+
+    #[test]
+    fn mta_sts_mode_from_env() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_MTA_STS_MODE", "testing");
+        set_env("SURMOUNT_MTA_STS_MAX_AGE", "3600");
+        let cfg = AppConfig::from_env().unwrap();
+        assert_eq!(cfg.mta_sts_mode, crate::mta_sts::MtaStsMode::Testing);
+        assert_eq!(cfg.mta_sts_max_age, 3600);
+    }
+
+    #[test]
+    fn acme_enable_incomplete_is_config_error() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_ACME_ENABLE", "1");
+        let err = AppConfig::from_env().unwrap_err();
+        assert!(
+            err.contains("ACME") || err.contains("DOMAINS") || err.contains("domains"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn acme_enable_under_plain_http_is_config_error() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_ACME_ENABLE", "1");
+        set_env("SURMOUNT_ACME_DOMAINS", "services.example.test");
+        set_env("SURMOUNT_ACME_EMAIL", "ops@example.test");
+        set_env(
+            "SURMOUNT_ACME_DIRECTORY",
+            "https://acme-staging-v02.api.letsencrypt.org/directory",
+        );
+        set_env(
+            "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH",
+            "/run/surmount-secrets/acme/account.json",
+        );
+        // Default listen mode is plain HTTP.
+        let err = AppConfig::from_env().unwrap_err();
+        assert!(
+            err.contains("https") || err.contains("HTTPS") || err.contains("LISTEN_MODE"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn acme_enable_with_https_absolute_paths_ok() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_LISTEN_MODE", "https");
+        set_env("SURMOUNT_TLS_CERT", "/run/surmount-secrets/tls/cert.pem");
+        set_env("SURMOUNT_TLS_KEY", "/run/surmount-secrets/tls/key.pem");
+        set_env("SURMOUNT_ACME_ENABLE", "1");
+        set_env("SURMOUNT_ACME_DOMAINS", "services.example.test");
+        set_env("SURMOUNT_ACME_EMAIL", "ops@example.test");
+        set_env(
+            "SURMOUNT_ACME_DIRECTORY",
+            "https://acme-staging-v02.api.letsencrypt.org/directory",
+        );
+        set_env(
+            "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH",
+            "/run/surmount-secrets/acme/account.json",
+        );
+        set_env("SURMOUNT_ACME_DNS_PROVIDER", "mock");
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(cfg.acme.enable);
+        assert!(cfg.listen_mode.is_https());
     }
 
     #[test]
@@ -640,7 +1340,9 @@ mod tests {
     #[test]
     fn local_cleartext_listen_parses_loopback() {
         let _g = EnvGuard::acquire();
+        // Public primary + auth-off is refused; lab escape for this socket-shape test.
         set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        set_env("SURMOUNT_ALLOW_PUBLIC_AUTH_OFF", "1");
         set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         assert_eq!(
@@ -695,6 +1397,7 @@ mod tests {
         // Linux bind collides. Fail closed at validate (not only at bind).
         let _g = EnvGuard::acquire();
         set_env("SURMOUNT_LISTEN", "0.0.0.0:8090");
+        set_env("SURMOUNT_ALLOW_PUBLIC_AUTH_OFF", "1");
         set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
         let err = cfg.validate_local_cleartext().unwrap_err();
@@ -705,6 +1408,7 @@ mod tests {
     fn local_cleartext_must_differ_from_redirect() {
         let _g = EnvGuard::acquire();
         set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        set_env("SURMOUNT_ALLOW_PUBLIC_AUTH_OFF", "1");
         set_env("SURMOUNT_HTTP_REDIRECT_LISTEN", "127.0.0.1:8080");
         set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8080");
         let cfg = AppConfig::from_env().unwrap();
@@ -716,6 +1420,7 @@ mod tests {
     fn local_cleartext_must_differ_port_from_redirect() {
         let _g = EnvGuard::acquire();
         set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        set_env("SURMOUNT_ALLOW_PUBLIC_AUTH_OFF", "1");
         set_env("SURMOUNT_HTTP_REDIRECT_LISTEN", "0.0.0.0:8090");
         set_env("SURMOUNT_LOCAL_CLEARTEXT_LISTEN", "127.0.0.1:8090");
         let cfg = AppConfig::from_env().unwrap();
@@ -756,6 +1461,7 @@ mod tests {
         let cfg = AppConfig::from_env().unwrap();
         let expected = format!("http://{env_onion}.onion");
         assert_eq!(cfg.onion_url.as_deref(), Some(expected.as_str()));
+        assert_eq!(cfg.onion_surface.status_slug(), "configured");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -771,6 +1477,7 @@ mod tests {
         let cfg = AppConfig::from_env().unwrap();
         let expected = format!("http://{file_onion}.onion");
         assert_eq!(cfg.onion_url.as_deref(), Some(expected.as_str()));
+        assert_eq!(cfg.onion_surface.status_slug(), "configured");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -782,6 +1489,197 @@ mod tests {
             cfg.onion_url.is_none(),
             "must not invent onion: {:?}",
             cfg.onion_url
+        );
+        assert_eq!(cfg.onion_surface.status_slug(), "not_provisioned");
+        assert_eq!(cfg.onion_surface, OnionSurface::NotProvisioned);
+        assert_eq!(cfg.onion_discovery.mappings().count(), 0);
+    }
+
+    /// Named contract: configured onion auto-derives apex, www, services, and mta-sts mappings.
+    #[test]
+    fn onion_discovery_auto_derive_from_onion_url() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_PRIMARY_DOMAIN", "example.test");
+        set_env("SURMOUNT_SERVICES_HOSTNAME", "services.example.test");
+        set_env("SURMOUNT_ONION_URL", format!("http://{SAMPLE_V3}.onion"));
+        let cfg = AppConfig::from_env().unwrap();
+        let hosts: Vec<_> = cfg
+            .onion_discovery
+            .mappings()
+            .map(|m| m.clearnet_host.as_str())
+            .collect();
+        assert!(hosts.contains(&"example.test"));
+        assert!(hosts.contains(&"www.example.test"));
+        assert!(hosts.contains(&"services.example.test"));
+        assert!(hosts.contains(&"mta-sts.example.test"));
+        assert!(!hosts.contains(&"mail.example.test"));
+        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
+        assert_eq!(apex.onion_port, 443);
+        assert_eq!(apex.protocols, vec!["h2".to_string()]);
+        assert_eq!(apex.onion_scheme, "http");
+        assert_eq!(apex.ma_seconds, 86_400);
+        assert_eq!(apex.onion_path_prefix, "/_o/example.test");
+        let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
+        assert!(
+            services.onion_path_prefix.is_empty(),
+            "services console stays onion root"
+        );
+    }
+
+    /// Named contract: extra static Hosts auto-map; mail does not.
+    #[test]
+    fn onion_discovery_auto_maps_extra_static_vhosts() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_PRIMARY_DOMAIN", "example.test");
+        set_env("SURMOUNT_SERVICES_HOSTNAME", "services.example.test");
+        set_env("SURMOUNT_ONION_URL", format!("http://{SAMPLE_V3}.onion"));
+        set_env(
+            "SURMOUNT_STATIC_VHOSTS",
+            r#"{"extra.test":"/tmp/extra","www.extra.test":"/tmp/extra"}"#,
+        );
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(cfg.onion_discovery.lookup("extra.test").is_some());
+        assert!(cfg.onion_discovery.lookup("www.extra.test").is_some());
+        assert!(cfg.onion_discovery.lookup("mta-sts.example.test").is_some());
+        assert!(cfg.onion_discovery.lookup("mail.example.test").is_none());
+        let extra = cfg.onion_discovery.lookup("extra.test").unwrap();
+        assert_eq!(extra.onion_path_prefix, "/_o/extra.test");
+    }
+
+    /// Named contract: invalid v3 onion is rejected for discovery (no panic, no map).
+    #[test]
+    fn onion_discovery_invalid_v3_is_skipped() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_PRIMARY_DOMAIN", "example.test");
+        set_env("SURMOUNT_SERVICES_HOSTNAME", "services.example.test");
+        set_env("SURMOUNT_ONION_URL", "http://not-a-v3.onion");
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(cfg.onion_url.is_some());
+        assert_eq!(cfg.onion_discovery.mappings().count(), 0);
+    }
+
+    /// Named contract: global disable flags load from env.
+    #[test]
+    fn onion_discovery_global_disable_from_env() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_PRIMARY_DOMAIN", "example.test");
+        set_env("SURMOUNT_SERVICES_HOSTNAME", "services.example.test");
+        set_env("SURMOUNT_ONION_URL", format!("https://{SAMPLE_V3}.onion"));
+        set_env("SURMOUNT_ONION_LOCATION_ENABLED", "0");
+        set_env("SURMOUNT_ONION_ALT_SVC_ENABLED", "false");
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(!cfg.onion_discovery.onion_location_enabled);
+        assert!(!cfg.onion_discovery.alt_svc_enabled);
+        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
+        assert_eq!(apex.onion_scheme, "https");
+    }
+
+    /// Named contract: path set but missing material => hostname_missing (not invent).
+    #[test]
+    fn onion_surface_hostname_missing_when_file_absent() {
+        let _g = EnvGuard::acquire();
+        let missing = std::env::temp_dir().join(format!(
+            "surmount-onion-absent-{}-hostname",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing);
+        set_env(
+            "SURMOUNT_ONION_HOSTNAME_FILE",
+            missing.to_str().expect("utf8 temp path"),
+        );
+        let surface = resolve_onion_surface_from_env();
+        assert_eq!(surface.status_slug(), "hostname_missing");
+        assert!(surface.url().is_none());
+        match surface {
+            OnionSurface::HostnameMissing { path, .. } => {
+                assert_eq!(path.as_deref(), missing.to_str());
+            }
+            other => panic!("expected HostnameMissing, got {other:?}"),
+        }
+    }
+
+    /// Named contract: walk HS state dir finds nested hostname (real Arti layout).
+    #[test]
+    fn onion_surface_from_hs_state_dir_walk() {
+        let _g = EnvGuard::acquire();
+        let dir =
+            std::env::temp_dir().join(format!("surmount-onion-hs-walk-{}", std::process::id()));
+        let nested = dir.join("keystore").join("hss").join("nick");
+        let _ = std::fs::create_dir_all(&nested);
+        let host_onion = "d".repeat(56);
+        std::fs::write(nested.join("hostname"), format!("{host_onion}.onion\n")).unwrap();
+        set_env("SURMOUNT_ONION_HS_STATE_DIR", dir.to_str().unwrap());
+        let surface = resolve_onion_surface_from_env();
+        let expected = format!("http://{host_onion}.onion");
+        assert_eq!(surface, OnionSurface::Configured { url: expected });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Named contract: empty HS dir with path set is hostname_missing, not configured.
+    #[test]
+    fn onion_surface_hs_state_dir_empty_is_hostname_missing() {
+        let _g = EnvGuard::acquire();
+        let dir =
+            std::env::temp_dir().join(format!("surmount-onion-hs-empty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        set_env("SURMOUNT_ONION_HS_STATE_DIR", dir.to_str().unwrap());
+        let surface = resolve_onion_surface_from_env();
+        assert_eq!(surface.status_slug(), "hostname_missing");
+        assert!(surface.url().is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Named contract: Vaultwarden URL unset by default (no invented vault).
+    #[test]
+    fn vaultwarden_url_default_unset() {
+        let _g = EnvGuard::acquire();
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(
+            cfg.vaultwarden_url.is_none(),
+            "must not invent vaultwarden url: {:?}",
+            cfg.vaultwarden_url
+        );
+    }
+
+    /// Named contract: SURMOUNT_VAULTWARDEN_URL normalizes bare host:port.
+    #[test]
+    fn vaultwarden_url_from_env_normalizes() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_VAULTWARDEN_URL", "127.0.0.1:8222");
+        let cfg = AppConfig::from_env().unwrap();
+        assert_eq!(
+            cfg.vaultwarden_url.as_deref(),
+            Some("http://127.0.0.1:8222")
+        );
+        set_env("SURMOUNT_VAULTWARDEN_URL", "https://vault.example.test/");
+        let cfg2 = AppConfig::from_env().unwrap();
+        assert_eq!(
+            cfg2.vaultwarden_url.as_deref(),
+            Some("https://vault.example.test")
+        );
+    }
+
+    #[test]
+    fn normalize_vaultwarden_url_empty() {
+        assert_eq!(normalize_vaultwarden_url("  "), None);
+        assert_eq!(normalize_vaultwarden_url(""), None);
+    }
+
+    /// Named contract: non-http(s) schemes and env breakers are refused.
+    #[test]
+    fn normalize_vaultwarden_url_rejects_bad_scheme_and_charset() {
+        assert_eq!(normalize_vaultwarden_url("javascript:alert(1)"), None);
+        assert_eq!(normalize_vaultwarden_url("data:text/html,hi"), None);
+        assert_eq!(normalize_vaultwarden_url("file:///etc/passwd"), None);
+        assert_eq!(normalize_vaultwarden_url("http://evil\ninjected=1"), None);
+        assert_eq!(normalize_vaultwarden_url("http://evil;rm"), None);
+        assert_eq!(
+            normalize_vaultwarden_url("https://vault.example.test"),
+            Some("https://vault.example.test".into())
+        );
+        assert_eq!(
+            normalize_vaultwarden_url("http://127.0.0.1:8222"),
+            Some("http://127.0.0.1:8222".into())
         );
     }
 

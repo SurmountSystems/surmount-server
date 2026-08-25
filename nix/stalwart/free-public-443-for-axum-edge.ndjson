@@ -1,0 +1,2 @@
+{"@type":"destroy","object":"NetworkListener","value":{"name":"https"}}
+{"@type":"upsert","object":"NetworkListener","matchOn":["name"],"value":{"http-mgmt-loopback":{"name":"http","protocol":"http","bind":{"127.0.0.1:8080":true}}}}
