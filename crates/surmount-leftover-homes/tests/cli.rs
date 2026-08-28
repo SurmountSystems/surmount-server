@@ -57,6 +57,18 @@ fn bad_mkdir_relative_exits_1() {
 
 #[test]
 fn tree_exits_0_in_this_repo() {
+    let git = Command::new("git")
+        .args([
+            "-C",
+            env!("CARGO_MANIFEST_DIR"),
+            "rev-parse",
+            "--is-inside-work-tree",
+        ])
+        .output();
+    match git {
+        Ok(o) if o.status.success() => {}
+        _ => return,
+    }
     let out = Command::new(bin())
         .arg("--tree")
         .current_dir(env!("CARGO_MANIFEST_DIR"))

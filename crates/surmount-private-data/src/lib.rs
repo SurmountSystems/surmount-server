@@ -301,7 +301,11 @@ mod tests {
     #[test]
     fn allowed_testnet_and_rfc1918_ipv4_are_not_hits() {
         let body = b"203.0.113.10 198.51.100.1 192.0.2.1 10.0.0.1 192.168.1.1 172.16.0.1 127.0.0.1 0.0.0.0 169.254.1.1\n";
-        let hits = scan_named("hosts/mail-vps/configuration.nix", body, scan::Gate::Product);
+        let hits = scan_named(
+            "hosts/mail-vps/configuration.nix",
+            body,
+            scan::Gate::Product,
+        );
         assert!(hits.is_empty(), "{hits:?}");
     }
 

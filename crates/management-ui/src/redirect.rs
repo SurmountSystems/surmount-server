@@ -234,6 +234,7 @@ pub fn should_serve_apex_coming_soon(
 }
 
 /// True when apex/www Host should get a closed (non-console) API response.
+#[cfg(test)]
 pub fn should_reject_apex_api(
     host_header: &str,
     primary_domain: &str,

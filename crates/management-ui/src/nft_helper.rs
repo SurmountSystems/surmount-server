@@ -840,34 +840,34 @@ mod tests {
                 .as_secs()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        // Write+fsync+rename so exec is not ETXTBSY (os error 26) on overlay/tmp.
+        fn write_exec(path: &std::path::Path, body: &str) {
+            use std::io::Write;
+            use std::os::unix::fs::PermissionsExt;
+            let tmp = path.with_extension("writing");
+            {
+                let mut f = std::fs::File::create(&tmp).unwrap();
+                f.write_all(body.as_bytes()).unwrap();
+                f.sync_all().unwrap();
+            }
+            let mut perms = std::fs::metadata(&tmp).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&tmp, perms).unwrap();
+            std::fs::rename(&tmp, path).unwrap();
+        }
         let ok_bin = dir.join("helper-ok");
         // Drain stdin before answer so client write cannot race EPIPE when the
         // shell exits before the parent finishes write_all (CI flake).
-        std::fs::write(&ok_bin, "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true}'\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&ok_bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&ok_bin, perms).unwrap();
-        }
+        write_exec(&ok_bin, "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true}'\n");
 
         let client = HelperNftClient::new(&ok_bin);
         client.add_ban(ip4(203, 0, 113, 44)).unwrap();
 
         let bad_bin = dir.join("helper-bad");
-        std::fs::write(
+        write_exec(
             &bad_bin,
             "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":false,\"error\":\"simulated refuse\"}'\nexit 1\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&bad_bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&bad_bin, perms).unwrap();
-        }
+        );
         let client_bad = HelperNftClient::new(&bad_bin);
         let err = client_bad.add_ban(ip4(203, 0, 113, 45)).unwrap_err();
         assert!(

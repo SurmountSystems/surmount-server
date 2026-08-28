@@ -12,6 +12,7 @@ path after GPG checks:
 ```text
 ~/.git-hooks/pre-commit  ->  $repo/script/git-hooks/pre-commit
   -> PATH bin, or crates/target, or nix run .#surmount-private-data -- --staged
+     (BUILD_LOCAL=true skips the remote builder if the guest is down)
 ```
 
 No per-repo `git config core.hooksPath` is required when that global chain is

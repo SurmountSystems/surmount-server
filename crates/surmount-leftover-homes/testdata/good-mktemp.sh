@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Detector fixture only: allowed temp (must pass --paths).
 WORKDIR="$(mktemp -d)"
 IN_TREE_STAGE="${WORKDIR}/staging-must-not-remain"

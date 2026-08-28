@@ -104,7 +104,8 @@ where
 }
 
 pub fn repo_root() -> PathBuf {
-    git::toplevel().unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    git::toplevel()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 pub fn is_fixture_path(rel: &str) -> bool {
@@ -173,8 +174,7 @@ pub fn has_rel_mkdir_leftover(text: &str) -> bool {
         if t.contains("~/.agents") || t.contains("~/.grok") {
             continue;
         }
-        if t.contains("mkdir")
-            && (contains_rel_home(t, ".agents") || contains_rel_home(t, ".grok"))
+        if t.contains("mkdir") && (contains_rel_home(t, ".agents") || contains_rel_home(t, ".grok"))
         {
             return true;
         }

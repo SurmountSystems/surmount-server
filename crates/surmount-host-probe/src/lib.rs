@@ -1,4 +1,4 @@
-//! Host probes: SSH inxi/btop plus env-gated hybrid TLS.
+//! Host probes: SSH inxi, Eternal Terminal btop, plus env-gated hybrid TLS.
 
 pub mod et;
 pub mod ssh_target;
@@ -67,7 +67,7 @@ pub fn resolve_program(spec: &str, label: &str) -> Result<PathBuf, ProbeError> {
         }
     }
     Err(ProbeError::fail(format!(
-        "{label} not found (install openssh or set the override env)"
+        "{label} not found (install it or set the override env)"
     )))
 }
 

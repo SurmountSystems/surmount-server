@@ -5,15 +5,16 @@
 {
   lib,
   pkgs,
+  pkgsRust ? pkgs,
   craneLib,
   pkg-config,
 }:
 let
-  rustToolchain = import ../rust-toolchain.nix { inherit pkgs; };
+  rustToolchain = import ../rust-toolchain.nix { pkgs = pkgsRust; };
   craneLib' = craneLib.overrideToolchain rustToolchain;
 
   src = lib.cleanSourceWith {
-    src = craneLib'.path ../../crates;
+    src = craneLib'.path ../..;
     filter = path: type: craneLib'.filterCargoSources path type;
   };
 
@@ -50,11 +51,24 @@ pkgs.symlinkJoin {
     wrapProgram $out/bin/surmount-inxi-host \
       --prefix PATH : ${lib.makeBinPath [ pkgs.openssh ]}
     wrapProgram $out/bin/surmount-btop-host \
-      --prefix PATH : ${lib.makeBinPath [ pkgs.openssh ]}
+      --prefix PATH : ${
+        lib.makeBinPath [
+          pkgs.eternal-terminal
+          pkgs.openssh
+          pkgs.btop
+        ]
+      } \
+      --set ET_NO_TELEMETRY 1
     wrapProgram $out/bin/surmount-tls-hybrid \
       --prefix PATH : ${lib.makeBinPath [ pkgs.openssl ]}
     wrapProgram $out/bin/surmount-et \
-      --prefix PATH : ${lib.makeBinPath [ pkgs.eternal-terminal pkgs.openssh ]}
+      --prefix PATH : ${
+        lib.makeBinPath [
+          pkgs.eternal-terminal
+          pkgs.openssh
+        ]
+      } \
+      --set ET_NO_TELEMETRY 1
   '';
   meta = unwrapped.meta;
 }

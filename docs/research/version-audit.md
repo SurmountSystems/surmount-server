@@ -3,6 +3,8 @@
 **Status:** research finding / inventory. Not operator acceptance of any bump.
 **Living host + crane refresh:** 2026-08-07 (UTC). Host channel and crane
 rows describe the **tree today**.
+**Arti HS package refresh:** 2026-08-27 (UTC). Surmount `arti-onion-service`
+pin is **2.5.1** (matches nixpkgs-rust `arti`; crates.io max_stable 2.5.1).
 **Prior full package audit:** 2026-07-31 (UTC). Stalwart FOD / cargo / upstream
 "latest" cells below stay labeled as that audit day unless revalidated.
 
@@ -45,7 +47,7 @@ date in that row** until revalidated.
 | stalwart-cli FOD | **1.0.12** (re-check 2026-07-31: at latest) |
 | WebUI FOD | **1.0.7** (re-check 2026-07-31: at latest) |
 | spam-filter FOD | **3.0.0** (re-check 2026-07-31: at latest) |
-| Arti (Surmount HS package) | Surmount-owned source build **2.5.0** (`arti-onion-service.nix`). Stock `pkgs.arti` is channel-lagged client-default (not HS path). rustc via `nixpkgs-rust` (MSRV 1.91+) |
+| Arti (Surmount HS package) | Surmount-owned source build **2.5.1** (`arti-onion-service.nix`; re-check 2026-08-27). Stock `pkgs.arti` is channel-lagged client-default (not HS path). rustc via `nixpkgs-rust` (MSRV 1.91+) |
 | crane / sops-nix flake locks | Prior audit (2026-07-30) at master HEAD; **not re-checked** 2026-08-07 |
 | management-ui Cargo.lock | Prior audit (2026-07-30): mostly current; small **tokio** patch lag; intentional older **reqwest** / **tower-http** majors. **Not re-fetched** 2026-08-07 |
 | RocksDB | Embedded in upstream Stalwart lock (`10.4.2` via `librocksdb-sys`); Surmount does **not** use system `pkgs.rocksdb` for the mail binary |
@@ -249,7 +251,7 @@ optional `blobSize` / `bufferSize`; it does not pin a system rocksdb package.
 ## 5b. Arti (HS publish package)
 
 Packaging mode: **Surmount-owned source build** of upstream Arti from Tor
-Project GitLab (`fetchFromGitLab` tag `arti-v2.5.0`), with cargo feature
+Project GitLab (`fetchFromGitLab` tag `arti-v2.5.1`), with cargo feature
 `onion-service-service`. Distinct attribute `pkgs.artiOnionService` /
 `packages.*.arti-onion-service`. Does **not** replace stock `pkgs.arti`.
 
@@ -258,15 +260,15 @@ is a hermetic cargo source build, not a binary FOD.
 
 | Item | Value | Source |
 |------|-------|--------|
-| Surmount package version | **2.5.0** | `nix/packages/arti-onion-service.nix` |
-| Source | GitLab `tpo/core/arti` tag **`arti-v2.5.0`** | package `src` |
+| Surmount package version | **2.5.1** | `nix/packages/arti-onion-service.nix` |
+| Source | GitLab `tpo/core/arti` tag **`arti-v2.5.1`** | package `src` |
 | Cargo feature | **`onion-service-service`** (lean; not nixpkgs `full`) | package `buildFeatures` |
 | Capability passthru | `surmountOnionServiceCapable = true` | package `passthru` |
 | Toolchain | rustc from flake input **`nixpkgs-rust`** (nixos-unstable; MSRV **1.91+**) | `flake.nix` `mkArtiRustPlatform` |
 | Vendor | `cargoDeps` from matching nixpkgs-rust `arti` (crates.io 403 workaround) | package `artiUnstable.cargoDeps` |
 | Stock nixpkgs `pkgs.arti` | channel-lagged client-default (COMPACTION-PIN: often **1.4.2**); not used for HS path | host + `nixpkgs-rust` |
-| Upstream crates.io max_stable | **2.5.0** (audit day 2026-07-31) | crates.io API |
-| Gap vs upstream engine | **closed** for Surmount HS package (as of packaging day) | own pin matches 2.5.0 |
+| Upstream crates.io max_stable | **2.5.1** (re-check 2026-08-27; crate published 2026-08-03; no 2.6) | [crates.io arti](https://crates.io/crates/arti) (accessed: 2026-08-27) |
+| Gap vs upstream engine | **closed** for Surmount HS package | own pin matches 2.5.1 |
 
 Honest limits:
 
@@ -276,9 +278,11 @@ Honest limits:
   built package + Tor client; local temp keys != host ownership.
 - Bump recipe is in the package header (version, src hash, cargoDeps handoff,
   MSRV).
-- **Build proof (2026-07-31):** `nix build .#arti-onion-service` green;
-  installCheck `arti --version` reports **2.5.0**; cargo features include
-  `onion-service-service` (HS tests in package check phase ran).
+- **Build proof (2026-07-31):** `nix build .#arti-onion-service` green for
+  then-current **2.5.0**; cargo features include `onion-service-service`.
+  **2026-08-27 pin bump** to **2.5.1** matches nixpkgs-rust `arti` (eval
+  assert) and crates.io max_stable. Cargo rebuild of the HS binary is not
+  this eval slice.
 
 ## 5c. rustc (management-ui vs host vs stable)
 
@@ -311,7 +315,7 @@ Do not treat host rustc as the product pin.
 | rust-overlay flake input | commented out | not active |
 | modules / hosts | no independent fetchurl pins | versions come from flake packages + nixpkgs |
 | Stalwart packaging mode | `release-binary-fod` | source build deferred (vendor 403 / rustc) |
-| arti-onion-service | Surmount-owned source **2.5.0** + `onion-service-service` | gap vs upstream closed as of packaging day; rustc via `nixpkgs-rust` (section 5b) |
+| arti-onion-service | Surmount-owned source **2.5.1** + `onion-service-service` | gap vs upstream closed as of 2026-08-27; rustc via `nixpkgs-rust` (section 5b) |
 | Stock Stalwart modules | dual `disabledModules` | `modules/stalwart-service.nix` |
 
 ---
@@ -322,10 +326,10 @@ Priority order (proposed, not accepted):
 
 1. **Keep Stalwart FODs as-is** until a tag newer than 0.16.15 / 1.0.12 /
    1.0.7 / 3.0.0 appears. Re-check releases before every packaging PR.
-2. **Arti currency:** **shipped** as Surmount-owned **2.5.0** source package.
-   Re-check crates.io / GitLab tags on next packaging pass; bump version +
-   hashes in `arti-onion-service.nix`. Live Tor verify remains residual. Do
-   not claim onion published from pin alone.
+2. **Arti currency:** **shipped** as Surmount-owned **2.5.1** source package
+   (2026-08-27). Re-check crates.io / GitLab tags on next packaging pass;
+   bump version + hashes in `arti-onion-service.nix`. Live Tor verify remains
+   residual. Do not claim onion published from pin alone.
 3. **OS channel:** **done** for 25.05 -> 26.05 (living host is 26.05). Further
    bumps only with release notes + measured need. May retire `nixpkgs-rust`
    if host channel rustc meets Arti MSRV without it.
@@ -388,8 +392,8 @@ re-running. Keep reports short under `~/.agents/reports/`.
 | CLI latest = 1.0.12 | GitHub releases/latest 2026-07-28 (re-check 2026-07-31) |
 | WebUI latest = 1.0.7 | GitHub releases/latest 2026-07-30 (re-check 2026-07-31) |
 | spam-filter latest = 3.0.0 | GitHub releases/latest 2026-04-13 (re-check 2026-07-31) |
-| Surmount arti-onion-service = 2.5.0 | package expression + `nix eval` 2026-07-31 packaging |
-| Arti upstream = 2.5.0 | crates.io max_stable + GitLab tag `arti-v2.5.0` 2026-06-30 |
+| Surmount arti-onion-service = 2.5.1 | package expression 2026-08-27; cargoDeps assert vs nixpkgs-rust `arti` |
+| Arti upstream = 2.5.1 | crates.io `max_stable_version` 2026-08-27; GitLab tag `arti-v2.5.1` (published 2026-08-03). No 2.6. Historical 2.5.0 packaging: 2026-07-31 |
 | rustc stable = 1.97.1 | static.rust-lang.org channel-rust-stable.toml `[pkg.rust]` 2026-07-31 |
 | Historical host 25.05 / crane 1.88 | 2026-07-31 audit day only (see footnotes) |
 | Current stable branch name 26.05 | channels.nixos.org + nixpkgs README Hydra links for release-26.05 (2026-07-30) |

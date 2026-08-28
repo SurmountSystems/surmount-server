@@ -61,7 +61,8 @@ where
     S: AsRef<str>,
 {
     let argv: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
-    let mut host = std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
+    let mut host =
+        std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
     let mut staging = String::new();
     let mut target = std::env::var("SURMOUNT_SECRETS_TARGET")
         .ok()
@@ -117,16 +118,22 @@ where
                 path_override = need(&argv, i)?;
             }
             other if other.starts_with('-') => {
-                return Err(ToolError::fail(format!("unknown option: {other} (try --help)")));
+                return Err(ToolError::fail(format!(
+                    "unknown option: {other} (try --help)"
+                )));
             }
             other => {
-                return Err(ToolError::fail(format!("unexpected argument: {other} (try --help)")));
+                return Err(ToolError::fail(format!(
+                    "unexpected argument: {other} (try --help)"
+                )));
             }
         }
         i += 1;
     }
     if host.is_empty() || host.starts_with('-') {
-        return Err(ToolError::fail("host id is empty or option-shaped".to_string()));
+        return Err(ToolError::fail(
+            "host id is empty or option-shaped".to_string(),
+        ));
     }
     let staging_path = if staging.is_empty() {
         if let Ok(s) = std::env::var("SURMOUNT_SECRETS_STAGING")
@@ -224,7 +231,11 @@ where
             Some("stalwart-token"),
             dry_run_install,
         )
-        .map_err(|e| ToolError::fail(format!("secrets-install-host failed (Domain B not installed): {e}")))?;
+        .map_err(|e| {
+            ToolError::fail(format!(
+                "secrets-install-host failed (Domain B not installed): {e}"
+            ))
+        })?;
         if !dry_run_install {
             log_line("Domain B install finished (stalwart-token).");
         }
@@ -253,8 +264,7 @@ fn write_token(staging: &Path, host: &str, path_override: &str, token: &str) -> 
     } else {
         path_override
     };
-    let secret = build_single_line_secret(token)
-        .map_err(|e| ToolError::fail(e.to_string()))?;
+    let secret = build_single_line_secret(token).map_err(|e| ToolError::fail(e.to_string()))?;
     let attrs = build_attributes(Kind::StalwartToken, host, path)
         .map_err(|e| ToolError::fail(e.to_string()))?;
     write_staging_item(staging, "stalwart-token", &attrs, &secret)
@@ -279,20 +289,28 @@ fn read_token_file(path: &str) -> Result<String> {
         )));
     }
     let s = fs::read_to_string(p)?;
-    Ok(s.lines().next().unwrap_or("").trim_end_matches('\r').to_string())
+    Ok(s.lines()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\r')
+        .to_string())
 }
 
 fn read_token_stdin() -> Result<String> {
     let mut s = String::new();
     io::stdin().read_to_string(&mut s)?;
-    Ok(s.lines().next().unwrap_or("").trim_end_matches('\r').to_string())
+    Ok(s.lines()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\r')
+        .to_string())
 }
 
 fn atty0() -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
-        extern "C" {
+        unsafe extern "C" {
             fn isatty(fd: i32) -> i32;
         }
         let fd = io::stdin().as_raw_fd();

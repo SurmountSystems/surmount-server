@@ -53,23 +53,26 @@ fn setup() -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
         &bin_dir,
         "stalwart-cli",
         &format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$*\" >>'{}'\n\
-if [[ \"$*\" == *' import '* ]]; then echo \"error: unrecognized subcommand 'import'\" >&2; exit 2; fi\n\
-if [[ \"$*\" == *'query Account'* ]]; then echo '{{\"name\":\"hunter\",\"emailAddress\":\"hunter@surmount.systems\",\"id\":\"c\"}}'; exit 0; fi\n\
-echo unexpected >&2; exit 1\n",
-            cli_log.display()
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >>'{cli}'\n\
+case \"$*\" in\n\
+  *' import '*) echo \"error: unrecognized subcommand 'import'\" >&2; exit 2 ;;\n\
+  *'query Account'*) printf '%s\\n' '{{\"name\":\"hunter\",\"id\":\"c\"}}'; exit 0 ;;\n\
+esac\necho unexpected >&2; exit 1\n",
+            cli = cli_log.display()
         ),
     );
     write_exec(
         &bin_dir,
         "vandelay",
         &format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$*\" >>'{}'\n\
-if [[ -n \"${{VANDELAY_TOKEN:-}}\" ]]; then echo VANDELAY_TOKEN=set >>'{}'; else echo VANDELAY_TOKEN=missing >>'{}'; fi\n\
-if printf '%s' \"$*\" | grep -Fq '{PLANT}'; then echo plant >&2; exit 1; fi\nexit 0\n",
-            vlog.display(),
-            elog.display(),
-            elog.display()
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >>'{vlog}'\n\
+if [ -n \"$VANDELAY_TOKEN\" ]; then echo VANDELAY_TOKEN=set >>'{elog}'; else echo VANDELAY_TOKEN=missing >>'{elog}'; fi\n\
+case \"$*\" in\n\
+  *'{plant}'*) echo plant >&2; exit 1 ;;\n\
+esac\nexit 0\n",
+            vlog = vlog.display(),
+            elog = elog.display(),
+            plant = PLANT
         ),
     );
     (work, bin_dir, maildir, token, vlog)
@@ -105,7 +108,10 @@ fn missing_maildir_exits_1() {
     let out = run_driver(
         &bin_dir,
         &token,
-        &["hunter@surmount.systems", &work.join("no-such").display().to_string()],
+        &[
+            "hunter@surmount.systems",
+            &work.join("no-such").display().to_string(),
+        ],
     );
     assert_eq!(out.status.code(), Some(1));
 }
@@ -158,7 +164,11 @@ fn happy_path_vandelay_no_cli_import() {
         .args(["hunter@surmount.systems"])
         .arg(&maildir);
     let out = c.output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let v = fs::read_to_string(&vlog).unwrap();
     assert!(v.contains("import maildir"));
     assert!(v.contains("--account-id c"));

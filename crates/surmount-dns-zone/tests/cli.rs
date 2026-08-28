@@ -134,7 +134,14 @@ fn dry_run_set_a_does_not_write() {
 #[test]
 fn live_set_a_merges_and_preserves() {
     let h = Harness::new();
-    let (rc, _) = h.run(&["--live", "set-a", "services", "203.0.113.20", "--ttl", "600"]);
+    let (rc, _) = h.run(&[
+        "--live",
+        "set-a",
+        "services",
+        "203.0.113.20",
+        "--ttl",
+        "600",
+    ]);
     assert_eq!(rc, 0);
     let hosts = h.hosts();
     assert!(hosts.contains("services|A|203.0.113.20|10|600"));
@@ -207,7 +214,9 @@ fn fqdn_and_foreign() {
 fn set_txt_spf_dmarc_dkim() {
     let h = Harness::new();
     let mut hosts = h.hosts();
-    hosts.push_str("@|TXT|unrelated-txt-keep-me|10|1800\n@|TXT|v=spf1 include:old.example ~all|10|1800\n");
+    hosts.push_str(
+        "@|TXT|unrelated-txt-keep-me|10|1800\n@|TXT|v=spf1 include:old.example ~all|10|1800\n",
+    );
     fs::write(h.mock.join("hosts.txt"), hosts).unwrap();
     let (rc, out) = h.run(&["set-txt", "@", "v=spf1 a:mail.example.test -all"]);
     assert_eq!(rc, 0);
@@ -244,7 +253,12 @@ fn set_txt_spf_dmarc_dkim() {
     ]);
     assert_eq!(rc, 0);
     assert!(h.hosts().contains("stalwart._domainkey|TXT|"));
-    let (rc, _) = h.run(&["--live", "set-txt", "_dmarc.example.test", "v=DMARC1; p=quarantine"]);
+    let (rc, _) = h.run(&[
+        "--live",
+        "set-txt",
+        "_dmarc.example.test",
+        "v=DMARC1; p=quarantine",
+    ]);
     assert_eq!(rc, 0);
     assert_eq!(h.hosts().matches("_dmarc|TXT|").count(), 1);
 }
@@ -262,7 +276,11 @@ fn empty_txt_and_bad_ipv4_and_creds() {
     let out = c.arg("list").output().unwrap();
     assert_ne!(out.status.code().unwrap_or(1), 0);
     let bad = h.cred.parent().unwrap().join("bad.env");
-    fs::write(&bad, "ApiUser=surmount-test-apiuser\nSLD=example\nTLD=test\n").unwrap();
+    fs::write(
+        &bad,
+        "ApiUser=surmount-test-apiuser\nSLD=example\nTLD=test\n",
+    )
+    .unwrap();
     fs::set_permissions(&bad, fs::Permissions::from_mode(0o600)).unwrap();
     let mut c = h.cmd();
     c.env("SURMOUNT_DNS_ZONE_NAMECHEAP_ENV", &bad);
@@ -320,7 +338,14 @@ fn set_caa_and_set_mx_and_fwd() {
     assert!(hosts.contains("0 iodef \"mailto:caa@example.test\""));
     assert!(!hosts.contains("oldca.example"));
     assert!(!hosts.contains("@|TXT|0 issue"));
-    let (rc, _) = h.run(&["--live", "set-caa", "@", "0", "issuewild", "letsencrypt.org"]);
+    let (rc, _) = h.run(&[
+        "--live",
+        "set-caa",
+        "@",
+        "0",
+        "issuewild",
+        "letsencrypt.org",
+    ]);
     assert_eq!(rc, 0);
     let (rc, _) = h.run(&["--live", "set-caa", "@", "999", "issue", "letsencrypt.org"]);
     assert_ne!(rc, 0);
@@ -359,7 +384,14 @@ fn set_caa_and_set_mx_and_fwd() {
     fs::write(h.mock.join("hosts.txt"), &hosts).unwrap();
     fs::write(h.mock.join("email_type.txt"), "FWD\n").unwrap();
     let before = h.hosts();
-    let (rc, out) = h.run(&["--live", "set-mx", "@", "mail.example.test.", "--pref", "10"]);
+    let (rc, out) = h.run(&[
+        "--live",
+        "set-mx",
+        "@",
+        "mail.example.test.",
+        "--pref",
+        "10",
+    ]);
     assert_ne!(rc, 0);
     assert!(out.contains("Email Forwarding is still on"));
     assert!(out.contains("change Mail Settings to Custom MX"));
@@ -473,7 +505,10 @@ fn help_and_mode_and_credentials_flag_and_delete() {
         out.to_ascii_lowercase().contains("empty zone")
             || out.to_ascii_lowercase().contains("refuse empty")
     );
-    assert!(h.hosts().contains("@|URL|http://parkingpage.namecheap.com|"));
+    assert!(
+        h.hosts()
+            .contains("@|URL|http://parkingpage.namecheap.com|")
+    );
 }
 
 #[test]
@@ -488,9 +523,7 @@ fn sha1_digest_type_1_live_fails_closed() {
     let before = h.hosts();
     let (rc, out) = h.run(&["--live", "set-a", "www", "203.0.113.20"]);
     assert_ne!(rc, 0);
-    assert!(
-        out.contains("digest type 1") || out.contains("SHA-1") || out.contains("SHA-1")
-    );
+    assert!(out.contains("digest type 1") || out.contains("SHA-1") || out.contains("SHA-1"));
     assert_eq!(h.hosts(), before);
 }
 

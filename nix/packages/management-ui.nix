@@ -3,22 +3,23 @@
 # or via the flake overlay which injects craneLib.
 #
 # Leptos 0.8 SSR MSRV is rustc 1.88+. Toolchain comes from
-# nix/rust-toolchain.nix (nixos-26.05: rustPackages_1_95).
+# nix/rust-toolchain.nix (nixpkgs-rust; 1.97.1 until nixpkgs has 1.98).
 
 {
   lib,
   pkgs,
+  pkgsRust ? pkgs,
   craneLib,
   pkg-config,
   openssl,
   # Optional: cargo artifacts for faster incremental CI later.
 }:
 let
-  rustToolchain = import ../rust-toolchain.nix { inherit pkgs; };
+  rustToolchain = import ../rust-toolchain.nix { pkgs = pkgsRust; };
   craneLib' = craneLib.overrideToolchain rustToolchain;
 
   src = lib.cleanSourceWith {
-    src = craneLib'.path ../../crates;
+    src = craneLib'.path ../..;
     filter =
       path: type:
       (craneLib'.filterCargoSources path type)

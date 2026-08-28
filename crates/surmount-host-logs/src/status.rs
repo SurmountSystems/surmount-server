@@ -1,6 +1,6 @@
 //! One-shot `--status` snapshot: disk use, knobs, failed units, is-active, tails.
 
-use std::fmt::{self, Write};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

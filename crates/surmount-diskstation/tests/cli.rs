@@ -58,7 +58,11 @@ fn mount_reuses_existing() {
     let bindir = dir.join("bin");
     fs::create_dir_all(&bindir).unwrap();
     let st_log = dir.join("secret-tool.log");
-    fs::write(bindir.join("secret-tool"), "#!/bin/sh\necho unexpected >&2; exit 1\n").unwrap();
+    fs::write(
+        bindir.join("secret-tool"),
+        "#!/bin/sh\necho unexpected >&2; exit 1\n",
+    )
+    .unwrap();
     chmod_x(&bindir.join("secret-tool"));
     fs::write(bindir.join("gio"), "#!/bin/sh\nexit 0\n").unwrap();
     chmod_x(&bindir.join("gio"));
@@ -72,7 +76,11 @@ fn mount_reuses_existing() {
         .env("SURMOUNT_AFP_HINT_FILE", dir.join("no-hint"))
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let err = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
     assert!(err.contains("reuse") || err.contains("already") || err.contains("mounted"));
     assert!(!st_log.exists() || fs::read_to_string(&st_log).unwrap_or_default().is_empty());
@@ -115,7 +123,11 @@ fn mount_fresh_stdin_not_argv() {
     .unwrap();
     chmod_x(&bindir.join("gio"));
     for dummy in ["xclip", "pbcopy", "wl-copy"] {
-        fs::write(bindir.join(dummy), "#!/bin/sh\ncat >/dev/null || true\nexit 0\n").unwrap();
+        fs::write(
+            bindir.join(dummy),
+            "#!/bin/sh\ncat >/dev/null || true\nexit 0\n",
+        )
+        .unwrap();
         chmod_x(&bindir.join(dummy));
     }
     let path = format!("{}:{}", bindir.display(), std::env::var("PATH").unwrap());
@@ -128,7 +140,11 @@ fn mount_fresh_stdin_not_argv() {
         .env("SURMOUNT_AFP_HINT_FILE", dir.join("no-hint"))
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let st = fs::read_to_string(&st_log).unwrap_or_default();
     assert!(st.contains("lookup") && st.contains("synology-afp") && st.contains("DS1513"));
     let argv = fs::read_to_string(&gio_argv).unwrap_or_default();
@@ -144,7 +160,9 @@ fn discover_help_and_fake_avahi() {
     assert!(out.status.success());
     let t = String::from_utf8_lossy(&out.stdout);
     assert!(t.contains("DS1513") && t.contains("DS3018xs"));
-    assert!(t.to_ascii_lowercase().contains("avahi") || t.contains("mDNS") || t.contains("Bonjour"));
+    assert!(
+        t.to_ascii_lowercase().contains("avahi") || t.contains("mDNS") || t.contains("Bonjour")
+    );
     assert!(!has_ipv4(&t));
 
     let dir = temp_dir("avahi");
@@ -179,7 +197,11 @@ fn discover_help_and_fake_avahi() {
         .env("SURMOUNT_GETENT", bindir.join("getent"))
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let t = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -235,7 +257,11 @@ exit 2
     let path = format!("{}:{}", bindir.display(), std::env::var("PATH").unwrap());
     let help = Command::new(copy_uid()).arg("--help").output().unwrap();
     let ht = String::from_utf8_lossy(&help.stdout);
-    assert!(ht.contains("MailPlus/@local") && ht.contains("import/maildir") && ht.to_ascii_lowercase().contains("gio list"));
+    assert!(
+        ht.contains("MailPlus/@local")
+            && ht.contains("import/maildir")
+            && ht.to_ascii_lowercase().contains("gio list")
+    );
     assert!(!has_ipv4(&ht));
 
     let missing = Command::new(copy_uid())
@@ -267,7 +293,11 @@ exit 2
         .env("SURMOUNT_AGENT_TARGET_ENV", &envf)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let t = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),

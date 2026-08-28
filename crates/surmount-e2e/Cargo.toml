@@ -20,3 +20,6 @@ path = "src/bin/surmount_e2e_host.rs"
 
 [dependencies]
 # std only: keep the e2e crate light and offline-friendly.
+
+[lints]
+workspace = true

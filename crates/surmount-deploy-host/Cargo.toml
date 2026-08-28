@@ -17,3 +17,6 @@ path = "src/bin/surmount-deploy-host.rs"
 [[bin]]
 name = "surmount-deploy-host-post-switch-smoke"
 path = "src/bin/surmount-deploy-host-post-switch-smoke.rs"
+
+[lints]
+workspace = true

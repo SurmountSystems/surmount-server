@@ -130,7 +130,10 @@ fn ingest(st: &mut State, name: &str, svc: &str, hostname: &str, extra: &str) {
     if !mdns.is_empty() {
         println!(
             "{}",
-            strip_ipv4(&format!("unmatched mdns={mdns} service={}", if svc.is_empty() { "unknown" } else { svc }))
+            strip_ipv4(&format!(
+                "unmatched mdns={mdns} service={}",
+                if svc.is_empty() { "unknown" } else { svc }
+            ))
         );
         if mdns.eq_ignore_ascii_case("DiskStation.local") {
             st.generic = true;
@@ -149,13 +152,12 @@ fn parse_avahi(st: &mut State, text: &str) {
             let hostname = *parts.get(5).unwrap_or(&"");
             let txt = *parts.get(8).unwrap_or(&"");
             ingest(st, name, typ, hostname, txt);
-        } else if line.contains("hostname = [") {
-            if let Some(start) = line.find('[') {
-                if let Some(end) = line[start + 1..].find(']') {
-                    let h = &line[start + 1..start + 1 + end];
-                    ingest(st, "", "_afpovertcp._tcp", h, line);
-                }
-            }
+        } else if line.contains("hostname = [")
+            && let Some(start) = line.find('[')
+            && let Some(end) = line[start + 1..].find(']')
+        {
+            let h = &line[start + 1..start + 1 + end];
+            ingest(st, "", "_afpovertcp._tcp", h, line);
         }
     }
 }
@@ -170,7 +172,7 @@ fn tool(env_name: &str, default: &str) -> Option<PathBuf> {
 fn main() -> ExitCode {
     let mut args = std::env::args();
     let _ = args.next();
-    for a in args {
+    if let Some(a) = args.next() {
         match a.as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -208,16 +210,18 @@ fn main() -> ExitCode {
     }
     if let Some(ge) = tool("SURMOUNT_GETENT", "getent") {
         for id in ["DS1513", "DS3018xs"] {
-            if let Ok(out) = Command::new(&ge).args(["hosts", &format!("{id}.local")]).output() {
-                if out.status.success() {
-                    let text = String::from_utf8_lossy(&out.stdout);
-                    let name = text
-                        .split_whitespace()
-                        .nth(1)
-                        .unwrap_or(&format!("{id}.local"))
-                        .to_string();
-                    note(&mut st, id, &name, "getent", "");
-                }
+            if let Ok(out) = Command::new(&ge)
+                .args(["hosts", &format!("{id}.local")])
+                .output()
+                && out.status.success()
+            {
+                let text = String::from_utf8_lossy(&out.stdout);
+                let name = text
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or(&format!("{id}.local"))
+                    .to_string();
+                note(&mut st, id, &name, "getent", "");
             }
         }
     }

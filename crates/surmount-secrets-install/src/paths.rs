@@ -200,8 +200,7 @@ pub fn normalize_host_path(p: &str, repo_root: &Path) -> Result<String> {
             "refuse: surmount.path normalizes with '.' or '..' (got {p} -> {canon_s})"
         )));
     }
-    if is_public_product_path(Path::new(p), repo_root)
-        || is_public_product_path(&canon, repo_root)
+    if is_public_product_path(Path::new(p), repo_root) || is_public_product_path(&canon, repo_root)
     {
         return Err(ToolError::fail(format!(
             "refuse: will not install into public product path ({p}). Host runtime paths only. Never hosts/ or secrets/ in the git tree."

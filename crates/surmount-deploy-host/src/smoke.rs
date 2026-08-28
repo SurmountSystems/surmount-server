@@ -20,8 +20,8 @@ Checks:
     When SURMOUNT_LISTEN_MODE=https and the listen port is 443, curl
     https://127.0.0.1:443/health with -sk; never HTTP on :443)
   - TLS PEM path presence when https edge or SURMOUNT_TLS_* is configured
-    (durable default /var/lib/surmount/secrets/tls/{cert,key}.pem; never logs
-    PEM contents)
+    (durable default /var/lib/surmount/secrets/tls/{cert,key}.pem; key must
+    be owner-only 0600; never logs PEM contents)
   - optional ACME enable note from SURMOUNT_ACME_ENABLE (disabled = static PEMs)
   - when https edge: ss listen proof for :443 (always required) and :80 when
     HTTP->HTTPS redirect is on (product production default for https edge).
@@ -59,7 +59,7 @@ where
 {
     let mut iter = args.into_iter();
     let _argv0 = iter.next();
-    for a in iter {
+    if let Some(a) = iter.next() {
         match a.as_ref() {
             "-h" | "--help" => {
                 print!("{SMOKE_USAGE}");
@@ -412,9 +412,11 @@ fn check_pems(
             let g = (mode >> 3) & 0o7;
             let o = mode & 0o7;
             if g != 0 || o != 0 {
-                c.note(&format!(
-                    "tls key mode {mode:o} is not owner-only (prefer 0600); path label only"
+                c.fail_line(&format!(
+                    "tls key mode {mode:o} is not owner-only (require 0600); path label only"
                 ));
+            } else {
+                c.pass(&format!("tls key mode {mode:o} owner-only"));
             }
         }
     } else {

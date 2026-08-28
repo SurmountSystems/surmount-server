@@ -4,9 +4,11 @@ How Surmount handles secrets without mashing deploy crypto, human password
 managers, and disk encryption into one vague bucket. Custody also spans
 **operator workstation** vs **host at activation** (three domains below).
 
-**Last updated:** 2026-08-25 (operator bins are `nix run .#...`; hermetic
-crate tests in `checks.*.ci`. No leftover product `script/*.sh` drivers.)
-**Prior:** 2026-08-18 (tls-key install mode is **0640**
+**Last updated:** 2026-08-27 (tls-key install mode is **0600** owner-only
+`surmount-ui`; Stalwart uses copies under `secrets/mail/tls`. Operator bins
+are `nix run .#...`; hermetic crate tests in `checks.*.ci`. No leftover
+product `script/*.sh` drivers.)
+**Prior:** 2026-08-18 (tls-key install mode was **0640**
 `surmount-ui:surmount-tls`; laptop renew stages tls-cert/tls-key.
 Prior 2026-08-12: session-secret EnvironmentFile shape +
 nostr-allowlist one-shot for public edge B4; dual-pin OPS/SECURITY)
@@ -185,7 +187,7 @@ See section on disk below and
 
 | Material | Domain A (label / custody) | Domain B (host path convention) | Product consumer today |
 |----------|----------------------------|----------------------------------|------------------------|
-| TLS cert + key | yes (static PEM path) **or** none (ACME path) | **durable default** `/var/lib/surmount/secrets/tls/{cert,key}.pem` (key **0640** `surmount-ui:surmount-tls`, not world-readable; shared with Stalwart); optional ephemeral `/run/surmount-secrets/tls/...` | `managementUi.tlsCertPath` / `tlsKeyPath` (static read or ACME write targets) |
+| TLS cert + key | yes (static PEM path) **or** none (ACME path) | **durable default** `/var/lib/surmount/secrets/tls/{cert,key}.pem` (cert **0640** `surmount-ui:surmount-tls`; key **0600** `surmount-ui` owner-only); Stalwart copies under `.../mail/tls/` (key 0600 `stalwart-mail`); optional ephemeral `/run/surmount-secrets/tls/...` | `managementUi.tlsCertPath` / `tlsKeyPath` (static read or ACME write targets); mail-plane File paths are the mail copies |
 | ACME account JSON | optional backup only | **durable default** `/var/lib/surmount/secrets/acme/account.json`; optional `/run/...` | `managementUi.acme.accountCredentialsPath` (binary creates/restores; never git) |
 | ACME parent dirs only | n/a (empty dirs) | durable `.../secrets/tls/` + `.../secrets/acme/` (default); optional `/run/surmount-secrets/{tls,acme}/` | L2: writable by `surmount-ui` so ACME can issue without pre-placed CA PEMs |
 | Session HMAC secret | yes (`kind=session-secret`) | **durable** `/var/lib/surmount/secrets/ui/session-secret` (**EnvironmentFile** body: `SURMOUNT_SESSION_SECRET=...`) | `sessionSecretPath` -> unit EnvironmentFile -> `SURMOUNT_SESSION_SECRET` |
@@ -296,7 +298,7 @@ scriptable. Application attribute / label family: **`surmount`**.
 | `namecheap-api` | `/var/lib/surmount/secrets/acme/namecheap.env` (durable default; `/run/...` still allowlisted) | KEY=value env for DNS-01 hook; mode **0600** required (hooks refuse group/world bits). Co-located under ACME account parent today (unit `ReadWritePaths` includes that parent); sibling leaf residual if write blast radius needs shrink (H4). |
 | `shc-api` | `/var/lib/surmount/secrets/rdns/shc.env` (durable default) | KEY=value: `ApiKey`, `ApiBase`, optional `ServiceId`; rDNS tool |
 | `vaultwarden-admin` | `/var/lib/surmount/secrets/vaultwarden/admin.env` (durable default; `/run/...` still allowlisted) | `ADMIN_TOKEN=...` EnvironmentFile; S7b |
-| `tls-cert` / `tls-key` | `/var/lib/surmount/secrets/tls/{cert,key}.pem` (durable default; `/run/...` still allowlisted) | Static PEM path or ACME write targets; key mode **0640** `surmount-ui:surmount-tls` (do not chmod 0600). Laptop renew: `just laptop-renew-cert -- --live --directory production` stages Domain A then kind-filters these two kinds. |
+| `tls-cert` / `tls-key` | `/var/lib/surmount/secrets/tls/{cert,key}.pem` (durable default; `/run/...` still allowlisted) | Static PEM path or ACME write targets; cert **0640** `surmount-ui:surmount-tls`; key **0600** `surmount-ui` (owner-only). Remote install also copies both to `/var/lib/surmount/secrets/mail/tls/` (key 0600 `stalwart-mail`). Laptop renew: `just laptop-renew-cert -- --live --directory production` stages Domain A then kind-filters these two kinds. |
 | `restic-password` | operator-chosen under material roots | backups module |
 | `synology-afp` | **none** (laptop-only; no Domain B path) | DiskStation AFP LAN password. One item per NAS. Labels `surmount synology-afp DS1513` and `surmount synology-afp DS3018xs`. Lookup: `secret-tool lookup surmount.kind synology-afp surmount.host DS1513` (and `DS3018xs`). Intake also stores GNOME `org.gnome.keyring.NetworkPassword` (`protocol=afp`, `user=hunter`, `server=DS1513` or `DS3018xs`, plus `<id>.local`) so Nautilus and raw `gio mount` remember (CLI `gio` does not set the save flag by itself). `--afp-host`, `--uri`, and laptop-private hint `~/.local/share/surmount/diskstation-afp-hosts` (never git) may still be IPv4 for the **mount URI only**. That IPv4 is never NetworkPassword `server` (LAN addresses can change) and is not the `surmount.host` label. `--generate` refused. `secrets-install-host` **always refuses**. Intake: `just secrets-prompt -- synology-afp --host DS1513 --secret-service --no-staging` (optional `--afp-host`). After a successful `diskstation-afp-mount`, missing NetworkPassword is filled from the same lookup (stdin, never argv). After every `secret-tool` / `secrets-prompt` store of any kind, paste buffers are wiped (empty stdin to `xclip` clipboard and PRIMARY, `pbcopy`, and `wl-copy --clear` when present). Never pipe the secret into the clipboard. |
 

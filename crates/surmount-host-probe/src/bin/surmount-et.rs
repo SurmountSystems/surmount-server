@@ -5,7 +5,7 @@ use std::process::{Command, ExitCode};
 
 use surmount_host_probe::et::{build_et_argv, operator_ssh_identity};
 use surmount_host_probe::ssh_target::resolve_target;
-use surmount_host_probe::{format_argv, resolve_program, ProbeError};
+use surmount_host_probe::{ProbeError, format_argv, resolve_program};
 
 const USAGE: &str = "\
 Usage:
@@ -108,7 +108,7 @@ fn run(args: &[String]) -> Result<(), ProbeError> {
     if opts.dry_run {
         println!(
             "surmount-et: dry-run: {}",
-            format_argv(&argv[0], &argv[1..].to_vec())
+            format_argv(&argv[0], &argv[1..])
         );
         return Ok(());
     }
@@ -116,7 +116,10 @@ fn run(args: &[String]) -> Result<(), ProbeError> {
     if argv.len() > 1 {
         cmd.args(&argv[1..]);
     }
-    let st = cmd.status().map_err(|e| ProbeError::fail(format!("et failed: {e}")))?;
+    cmd.env("ET_NO_TELEMETRY", "1");
+    let st = cmd
+        .status()
+        .map_err(|e| ProbeError::fail(format!("et failed: {e}")))?;
     if st.success() {
         Ok(())
     } else {

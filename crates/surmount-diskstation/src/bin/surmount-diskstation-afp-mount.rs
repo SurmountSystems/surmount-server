@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use surmount_diskstation::{
-    default_gvfs_root, default_hint_file, find_tool, gvfs_dir_host, read_afp_host_hint,
-    validate_host_id, DsError,
+    DsError, default_gvfs_root, default_hint_file, find_tool, gvfs_dir_host, read_afp_host_hint,
+    validate_host_id,
 };
 
 const USAGE: &str = "\
@@ -119,8 +119,8 @@ fn parse() -> Result<Opts, DsError> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| default_hint_file());
     if afp_host.is_empty() {
-        afp_host = read_afp_host_hint(&hint_file, &host_id)
-            .unwrap_or_else(|| format!("{host_id}.local"));
+        afp_host =
+            read_afp_host_hint(&hint_file, &host_id).unwrap_or_else(|| format!("{host_id}.local"));
     }
     if secret_host.is_empty() {
         secret_host = host_id.clone();
@@ -178,10 +178,10 @@ fn find_share_volume(opts: &Opts, share: &str) -> Option<PathBuf> {
         if !base.contains(&format!("volume={share}")) {
             continue;
         }
-        if let Some(vol_host) = gvfs_dir_host(&base) {
-            if aliases.iter().any(|a| a == &vol_host) {
-                return Some(ent.path());
-            }
+        if let Some(vol_host) = gvfs_dir_host(&base)
+            && aliases.iter().any(|a| a == &vol_host)
+        {
+            return Some(ent.path());
         }
     }
     None
@@ -375,7 +375,9 @@ fn main() -> ExitCode {
                 }
                 let ok = child.wait().map(|s| s.success()).unwrap_or(false);
                 if !ok {
-                    eprintln!("diskstation-afp-mount: gio mount failed for {uri} (password not logged)");
+                    eprintln!(
+                        "diskstation-afp-mount: gio mount failed for {uri} (password not logged)"
+                    );
                     return ExitCode::from(1);
                 }
                 for server in [&opts.host_id, &format!("{}.local", opts.host_id)] {

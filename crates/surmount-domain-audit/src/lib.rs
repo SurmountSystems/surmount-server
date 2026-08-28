@@ -226,7 +226,10 @@ fn parse_audit(args: &[String]) -> anyhow::Result<Opt> {
         d.pop();
     }
     d.make_ascii_lowercase();
-    if !d.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-') {
+    if !d
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
         anyhow::bail!("domain contains invalid characters");
     }
     if !d.contains('.') {
@@ -238,7 +241,6 @@ fn parse_audit(args: &[String]) -> anyhow::Result<Opt> {
     if resolvers.is_empty() {
         resolvers = vec!["1.1.1.1".into(), "8.8.8.8".into()];
     }
-    let _ = (no_color, smtp, output);
     Ok(Opt {
         timeout,
         resolvers,
@@ -293,13 +295,7 @@ fn nonempty_lines(s: &str) -> Vec<String> {
 }
 
 fn run_audit(opt: &Opt) -> u8 {
-    let require_mail = if opt.mail_domain {
-        true
-    } else if !opt.static_site && is_known_mailbox(&opt.domain) {
-        true
-    } else {
-        false
-    };
+    let require_mail = opt.mail_domain || (!opt.static_site && is_known_mailbox(&opt.domain));
     let extra_mail = require_mail && opt.domain != PRIMARY_MAIL;
     let resolver = &opt.resolvers[0];
     let domain = &opt.domain;
@@ -309,22 +305,22 @@ fn run_audit(opt: &Opt) -> u8 {
         println!("{line}");
     };
 
-    let mut pass = |m: &str, c: &mut Counts| {
+    let pass = |m: &str, c: &mut Counts| {
         c.pass += 1;
         let line = format!("[PASS] {m}");
         println!("{line}");
     };
-    let mut warn = |m: &str, c: &mut Counts| {
+    let warn = |m: &str, c: &mut Counts| {
         c.warn += 1;
         let line = format!("[WARN] {m}");
         println!("{line}");
     };
-    let mut fail = |m: &str, c: &mut Counts| {
+    let fail = |m: &str, c: &mut Counts| {
         c.fail += 1;
         let line = format!("[FAIL] {m}");
         println!("{line}");
     };
-    let mut info = |m: &str, c: &mut Counts| {
+    let info = |m: &str, c: &mut Counts| {
         c.info += 1;
         let line = format!("[INFO] {m}");
         println!("{line}");
@@ -354,7 +350,10 @@ fn run_audit(opt: &Opt) -> u8 {
     if !nonempty_lines(&a).is_empty() || !nonempty_lines(&aaaa).is_empty() {
         pass("The root domain has an address record", &mut c);
     } else {
-        fail("The root domain has neither an A nor an AAAA record", &mut c);
+        fail(
+            "The root domain has neither an A nor an AAAA record",
+            &mut c,
+        );
     }
 
     let ds = dig(resolver, domain, "DS");
@@ -372,7 +371,10 @@ fn run_audit(opt: &Opt) -> u8 {
             );
         }
         if nonempty_lines(&dnskey).is_empty() {
-            fail("A DNSSEC DS record exists but no DNSKEY was returned", &mut c);
+            fail(
+                "A DNSSEC DS record exists but no DNSKEY was returned",
+                &mut c,
+            );
         } else if !sha1 {
             pass("DNSSEC delegation and DNSKEY records are present", &mut c);
         }
@@ -382,7 +384,10 @@ fn run_audit(opt: &Opt) -> u8 {
 
     let caa = dig(resolver, domain, "CAA");
     if !nonempty_lines(&caa).is_empty() {
-        pass("CAA certificate-authority restrictions are published", &mut c);
+        pass(
+            "CAA certificate-authority restrictions are published",
+            &mut c,
+        );
     } else if require_mail {
         fail("Mailbox domain is missing CAA restrictions", &mut c);
     } else {
@@ -455,7 +460,7 @@ fn run_audit(opt: &Opt) -> u8 {
         .into_iter()
         .filter(|l| {
             let t = l.to_ascii_lowercase();
-            t.starts_with("v=spf1") && (t.len() == 6 || t[6..].starts_with(|c: char| c == ' ' || c == ';'))
+            t.starts_with("v=spf1") && (t.len() == 6 || t[6..].starts_with([' ', ';']))
         })
         .collect();
     // Also accept v=spf1 with trailing space/rest without the exact awk.
@@ -562,7 +567,10 @@ fn run_audit(opt: &Opt) -> u8 {
     }
     if require_mail {
         if !stalwart {
-            fail("Mailbox domain is missing DKIM TXT for selector 'stalwart'", &mut c);
+            fail(
+                "Mailbox domain is missing DKIM TXT for selector 'stalwart'",
+                &mut c,
+            );
         }
         if !stalwart_rsa {
             fail(
@@ -594,7 +602,10 @@ fn run_audit(opt: &Opt) -> u8 {
     {
         pass("SMTP TLS reporting is configured", &mut c);
     } else if require_mail {
-        fail("Mailbox domain is missing SMTP TLS reporting (TLS-RPT)", &mut c);
+        fail(
+            "Mailbox domain is missing SMTP TLS reporting (TLS-RPT)",
+            &mut c,
+        );
     } else {
         info("SMTP TLS reporting is not configured", &mut c);
     }
@@ -613,9 +624,8 @@ fn dmarc_policy(lower: &str) -> Option<String> {
     let mut search = lower;
     while let Some(i) = search.find("p=") {
         let before = &search[..i];
-        let ok = before.is_empty()
-            || before.ends_with(';')
-            || before.ends_with(char::is_whitespace);
+        let ok =
+            before.is_empty() || before.ends_with(';') || before.ends_with(char::is_whitespace);
         let not_sp = !before.ends_with('s');
         if ok && not_sp {
             let rest = &search[i + 2..];
@@ -642,8 +652,12 @@ fn check_dns(args: &[String]) -> anyhow::Result<u8> {
         .cloned()
         .unwrap_or_else(|| format!("mail.{apex}"));
     println!("== A/AAAA apex and mail ==");
-    for (t, n) in [("A", apex.as_str()), ("AAAA", apex.as_str()), ("A", mail.as_str()), ("AAAA", mail.as_str())]
-    {
+    for (t, n) in [
+        ("A", apex.as_str()),
+        ("AAAA", apex.as_str()),
+        ("A", mail.as_str()),
+        ("AAAA", mail.as_str()),
+    ] {
         println!("-- {t} {n}");
         print!("{}", dig("1.1.1.1", n, t));
     }
@@ -658,10 +672,7 @@ fn check_dns(args: &[String]) -> anyhow::Result<u8> {
 }
 
 fn check_mail_ports(args: &[String]) -> anyhow::Result<u8> {
-    let host = args
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "127.0.0.1".into());
+    let host = args.first().cloned().unwrap_or_else(|| "127.0.0.1".into());
     let ports = [25u16, 465, 587, 993, 4190, 80, 443];
     println!("== Mail port check host={host} ==");
     let mut fail = false;
@@ -699,7 +710,13 @@ fn check_tls(args: &[String]) -> anyhow::Result<u8> {
     let servername = args.get(1).map(|s| s.as_str()).unwrap_or(host);
     println!("== TLS check {host}:{port} (SNI {servername}) ==");
     let mut child = Command::new("openssl")
-        .args(["s_client", "-connect", &format!("{host}:{port}"), "-servername", servername])
+        .args([
+            "s_client",
+            "-connect",
+            &format!("{host}:{port}"),
+            "-servername",
+            servername,
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -723,13 +740,13 @@ fn check_tls(args: &[String]) -> anyhow::Result<u8> {
     if let Some(mut stdin) = x509.stdin.take() {
         let _ = stdin.write_all(pem.as_bytes());
     }
-    let out = x509.wait_with_output().unwrap_or_else(|_| {
-        std::process::Output {
+    let out = x509
+        .wait_with_output()
+        .unwrap_or_else(|_| std::process::Output {
             status: Default::default(),
             stdout: vec![],
             stderr: vec![],
-        }
-    });
+        });
     let text = String::from_utf8_lossy(&out.stdout);
     if text.trim().is_empty() {
         eprintln!("error: could not retrieve certificate (connect or handshake failed)");

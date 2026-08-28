@@ -1,0 +1,35 @@
+# cargo-deny: bans only in CI (advisories are cargo-audit + advisory-db).
+# https://embarkstudios.github.io/cargo-deny/
+# Accessed: 2026-08-26.
+
+[graph]
+all-features = false
+
+[advisories]
+yanked = "warn"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+deny = [
+  { name = "sha1", wrappers = [ ] },
+  { name = "md-5", wrappers = [ ] },
+  { name = "md5", wrappers = [ ] },
+]
+
+[licenses]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unlicense",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+  "OpenSSL",
+]
+confidence-threshold = 0.8

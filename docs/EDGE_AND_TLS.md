@@ -178,10 +178,12 @@ nginx features. Module file remains until operators no longer need dual-run.
   public origin (optional empty = request Host + scheme).
 - Listen mode `http` (default bind) or `https` with host `tlsCertPath` /
   `tlsKeyPath`. **H-PEM durable default** for new host profiles:
-  `/var/lib/surmount/secrets/tls/{cert,key}.pem` (mode **0640**, owner
-  `surmount-ui`, group `surmount-tls`, not world-readable) and account JSON
-  under `.../acme/account.json` (mode 0600). Ephemeral
-  `/run/surmount-secrets/...` remains a valid override (wiped on reboot).
+  `/var/lib/surmount/secrets/tls/{cert,key}.pem` (cert mode **0640**
+  `surmount-ui:surmount-tls`; key mode **0600** owner-only `surmount-ui`)
+  and account JSON under `.../acme/account.json` (mode 0600). Stalwart
+  mail-plane TLS uses copies under `.../mail/tls/` (key 0600
+  `stalwart-mail`). Ephemeral `/run/surmount-secrets/...` remains a valid
+  override (wiped on reboot).
 - **Multi-name host profile (H5):** private profile `acme_domains` lists
   certificate hostnames for the issued cert (sample: services + **mail** +
   apex + www). **`mail` is first-class** so IMAP/SMTP can present a
@@ -193,14 +195,15 @@ nginx features. Module file remains until operators no longer need dual-run.
   staging/prod). `--live` issues only when the leaf is due; otherwise it
   restages the matching pair. Laptop user timer:
   `--install-timer` (not a VPS ACME timer).
-- **Mail-plane TLS (shared PEMs):** Stalwart does **not** take IMAP/SMTP
-  certs from Nix `settings` (that option is ignored). Point the engine at
-  the same durable Axum PEMs with `just point-stalwart-mail-tls` (default
-  dry-run; `--live --restart` on the host). Stalwart 0.16.15 query JSON is
-  certificate hostnames plus `id` (not `filePath`); the driver resolves
-  the Let's Encrypt File leaf that way. Nix grants
-  `ReadOnlyPaths=/var/lib/surmount/secrets/tls` and group `surmount-tls`
-  (key mode **0640**, not world-readable). Template:
+- **Mail-plane TLS (Stalwart-owned copies):** Stalwart does **not** take
+  IMAP/SMTP certs from Nix `settings` (that option is ignored). Point the
+  engine at copies under `/var/lib/surmount/secrets/mail/tls/` with
+  `just point-stalwart-mail-tls` (default dry-run; `--live --restart` on
+  the host). Axum keeps `/var/lib/surmount/secrets/tls/` with key mode
+  **0600**. Stalwart 0.16.15 query JSON is certificate hostnames plus `id`
+  (not `filePath`); the driver resolves the Let's Encrypt File leaf that
+  way. Nix grants `ReadOnlyPaths` for `secrets/mail/tls` (and still
+  grants `secrets/tls`). Template:
   `nix/stalwart/mail-plane-tls-le-pems.example.ndjson`. Host ACME stays
   **off**. Proof: `nix run .#e2e-host` (mail TLS rows when BASE_URL is set;
   issuer must not be `rcgen self signed cert`; hostname list must include
@@ -440,8 +443,8 @@ nginx features. Module file remains until operators no longer need dual-run.
   not send `X-Real-IP` / PROXY protocol today). Do not invent headers. Park
   per-onion-client ACL / PROXY as residual; a ban of `127.0.0.1` would deny
   the whole cleartext/onion backend.
-- Version assumption: Surmount-owned Arti **2.5.0** TOML shape
-  (`nix/packages/arti-onion-service.nix`; GitLab `arti-v2.5.0`), not stock
+- Version assumption: Surmount-owned Arti **2.5.1** TOML shape
+  (`nix/packages/arti-onion-service.nix`; GitLab `arti-v2.5.1`), not stock
   nixpkgs 1.4.2 lag. Keys: `[proxy] socks_listen`, `[onion_services]` +
   `proxy_ports`. HS package adds `onion-service-service` via owned build
 - `startDaemon` default false: enable installs config + status oneshot only

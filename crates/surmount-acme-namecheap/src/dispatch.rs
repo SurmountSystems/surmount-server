@@ -29,11 +29,17 @@ where
 {
     let mut argv: Vec<OsString> = args.into_iter().map(Into::into).collect();
     if argv.is_empty() {
-        return Err(die("acme-dns-hook-namecheap-dispatch", "usage: set|clear|wait <fqdn> ..."));
+        return Err(die(
+            "acme-dns-hook-namecheap-dispatch",
+            "usage: set|clear|wait <fqdn> ...",
+        ));
     }
     let _exe = argv.remove(0);
     if argv.is_empty() {
-        return Err(die("acme-dns-hook-namecheap-dispatch", "usage: set|clear|wait <fqdn> ..."));
+        return Err(die(
+            "acme-dns-hook-namecheap-dispatch",
+            "usage: set|clear|wait <fqdn> ...",
+        ));
     }
     let cmd = argv[0].to_string_lossy().into_owned();
     match cmd.as_str() {
@@ -59,7 +65,9 @@ where
         ));
     }
     let fqdn = normalize_fqdn(&fqdn_raw);
-    let xdg = std::env::var("XDG_DATA_HOME").ok().filter(|s| !s.is_empty());
+    let xdg = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|s| !s.is_empty());
     let home = std::env::var("HOME").unwrap_or_default();
     let xdg_home = xdg.unwrap_or_else(|| format!("{home}/.local/share"));
     let home_share = format!("{home}/.local/share");
@@ -100,7 +108,10 @@ where
     if meta.file_type().is_symlink() {
         return Err(die(
             "acme-dns-hook-namecheap-dispatch",
-            format!("inner hook must be a regular file (symlink refused): {}", inner.display()),
+            format!(
+                "inner hook must be a regular file (symlink refused): {}",
+                inner.display()
+            ),
         ));
     }
     if !meta.is_file() {
@@ -136,7 +147,10 @@ fn accept_zone_env(path: &Path) -> anyhow::Result<Option<PathBuf>> {
     if meta.file_type().is_symlink() {
         return Err(die(
             "acme-dns-hook-namecheap-dispatch",
-            format!("zone env must be a regular file (symlink refused): {}", path.display()),
+            format!(
+                "zone env must be a regular file (symlink refused): {}",
+                path.display()
+            ),
         ));
     }
     if !meta.is_file() {
@@ -149,7 +163,11 @@ fn accept_zone_env(path: &Path) -> anyhow::Result<Option<PathBuf>> {
     if mode & 0o077 != 0 {
         return Err(die(
             "acme-dns-hook-namecheap-dispatch",
-            format!("zone env must be owner-only (mode 0600): {} (mode {:o})", path.display(), mode),
+            format!(
+                "zone env must be owner-only (mode 0600): {} (mode {:o})",
+                path.display(),
+                mode
+            ),
         ));
     }
     Ok(Some(path.to_path_buf()))

@@ -40,15 +40,17 @@ pub fn kind_needs_ui_owner(kind: &str) -> bool {
     )
 }
 
-pub fn kind_tls_shared_leaf(kind: &str) -> bool {
+/// Axum PEM leaves. The cert may stay group-readable; the key is owner-only.
+/// Remote install also copies both into `/var/lib/surmount/secrets/mail/tls/`
+/// for Stalwart (stalwart-mail owns those copies).
+pub fn kind_tls_axum_leaf(kind: &str) -> bool {
     matches!(kind, "tls-cert" | "tls-key")
 }
 
 pub fn leaf_install_mode(kind: &str) -> u32 {
-    if kind_tls_shared_leaf(kind) {
-        0o640
-    } else {
-        0o600
+    match kind {
+        "tls-cert" => 0o640,
+        _ => 0o600,
     }
 }
 

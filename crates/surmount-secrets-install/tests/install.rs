@@ -48,7 +48,11 @@ fn cmd() -> Command {
     let mut c = Command::new(bin());
     c.env_remove("SURMOUNT_SECRETS_TARGET")
         .env_remove("SURMOUNT_DEPLOY_TARGET")
-        .env_remove("SURMOUNT_SECRETS_HOST_ID");
+        .env_remove("SURMOUNT_SECRETS_HOST_ID")
+        .env(
+            "SURMOUNT_REPO_ROOT",
+            "/nonexistent-surmount-repo-root-hermetic",
+        );
     c
 }
 
@@ -101,7 +105,7 @@ fn option_shaped_target_rejected() {
 }
 
 #[test]
-fn staging_install_tls_mode_0640() {
+fn staging_install_tls_cert_0640_key_0600() {
     let work = temp_dir("tls");
     let staging = work.join("staging");
     let dest = work.join("dest");
@@ -138,6 +142,7 @@ fn staging_install_tls_mode_0640() {
     assert!(key.is_file());
     assert!(!cert.symlink_metadata().unwrap().file_type().is_symlink());
     assert_eq!(mode(&cert), "640");
+    assert_eq!(mode(&key), "600");
     assert_eq!(fs::read_to_string(&cert).unwrap(), PLANT);
     let parent = dest.join("run/surmount-secrets/tls");
     assert_eq!(mode(&parent), "750");
@@ -250,9 +255,11 @@ fn dry_run_does_not_write() {
     assert!(out.status.success(), "{err}");
     assert!(err.contains("dry-run"));
     assert!(!err.contains(PLANT));
-    assert!(!dest
-        .join("var/lib/surmount/secrets/ui/session-secret")
-        .exists());
+    assert!(
+        !dest
+            .join("var/lib/surmount/secrets/ui/session-secret")
+            .exists()
+    );
 }
 
 #[test]
@@ -384,7 +391,8 @@ fn namecheap_client_ip_rewrite() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
     assert!(!err.contains("SYNTHETIC-KEY"));
-    let body = fs::read_to_string(dest.join("var/lib/surmount/secrets/acme/namecheap.env")).unwrap();
+    let body =
+        fs::read_to_string(dest.join("var/lib/surmount/secrets/acme/namecheap.env")).unwrap();
     assert!(body.contains("ClientIp=198.51.100.9"));
     assert!(!body.contains("203.0.113.1"));
     assert!(body.contains("ApiKey=SYNTHETIC-KEY"));
@@ -483,7 +491,11 @@ fn durable_session_and_token() {
         .arg(&dest)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let tok = dest.join("var/lib/surmount/secrets/ui/stalwart-api-token");
     assert!(tok.is_file());
     assert_eq!(mode(&tok), "600");
@@ -510,13 +522,31 @@ fn remote_mock_ssh_refuses_directory_final() {
     let ssh = mock_bin.join("ssh");
     fs::write(
         &ssh,
-        "#!/usr/bin/env bash\nset -euo pipefail\n\
-while [[ $# -gt 0 && \"$1\" == -* ]]; do shift; done\n\
-host=\"${1:-}\"; shift || true\n\
-remote_script=\"$*\"\n\
-fake=\"${SURMOUNT_TEST_FAKE_REMOTE:?}\"\n\
-remote_script=\"${remote_script//\\/run\\/surmount-secrets/${fake}/run/surmount-secrets}\"\n\
-bash -c \"${remote_script}\"\n",
+        format!(
+            "#!/bin/sh\nset -eu\n\
+while [ $# -gt 0 ]; do\n\
+  case \"$1\" in -*) shift ;; *) break ;; esac\n\
+done\n\
+host=\"${{1:-}}\"; shift || true\n\
+in=\"$*\"\n\
+old='/run/surmount-secrets'\n\
+new='{fake}/run/surmount-secrets'\n\
+out=\n\
+while :; do\n\
+  case \"$in\" in\n\
+    *\"$old\"*)\n\
+      out=\"$out${{in%%\"$old\"*}}$new\"\n\
+      in=\"${{in#*\"$old\"}}\"\n\
+      ;;\n\
+    *)\n\
+      out=\"$out$in\"\n\
+      break\n\
+      ;;\n\
+  esac\n\
+done\n\
+sh -c \"$out\"\n",
+            fake = fake_remote.display()
+        ),
     )
     .unwrap();
     let mut p = fs::metadata(&ssh).unwrap().permissions();
@@ -524,13 +554,16 @@ bash -c \"${remote_script}\"\n",
     fs::set_permissions(&ssh, p).unwrap();
     let out = cmd()
         .env("SURMOUNT_TEST_FAKE_REMOTE", &fake_remote)
-        .env(
-            "PATH",
-            format!("{}:/usr/bin:/bin", mock_bin.display()),
-        )
+        .env("PATH", format!("{}:/usr/bin:/bin", mock_bin.display()))
         .args(["--from-staging"])
         .arg(&staging)
-        .args(["--host-id", "mail-lab", "--target", "mock-host", "--ssh-cmd"])
+        .args([
+            "--host-id",
+            "mail-lab",
+            "--target",
+            "mock-host",
+            "--ssh-cmd",
+        ])
         .arg(&ssh)
         .output()
         .unwrap();

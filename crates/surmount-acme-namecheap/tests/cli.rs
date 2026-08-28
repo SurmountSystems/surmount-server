@@ -63,13 +63,18 @@ fn hook_set_wait_clear_preserve() {
     let mock = root.join("mock");
     fs::create_dir_all(&mock).unwrap();
     let cred = root.join("namecheap.env");
-    write_cred(&cred, "example", "test", "surmount-test-apikey-not-real-001");
+    write_cred(
+        &cred,
+        "example",
+        "test",
+        "surmount-test-apikey-not-real-001",
+    );
     fs::write(
         mock.join("hosts.txt"),
         "@|A|203.0.113.10|10|1800\nwww|CNAME|example.test.|10|1800\nmail|A|203.0.113.11|10|1800\n",
     )
     .unwrap();
-    let mut cmd = || {
+    let cmd = || {
         let mut c = Command::new(hook());
         c.env("SURMOUNT_ACME_DNS_NAMECHEAP_ENV", &cred);
         c.env("SURMOUNT_ACME_DNS_NAMECHEAP_MOCK_DIR", &mock);
@@ -81,12 +86,21 @@ fn hook_set_wait_clear_preserve() {
     let fqdn = "_acme-challenge.services.example.test";
     let txt1 = "synthetic-acme-txt-value-aaa111";
     let txt2 = "synthetic-acme-txt-value-bbb222";
-    assert_eq!(cmd().args(["set", fqdn, txt1]).status().unwrap().code(), Some(0));
-    assert_eq!(cmd().args(["wait", fqdn, txt1]).status().unwrap().code(), Some(0));
+    assert_eq!(
+        cmd().args(["set", fqdn, txt1]).status().unwrap().code(),
+        Some(0)
+    );
+    assert_eq!(
+        cmd().args(["wait", fqdn, txt1]).status().unwrap().code(),
+        Some(0)
+    );
     let hosts = fs::read_to_string(mock.join("hosts.txt")).unwrap();
     assert!(hosts.contains(&format!("_acme-challenge.services|TXT|{txt1}|")));
     assert!(hosts.contains("@|A|203.0.113.10|"));
-    assert_eq!(cmd().args(["set", fqdn, txt2]).status().unwrap().code(), Some(0));
+    assert_eq!(
+        cmd().args(["set", fqdn, txt2]).status().unwrap().code(),
+        Some(0)
+    );
     assert_eq!(
         fs::read_to_string(mock.join("hosts.txt"))
             .unwrap()
@@ -94,22 +108,34 @@ fn hook_set_wait_clear_preserve() {
             .count(),
         1
     );
-    assert_eq!(cmd().args(["wait", fqdn, txt1]).status().unwrap().code(), Some(1));
-    assert_eq!(cmd().args(["clear", fqdn]).status().unwrap().code(), Some(0));
+    assert_eq!(
+        cmd().args(["wait", fqdn, txt1]).status().unwrap().code(),
+        Some(1)
+    );
+    assert_eq!(
+        cmd().args(["clear", fqdn]).status().unwrap().code(),
+        Some(0)
+    );
     let hosts = fs::read_to_string(mock.join("hosts.txt")).unwrap();
     assert!(!hosts.contains("_acme-challenge.services|TXT|"));
     assert!(hosts.contains("mail|A|203.0.113.11|"));
     assert_eq!(
         cmd()
-            .args(["set", "_acme-challenge.example.test", "synthetic-apex-txt-ccc333"])
+            .args([
+                "set",
+                "_acme-challenge.example.test",
+                "synthetic-apex-txt-ccc333"
+            ])
             .status()
             .unwrap()
             .code(),
         Some(0)
     );
-    assert!(fs::read_to_string(mock.join("hosts.txt"))
-        .unwrap()
-        .contains("_acme-challenge|TXT|synthetic-apex-txt-ccc333|"));
+    assert!(
+        fs::read_to_string(mock.join("hosts.txt"))
+            .unwrap()
+            .contains("_acme-challenge|TXT|synthetic-apex-txt-ccc333|")
+    );
     let out = cmd()
         .args(["set", "_acme-challenge.other.invalid", txt1])
         .output()
@@ -122,7 +148,10 @@ fn hook_set_wait_clear_preserve() {
     let out = cmd().args(["set", fqdn, txt1]).output().unwrap();
     fs::set_permissions(&cred, fs::Permissions::from_mode(0o600)).unwrap();
     assert_ne!(out.status.code().unwrap_or(0), 0);
-    assert!(combined(&out).to_ascii_lowercase().contains("owner-only") || combined(&out).contains("0600"));
+    assert!(
+        combined(&out).to_ascii_lowercase().contains("owner-only")
+            || combined(&out).contains("0600")
+    );
     assert!(!combined(&out).contains("surmount-test-apikey-not-real-001"));
 }
 
@@ -138,8 +167,18 @@ fn dispatch_maps_zones() {
     fs::create_dir_all(&mock).unwrap();
     let primary = xdg.join("surmount/issue-le-prod/namecheap.env");
     let extra = xdg.join("surmount/namecheap/cryptoquick.com.env");
-    write_cred(&primary, "surmount", "systems", "surmount-test-apikey-not-real-dispatch-001");
-    write_cred(&extra, "cryptoquick", "com", "surmount-test-apikey-not-real-dispatch-001");
+    write_cred(
+        &primary,
+        "surmount",
+        "systems",
+        "surmount-test-apikey-not-real-dispatch-001",
+    );
+    write_cred(
+        &extra,
+        "cryptoquick",
+        "com",
+        "surmount-test-apikey-not-real-dispatch-001",
+    );
     fs::write(mock.join("hosts.txt"), "@|A|203.0.113.10|10|1800\n").unwrap();
     let run = |args: &[&str]| {
         Command::new(dispatch())
@@ -159,13 +198,19 @@ fn dispatch_maps_zones() {
         "synthetic-dispatch-txt-ss-aaa",
     ]);
     assert_eq!(out.status.code(), Some(0));
-    assert!(fs::read_to_string(mock.join("hosts.txt"))
-        .unwrap()
-        .contains("_acme-challenge.services|TXT|synthetic-dispatch-txt-ss-aaa|"));
+    assert!(
+        fs::read_to_string(mock.join("hosts.txt"))
+            .unwrap()
+            .contains("_acme-challenge.services|TXT|synthetic-dispatch-txt-ss-aaa|")
+    );
     assert_eq!(
-        run(&["wait", "_acme-challenge.services.surmount.systems", "synthetic-dispatch-txt-ss-aaa"])
-            .status
-            .code(),
+        run(&[
+            "wait",
+            "_acme-challenge.services.surmount.systems",
+            "synthetic-dispatch-txt-ss-aaa"
+        ])
+        .status
+        .code(),
         Some(0)
     );
     assert_eq!(
@@ -174,24 +219,44 @@ fn dispatch_maps_zones() {
             .code(),
         Some(0)
     );
-    let out = run(&["set", "_acme-challenge.cryptoquick.com", "synthetic-dispatch-txt-cq-bbb"]);
+    let out = run(&[
+        "set",
+        "_acme-challenge.cryptoquick.com",
+        "synthetic-dispatch-txt-cq-bbb",
+    ]);
     assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
-    assert!(fs::read_to_string(mock.join("hosts.txt"))
-        .unwrap()
-        .contains("_acme-challenge|TXT|synthetic-dispatch-txt-cq-bbb|"));
+    assert!(
+        fs::read_to_string(mock.join("hosts.txt"))
+            .unwrap()
+            .contains("_acme-challenge|TXT|synthetic-dispatch-txt-cq-bbb|")
+    );
     let before = fs::read_to_string(mock.join("hosts.txt")).unwrap();
-    let out = run(&["set", "_acme-challenge.yiffa.app", "synthetic-dispatch-txt-yi-ccc"]);
+    let out = run(&[
+        "set",
+        "_acme-challenge.yiffa.app",
+        "synthetic-dispatch-txt-yi-ccc",
+    ]);
     assert_ne!(out.status.code().unwrap_or(0), 0);
     assert_eq!(fs::read_to_string(mock.join("hosts.txt")).unwrap(), before);
     assert!(!combined(&out).contains("surmount-test-apikey-not-real-dispatch-001"));
-    let out = run(&["set", "_acme-challenge.www.cryptoquick.com", "synthetic-dispatch-txt-www-ddd"]);
+    let out = run(&[
+        "set",
+        "_acme-challenge.www.cryptoquick.com",
+        "synthetic-dispatch-txt-www-ddd",
+    ]);
     assert_eq!(out.status.code(), Some(0), "{}", combined(&out));
-    assert!(fs::read_to_string(mock.join("hosts.txt"))
-        .unwrap()
-        .contains("_acme-challenge.www|TXT|synthetic-dispatch-txt-www-ddd|"));
+    assert!(
+        fs::read_to_string(mock.join("hosts.txt"))
+            .unwrap()
+            .contains("_acme-challenge.www|TXT|synthetic-dispatch-txt-www-ddd|")
+    );
     let link = xdg.join("surmount/namecheap/yiffa.app.env");
     std::os::unix::fs::symlink(&extra, &link).unwrap();
-    let out = run(&["set", "_acme-challenge.yiffa.app", "synthetic-dispatch-txt-yi-ccc"]);
+    let out = run(&[
+        "set",
+        "_acme-challenge.yiffa.app",
+        "synthetic-dispatch-txt-yi-ccc",
+    ]);
     assert_ne!(out.status.code().unwrap_or(0), 0);
 }
 
@@ -277,7 +342,9 @@ fn render_sample_and_refuse() {
         .output()
         .unwrap();
     assert_ne!(out.status.code().unwrap_or(0), 0);
-    assert!(combined(&out).to_ascii_lowercase().contains("exists") || combined(&out).contains("force"));
+    assert!(
+        combined(&out).to_ascii_lowercase().contains("exists") || combined(&out).contains("force")
+    );
     let hosts = root.join("hosts");
     fs::create_dir_all(&hosts).unwrap();
     let out = Command::new(render())
@@ -378,7 +445,11 @@ fn laptop_blocked_print_issue_install_check() {
     assert_eq!(out.status.code(), Some(0));
     assert!(combined(&out).contains("acme-staging-v02.api.letsencrypt.org/directory"));
     let low = root.join("low.env");
-    fs::write(&low, format!("ApiUser=hermetic-user\nApiKey={plant}\nSettleSeconds=30\n")).unwrap();
+    fs::write(
+        &low,
+        format!("ApiUser=hermetic-user\nApiKey={plant}\nSettleSeconds=30\n"),
+    )
+    .unwrap();
     fs::set_permissions(&low, fs::Permissions::from_mode(0o600)).unwrap();
     let out = run(&[
         "--directory",
@@ -405,7 +476,7 @@ fn laptop_blocked_print_issue_install_check() {
     fs::write(
         &fake_ui,
         format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' '{}BEGIN CERTIFICATE{}' >\"$SURMOUNT_TLS_CERT\"\nprintf '%s\\n' '{}BEGIN PRIVATE KEY{}' >\"$SURMOUNT_TLS_KEY\"\nchmod 0600 \"$SURMOUNT_TLS_CERT\" \"$SURMOUNT_TLS_KEY\"\nprintf '%s\\n' \"enable=$SURMOUNT_ACME_ENABLE dir=$SURMOUNT_ACME_DIRECTORY hook=$SURMOUNT_ACME_DNS_HOOK\" >{}/ui-env.txt\nsleep 30\n",
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' '{}BEGIN CERTIFICATE{}' >\"$SURMOUNT_TLS_CERT\"\nprintf '%s\\n' '{}BEGIN PRIVATE KEY{}' >\"$SURMOUNT_TLS_KEY\"\nchmod 0600 \"$SURMOUNT_TLS_CERT\" \"$SURMOUNT_TLS_KEY\"\nprintf '%s\\n' \"enable=${{SURMOUNT_ACME_ENABLE-}} dir=${{SURMOUNT_ACME_DIRECTORY-}} hook=${{SURMOUNT_ACME_DNS_HOOK-}}\" >{}/ui-env.txt\nsleep 30\n",
             "-".repeat(5),
             "-".repeat(5),
             "-".repeat(5),
@@ -450,7 +521,10 @@ fn laptop_blocked_print_issue_install_check() {
     let install_log = root.join("install.log");
     fs::write(
         &fake_install,
-        format!("#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >{}\n", install_log.display()),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >{}\n",
+            install_log.display()
+        ),
     )
     .unwrap();
     fs::set_permissions(&fake_install, fs::Permissions::from_mode(0o755)).unwrap();

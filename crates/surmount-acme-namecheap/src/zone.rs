@@ -19,13 +19,15 @@ pub struct Record {
 }
 
 pub fn load(dir: &Path) -> Result<Vec<Record>> {
-    fs::create_dir_all(dir).map_err(|e| die("acme-dns-hook-namecheap", format!("mock dir: {e}")))?;
+    fs::create_dir_all(dir)
+        .map_err(|e| die("acme-dns-hook-namecheap", format!("mock dir: {e}")))?;
     let hosts = dir.join("hosts.txt");
     if !hosts.exists() {
         fs::write(&hosts, "").map_err(|e| die("acme-dns-hook-namecheap", format!("mock: {e}")))?;
         let _ = fs::set_permissions(&hosts, fs::Permissions::from_mode(0o600));
     }
-    let file = fs::File::open(&hosts).map_err(|e| die("acme-dns-hook-namecheap", format!("mock: {e}")))?;
+    let file =
+        fs::File::open(&hosts).map_err(|e| die("acme-dns-hook-namecheap", format!("mock: {e}")))?;
     let mut recs = Vec::new();
     for line in BufReader::new(file).lines() {
         let mut line = line.map_err(|e| die("acme-dns-hook-namecheap", format!("mock: {e}")))?;
@@ -48,19 +50,29 @@ pub fn load(dir: &Path) -> Result<Vec<Record>> {
             name,
             r#type: typ,
             address: addr,
-            mx_pref: if mx.is_empty() { "10".into() } else { mx.into() },
-            ttl: if ttl.is_empty() { "1800".into() } else { ttl.into() },
+            mx_pref: if mx.is_empty() {
+                "10".into()
+            } else {
+                mx.into()
+            },
+            ttl: if ttl.is_empty() {
+                "1800".into()
+            } else {
+                ttl.into()
+            },
         });
     }
     Ok(recs)
 }
 
 pub fn save(dir: &Path, recs: &[Record]) -> Result<()> {
-    fs::create_dir_all(dir).map_err(|e| die("acme-dns-hook-namecheap", format!("mock dir: {e}")))?;
+    fs::create_dir_all(dir)
+        .map_err(|e| die("acme-dns-hook-namecheap", format!("mock dir: {e}")))?;
     let hosts = dir.join("hosts.txt");
     let tmp = dir.join(".hosts.tmp");
     {
-        let mut f = fs::File::create(&tmp).map_err(|e| die("acme-dns-hook-namecheap", format!("mock: {e}")))?;
+        let mut f = fs::File::create(&tmp)
+            .map_err(|e| die("acme-dns-hook-namecheap", format!("mock: {e}")))?;
         let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
         for r in recs {
             writeln!(

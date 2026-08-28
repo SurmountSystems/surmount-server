@@ -1,12 +1,12 @@
 //! Copy one MailPlus uid Maildir via gio list reconstruct. Never print IPs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use surmount_diskstation::{
-    default_agent_target_env, default_gvfs_root, default_hint_file, find_tool, gvfs_dir_host,
-    load_deploy_target_from_env_file, read_afp_host_hint, reconstruct_maildir_name, validate_host_id,
-    DsError,
+    DsError, default_agent_target_env, default_gvfs_root, default_hint_file, find_tool,
+    gvfs_dir_host, load_deploy_target_from_env_file, read_afp_host_hint, reconstruct_maildir_name,
+    validate_host_id,
 };
 
 const USAGE: &str = "\
@@ -36,7 +36,9 @@ fn parse() -> Result<Opts, DsError> {
     let mut dry_run = false;
     let mut uid = String::new();
     let mut host_id = None;
-    let mut target = std::env::var("SURMOUNT_DEPLOY_TARGET").ok().filter(|s| !s.is_empty());
+    let mut target = std::env::var("SURMOUNT_DEPLOY_TARGET")
+        .ok()
+        .filter(|s| !s.is_empty());
     let gvfs_root = default_gvfs_root();
     let mut args = std::env::args();
     let _ = args.next();
@@ -67,10 +69,7 @@ fn parse() -> Result<Opts, DsError> {
                 target = Some(need(&rest, i, "--target needs a host")?);
                 i += 1;
             }
-            "--" => {
-                i += 1;
-                break;
-            }
+            "--" => break,
             a if a.starts_with('-') => return Err(DsError::new(format!("unknown option: {a}"))),
             other => {
                 if uid.is_empty() {
@@ -95,10 +94,10 @@ fn parse() -> Result<Opts, DsError> {
     if let Some(h) = &host_id {
         validate_host_id(h)?;
     }
-    if let Some(t) = &target {
-        if t.starts_with('-') {
-            return Err(DsError::new("target must not start with '-'"));
-        }
+    if let Some(t) = &target
+        && t.starts_with('-')
+    {
+        return Err(DsError::new("target must not start with '-'"));
     }
     Ok(Opts {
         dry_run,
@@ -142,10 +141,10 @@ fn find_mailplus(opts: &Opts, afp_user: &str) -> Result<PathBuf, DsError> {
                 if !base.contains("volume=MailPlus") {
                     continue;
                 }
-                if let Some(vh) = gvfs_dir_host(&base) {
-                    if aliases.iter().any(|a| a == &vh) {
-                        return Ok(ent.path());
-                    }
+                if let Some(vh) = gvfs_dir_host(&base)
+                    && aliases.iter().any(|a| a == &vh)
+                {
+                    return Ok(ent.path());
                 }
             }
         }
@@ -177,10 +176,8 @@ fn find_mailplus(opts: &Opts, afp_user: &str) -> Result<PathBuf, DsError> {
 }
 
 fn exclude_folder(name: &str) -> bool {
-    matches!(
-        name,
-        "." | ".." | "cur" | "new" | "tmp" | "subscriptions"
-    ) || name == ".All Mail"
+    matches!(name, "." | ".." | "cur" | "new" | "tmp" | "subscriptions")
+        || name == ".All Mail"
         || name.starts_with(".SYNOMC")
         || name == "lucene-indexes"
         || name == "sieve"
@@ -242,7 +239,11 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let src = mp.join("@local").join(&opts.uid).join(&opts.uid).join("Maildir");
+    let src = mp
+        .join("@local")
+        .join(&opts.uid)
+        .join(&opts.uid)
+        .join("Maildir");
     if !src.is_dir() {
         eprintln!(
             "copy-mailplus-uid: Maildir missing on mount: MailPlus/@local/{}/{}/Maildir",
@@ -300,12 +301,11 @@ fn main() -> ExitCode {
     }
 
     let mut target = opts.target.clone();
-    if target.is_none() {
-        if let Ok(t) = std::env::var("SURMOUNT_DEPLOY_TARGET") {
-            if !t.is_empty() {
-                target = Some(t);
-            }
-        }
+    if target.is_none()
+        && let Ok(t) = std::env::var("SURMOUNT_DEPLOY_TARGET")
+        && !t.is_empty()
+    {
+        target = Some(t);
     }
     if target.is_none() {
         let envf = std::env::var("SURMOUNT_AGENT_TARGET_ENV")
@@ -314,7 +314,9 @@ fn main() -> ExitCode {
         target = load_deploy_target_from_env_file(&envf);
     }
     let Some(target) = target else {
-        eprintln!("copy-mailplus-uid: SSH target required: --target, SURMOUNT_DEPLOY_TARGET, or agent-target.env");
+        eprintln!(
+            "copy-mailplus-uid: SSH target required: --target, SURMOUNT_DEPLOY_TARGET, or agent-target.env"
+        );
         return ExitCode::from(1);
     };
     log("deploy_target=set");

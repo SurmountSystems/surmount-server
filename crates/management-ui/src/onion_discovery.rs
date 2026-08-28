@@ -771,7 +771,7 @@ mod tests {
         let hosts = auto_clearnet_hosts(
             "example.test",
             "services.example.test",
-            &["extra.test", "www.extra.test", "mail.example.test"],
+            ["extra.test", "www.extra.test", "mail.example.test"],
         );
         assert!(hosts.contains(&"extra.test".to_string()));
         assert!(hosts.contains(&"www.extra.test".to_string()));
@@ -793,7 +793,7 @@ mod tests {
             Vec::new(),
             &[],
             &[],
-            &["extra.test"],
+            ["extra.test"],
         );
         assert_eq!(
             match_onion_vhost_rewrite("/_o/extra.test/", &cfg),

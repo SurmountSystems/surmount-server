@@ -4,7 +4,9 @@ Defense-in-depth notes for the Surmount mail VPS. Design notes:
 [open-choices.md](open-choices.md). Secrets detail: [SECRETS.md](SECRETS.md).
 Data plane: [DATASTORES.md](DATASTORES.md). Ops: [OPS.md](OPS.md).
 
-**Last updated:** 2026-08-20 (extra mailbox domains get the same
+**Last updated:** 2026-08-26 (Cargo.lock SHA-1/MD5 inventory: no sha1/md5
+crates; product TLS is rustls+aws-lc-rs TLS 1.3; ring is locked as a
+rustls optional dep). Prior 2026-08-20 (extra mailbox domains get the same
 mail-auth DNS **and** the same hosted DNSSEC as the primary; leftover
 parent DS is a SERVFAIL class to clear then sign, not leftover-unsigned).
 Prior 2026-08-19 (sshd host keys: module advertises/generates
@@ -37,6 +39,28 @@ fail2ban), proof columns, and D1 hybrid TLS honesty:
   edge; keep Stalwart as the mail engine with ordinary mail credentials.
 - Prefer **LUKS2** at rest when install allows; harden the live system
   regardless.
+
+## Hash inventory (Cargo, 2026-08-26)
+
+Best-effort `crates/Cargo.lock` parse (444 packages): **no** crate named
+sha1/md5. Product rustls features `aws-lc-rs` + TLS 1.3 ServerConfig.
+`ring` is still *listed* under rustls 0.23.42 in the lockfile; we did
+not prove the UI binary links ring SHA-1. Git object IDs and Nixpkgs C
+libraries are out of this lockfile. Full method and leftovers:
+[research/hash-primitives-lockfile-2026-08-26.md](research/hash-primitives-lockfile-2026-08-26.md).
+
+**Automated:** `just audit` is hermetic `cargo-audit` against flake
+input `advisory-db` (RustSec; `--no-fetch --stale`). `just deny` is
+`cargo-deny` bans (no sha1/md5 crates) and **is** in `checks.*.ci`.
+`just audit` is in `checks.*.ci`. `h2` is 0.4.16 (RUSTSEC-2026-0258
+cleared). Workspace `age` is 0.12 (drops the rekey path of
+RUSTSEC-2026-0173). Three unmaintained warnings remain and are **not**
+cargo-audit-ignored so `just audit` still prints them: instant via
+nostr 0.44.8 (RUSTSEC-2024-0384), paste via leptos 0.8.20
+(RUSTSEC-2024-0436), proc-macro-error2 via leptos_macro / rstml
+(RUSTSEC-2026-0173). See
+[research/cargo-audit-2026-08-26.md](research/cargo-audit-2026-08-26.md).
+Bump the DB with `nix flake update advisory-db`.
 
 ## Non-goals (this doc)
 

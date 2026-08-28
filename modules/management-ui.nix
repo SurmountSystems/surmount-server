@@ -767,7 +767,7 @@ in
       "d ${cfg.secrets.durableMaterialDir}/acme 0750 surmount-ui surmount-ui - -"
       "d ${cfg.secrets.durableMaterialDir}/tls 0750 surmount-ui surmount-tls - -"
       "z ${cfg.secrets.durableMaterialDir}/tls/cert.pem 0640 surmount-ui surmount-tls -"
-      "z ${cfg.secrets.durableMaterialDir}/tls/key.pem 0640 surmount-ui surmount-tls -"
+      "z ${cfg.secrets.durableMaterialDir}/tls/key.pem 0600 surmount-ui surmount-tls -"
     ]
     ++ lib.optionals (staticVhostReadPaths != [ ]) (
       [ "d ${cfg.stateDir}/static-sites 0755 surmount-ui surmount-ui - -" ]

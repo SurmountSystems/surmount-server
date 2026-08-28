@@ -34,10 +34,7 @@ pub fn to_hostname(raw: &str, sld: &str, tld: &str) -> Result<String> {
     }
     if raw.contains('.') {
         let last = raw.rsplit('.').next().unwrap_or("");
-        if last.len() >= 2
-            && last.len() <= 24
-            && last.chars().all(|c| c.is_ascii_alphabetic())
-        {
+        if last.len() >= 2 && last.len() <= 24 && last.chars().all(|c| c.is_ascii_alphabetic()) {
             return Err(die(format!(
                 "host {raw} is not under {suffix} (check SLD/TLD in credentials)"
             )));

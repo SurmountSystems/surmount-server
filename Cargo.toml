@@ -1,0 +1,116 @@
+# Workspace lives at the repo root so `cargo audit` / `cargo test`
+# from this directory see every crate. Do not nest a second workspace under crates/.
+[workspace]
+resolver = "2"
+members = [
+  "crates/management-ui",
+  "crates/surmount-acme-namecheap",
+  "crates/surmount-dns-zone",
+  "crates/surmount-deploy-host",
+  "crates/surmount-domain-audit",
+  "crates/surmount-diskstation",
+  "crates/surmount-e2e",
+  "crates/surmount-host-cutover",
+  "crates/surmount-host-logs",
+  "crates/surmount-host-probe",
+  "crates/surmount-leftover-homes",
+  "crates/surmount-mail-import",
+  "crates/surmount-niced-builder",
+  "crates/surmount-private-data",
+  "crates/surmount-rekey",
+  "crates/surmount-secrets-install",
+  "crates/surmount-scram",
+  "crates/surmount-secrets-prompt",
+  "crates/surmount-shc",
+  "crates/surmount-stalwart-ops",
+  "crates/surmount-static-sites",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# SPDX: https://spdx.org/licenses/Unlicense.html
+license = "Unlicense"
+repository = "https://github.com/SurmountSystems/surmount-server"
+
+# Style lints that exploded under rustc 1.95 + edition 2024. Safety stays
+# deny via `cargo clippy -- -D warnings` (unused, types, ETXTBSY-class bugs).
+[workspace.lints.clippy]
+collapsible_if = "allow"
+needless_bool = "allow"
+if_same_then_else = "allow"
+manual_pattern_char_comparison = "allow"
+too_many_arguments = "allow"
+nonminimal_bool = "allow"
+large_enum_variant = "allow"
+unnecessary_unwrap = "allow"
+manual_contains = "allow"
+manual_range_contains = "allow"
+while_let_on_iterator = "allow"
+
+[workspace.dependencies]
+axum = "0.8"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "process", "time"] }
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# No tls12 here: product ServerConfig is TLS 1.3 only. Feature unification may
+# still enable tls12 via reqwest/hyper-rustls (outbound HTTP client); that does
+# not change the edge ServerConfig protocol list.
+# prefer-post-quantum: aws-lc-rs default provider offers hybrid X25519MLKEM768
+# first (D1 first-class aim). Still not live-host hybrid negotiation proof.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "prefer-post-quantum", "std", "logging"] }
+rustls-pki-types = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+# Leptos SSR admin shell (ssr only; no csr/hydrate dual build). Current stable
+# 0.8 is 0.8.20. That graph still pulls unmaintained paste (RUSTSEC-2024-0436)
+# and proc-macro-error2 (RUSTSEC-2026-0173 via leptos_macro / rstml). 0.9 is
+# beta; not a product bump this turn.
+# https://rustsec.org/advisories/RUSTSEC-2024-0436 (accessed: 2026-08-27).
+# https://rustsec.org/advisories/RUSTSEC-2026-0173 (accessed: 2026-08-27).
+leptos = { version = "0.8", default-features = false, features = ["ssr"] }
+# Self-signed PEMs for hermetic ACME mock issuer + unit tests. Pin kept for lock stability.
+rcgen = "=0.13.2"
+# RUSTSEC-2026-0009: stack DoS below 0.3.47.
+time = { version = "0.3.47", default-features = false }
+# In-process ACME (Let's Encrypt-capable). Default features: aws-lc-rs + hyper-rustls.
+# Product path: DNS-01 via DnsProvider trait. HTTP-01 on product :80 parked.
+# CI never hits a live directory (MockAcmeIssuer / mock DNS only in tests).
+instant-acme = "0.8.5"
+# Certificate notBefore/notAfter checks for reuse-vs-reissue at startup.
+x509-parser = "0.18"
+# O_NOFOLLOW for ACME secret/public PEM temp opens (Linux).
+libc = "0.2"
+# Nostr NIP-98 verify (rust-nostr). 0.44.7+ for RUSTSEC-2026-0216..0230.
+# Locked 0.44.8. nostr 0.45.3 dropped instant (RUSTSEC-2024-0384) but removed
+# TagKind / TagStandard / JsonUtil / EventBuilder::sign_with_keys and gates
+# Keys::generate behind os-rng (rand 0.10 -> chacha20 0.10). That is a NIP-98
+# rewrite, not this unmaintained lockfile turn.
+# Keep getrandom 0.2 workspace pin so leptos wasm-bindgen does not pull 0.1.
+# menhera-cooldown has yanked chacha20 0.10.x; cargo update then cannot keep
+# quinn-proto 0.11.16+ (needs rand 0.10 -> chacha20 0.10). Do not bypass the
+# private index. See docs/research/menhera-chacha20-yank-2026-08-27.md.
+# https://rustsec.org/advisories/RUSTSEC-2024-0384 (accessed: 2026-08-27).
+nostr = { version = "0.44.7", default-features = false, features = ["std", "nip98"] }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+# CSRF tokens + CSP nonces (already in lock via other crates; direct dep for auth).
+getrandom = "0.2"
+# rage CLI is built on this library (age-encryption.org). Used by just rekey.
+# 0.12.1+ pulls i18n-embed-fl 0.10 (proc-macro-error3), dropping the age path
+# of RUSTSEC-2026-0173. Identity::generate / to_public / to_string stay.
+# https://rustsec.org/advisories/RUSTSEC-2026-0173 (accessed: 2026-08-27).
+age = { version = "0.12", default-features = false }
+
+# menhera has yanked chacha20 0.10.0/0.10.1 (UB in SSE2) and has not listed
+# 0.10.2 yet. Patch from the public RustCrypto git tag, not crates-io.
+# crates-io is still replaced by menhera for everything else.
+# Source name is still crates-io even with replace-with; cargo said so.
+[patch.crates-io]
+chacha20 = { git = "https://github.com/RustCrypto/stream-ciphers", rev = "6b236b758a0279f64d777797514813b2cb572c8b" }
+

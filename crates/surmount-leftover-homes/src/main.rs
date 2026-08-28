@@ -2,7 +2,7 @@
 
 use std::process::exit;
 
-use surmount_leftover_homes::{dispatch, parse_args, USAGE};
+use surmount_leftover_homes::{USAGE, dispatch, parse_args};
 
 fn main() {
     match parse_args(std::env::args()) {

@@ -58,6 +58,7 @@ let
       pname = "arti";
     };
     surmount-niced-builder = prev.writeShellScriptBin "surmount-niced-builder" "exit 0";
+    surmount-scram = prev.writeShellScriptBin "surmount-scram" "exit 0";
     artiOnionService = prev.writeShellScriptBin "arti" "exit 0" // {
       pname = "arti-onion-service";
       passthru = {
@@ -2014,9 +2015,9 @@ let
     assert builtins.any (p: lib.hasInfix "/var/lib/surmount/secrets/mail/dkim" p) roList;
     "t35-stalwart-dkim-readonly-paths-ok";
 
-  # Mail-plane TLS: Stalwart must be able to read the same durable Let's
-  # Encrypt PEMs Axum uses. ProtectSystem=strict needs ReadOnlyPaths, and
-  # 0640 surmount-tls group membership is the grant (not ignored settings).
+  # Mail-plane TLS: Stalwart reads copies under secrets/mail/tls (0600
+  # stalwart-mail). ProtectSystem=strict needs ReadOnlyPaths. Axum key is
+  # 0600 owner-only; cert stays 0640 surmount-tls.
   t38-stalwart-mail-tls-pem-grant =
     let
       e = evalSurmount {
@@ -2045,20 +2046,32 @@ let
     assert failedAssertions e == [ ];
     assert e.config.users.groups ? surmount-tls;
     assert builtins.any (p: lib.hasInfix "/var/lib/surmount/secrets/tls" p) roList;
+    assert builtins.any (p: lib.hasInfix "/var/lib/surmount/secrets/mail/tls" p) roList;
     assert builtins.elem "surmount-tls" suppList;
     assert builtins.elem "surmount-tls" extra;
     assert builtins.elem "surmount-tls" uiExtra;
     assert planEntry != null;
     assert readmeEntry != null;
     assert lib.hasInfix "Certificate" planText;
-    assert lib.hasInfix "/var/lib/surmount/secrets/tls/cert.pem" planText;
-    assert lib.hasInfix "/var/lib/surmount/secrets/tls/key.pem" planText;
+    assert lib.hasInfix "/var/lib/surmount/secrets/mail/tls/cert.pem" planText;
+    assert lib.hasInfix "/var/lib/surmount/secrets/mail/tls/key.pem" planText;
     assert lib.hasInfix "File" planText;
     assert builtins.any (
-      r: lib.hasInfix "tls/cert.pem" r && lib.hasInfix "0640" r && lib.hasInfix "surmount-tls" r
+      r:
+      lib.hasInfix "/tls/cert.pem" r
+      && lib.hasInfix "0640" r
+      && lib.hasInfix "surmount-tls" r
+      && !(lib.hasInfix "mail/tls/cert.pem" r)
     ) e.config.systemd.tmpfiles.rules;
     assert builtins.any (
-      r: lib.hasInfix "tls/key.pem" r && lib.hasInfix "0640" r && lib.hasInfix "surmount-tls" r
+      r:
+      lib.hasInfix "/tls/key.pem" r
+      && lib.hasInfix "0600" r
+      && lib.hasInfix "surmount-ui" r
+      && !(lib.hasInfix "mail/tls/key.pem" r)
+    ) e.config.systemd.tmpfiles.rules;
+    assert builtins.any (
+      r: lib.hasInfix "mail/tls/key.pem" r && lib.hasInfix "0600" r && lib.hasInfix "stalwart-mail" r
     ) e.config.systemd.tmpfiles.rules;
     "t38-stalwart-mail-tls-pem-grant-ok";
 
@@ -2118,6 +2131,54 @@ let
     assert !(lib.hasInfix "/usr/share/btop/themes/" text);
     assert builtins.any (r: lib.hasInfix "/root/.config/btop/btop.conf" r) rules;
     "t37-btop-local-config-ok";
+
+  t42-guest-root-justfile =
+    let
+      e = evalSurmount { };
+      entry = e.config.environment.etc."surmount/root-justfile" or null;
+      text =
+        if entry == null then
+          ""
+        else if entry ? source then
+          builtins.readFile entry.source
+        else if entry ? text then
+          entry.text
+        else
+          "";
+      rules = e.config.systemd.tmpfiles.rules;
+      pkgsList = map (p: p.pname or p.name or "") e.config.environment.systemPackages;
+    in
+    assert entry != null;
+    assert lib.hasInfix "nixbuilder_uid" text;
+    assert lib.hasInfix "pane is dead" text;
+    assert builtins.any (r: lib.hasInfix "/root/justfile" r) rules;
+    assert builtins.any (n: lib.hasPrefix "just" n) pkgsList;
+    "t42-guest-root-justfile-ok";
+
+  t43-scram-watch-highest-priority =
+    let
+      e = evalSurmount { };
+      svc = e.config.systemd.services.surmount-scram or { };
+      sc = svc.serviceConfig or { };
+      wanted = svc.wantedBy or [ ];
+    in
+    assert sc.ExecStart or "" != "";
+    assert lib.hasInfix "--watch" (toString (sc.ExecStart or ""));
+    assert sc.Nice or 0 == -20;
+    assert sc.OOMScoreAdjust or 0 == -1000;
+    assert sc.CPUSchedulingPolicy or "" == "fifo";
+    assert builtins.elem "multi-user.target" wanted;
+    "t43-scram-watch-highest-priority-ok";
+
+  t43b-swapfile-enable-without-path-asserts =
+    let
+      failed = failedAssertions (evalSurmount {
+        swapFile.enable = true;
+        swapFile.path = "";
+      });
+    in
+    assert builtins.any (a: lib.hasInfix "swapFile" a.message) failed;
+    "t43b-swapfile-enable-without-path-asserts-ok";
 
   serviceMemoryMax =
     e: name:
@@ -2667,6 +2728,9 @@ let
     t36-btop-system-package
     t41-inxi-system-package
     t37-btop-local-config
+    t42-guest-root-justfile
+    t43-scram-watch-highest-priority
+    t43b-swapfile-enable-without-path-asserts
     t39-remote-builder-enable-memory-cap
     t39b-remote-builder-custom-budget-not-sku
     t39c-remote-builder-off-no-builder-slice-cap

@@ -38,3 +38,6 @@ path = "src/lib.rs"
 serde_json.workspace = true
 surmount-secrets-install = { path = "../surmount-secrets-install" }
 surmount-secrets-prompt = { path = "../surmount-secrets-prompt" }
+
+[lints]
+workspace = true

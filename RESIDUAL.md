@@ -1,5 +1,21 @@
 # Residual (open work after Phases A-D foundation + review fix rounds)
 
+**Last updated:** 2026-08-27 (scram crate 7/7 tests; module-eval includes t43
+watchdog + swap-path refuse. **192 GiB builder ceiling is live** and in
+host-local. **Swap 256 GiB is off** until you set `surmount.swapFile.path`
+on a disk with 256 GiB free — pencils down, no invented path. **Lean
+probe** that fills every MemoryMax is a Name split, not 224 GiB.
+`just deploy-host` ships scram `--watch`, `/root/justfile` `just scram`,
+and 192G persist. Laptop: `just scram` SSHes `--now` default
+`root@surmount-1`. Do not start Lake from this agent. Slake 47 of ~206.)
+
+**Highest value next (unblock):** persist switch (scram unit + 192G + guest
+justfile). Then Lean agent: **one** measurement prove at 192 GiB or **split
+the probe now**. If RSS sits on 192 GiB, stop raising. Operator: swap path
+if you want 256 GiB swap. Signed commit of the dirty tree.
+
+---
+
 **Last updated:** 2026-08-25 (living mailbox map stays in operator-facts;
 operator bins are `nix run .#...`.) Prior 2026-08-22 (living mailbox map:
 `~/.agents/surmount-server/operator-facts.md`. Do not invent
@@ -52,8 +68,8 @@ Prior 2026-08-18 (HTTPS is durable: `surmount-management-ui`
 ExecStart is the Nix store binary; `/run` 0640-bin drop-in **removed**.
 `https://services.surmount.systems/health` **200**; apex **200**; IMAP
 **993** Let's Encrypt production leaf covering `mail` + services +
-apex + www + mta-sts. TLS key stays **0640** `surmount-ui:surmount-tls`
-(do not chmod 0600). `surmount.remoteBuilder` **enabled** from private
+apex + www + mta-sts. TLS key is **0600** `surmount-ui` (owner-only).
+Stalwart uses copies under `secrets/mail/tls`. `surmount.remoteBuilder` **enabled** from private
 host-local: `MemoryMax` + `Nice=19` on **nix-daemon.service** (real
 rustc cgroup) as well as builder/user slices, `cpuQuota = auto` (not
 95 percent of one CPU), `maxJobs` memory-safe (not a fake high advert),
@@ -182,9 +198,10 @@ to fill the queue. Law: [AGENTS.md](AGENTS.md)
 Reports: `/home/hunter/.agents/reports/impl-durable-https-remote-builder-2026-08-18.md`;
 prior `/home/hunter/.agents/reports/impl-lake-memory-cap-2026-08-18.md`;
 ticket thread `/home/hunter/.agents/reports/ticket-261-thread-lessons-2026-08-18.md`.
-**Host package (btop, 2026-08-17):** `modules/btop.nix` adds `pkgs.btop` when
-`surmount.enable`; `just btop` SSHes to the deploy target and runs it
-(TTY, key-only). **Not** on the live box until a `deploy-host` switch.
+**Host package (btop, 2026-08-17; ET 2026-08-28):** `modules/btop.nix` adds
+`pkgs.btop` when `surmount.enable`; laptop `just btop` uses Eternal
+Terminal (`et -c btop`, live tty required, nested guest runs local
+btop). **Not** on the live box until a `deploy-host` switch.
 Hermetic `just test-btop-host`. Report:
 `.agents/reports/impl-btop-ci-deploy-2026-08-17.md` (CI/deploy leftover).
 **Host paper trail (2026-08-19, in-tree):** `surmount.logging` (default on)
@@ -387,7 +404,7 @@ self-signed PEMs are not host ownership or public cutover.
 - Complete lean path: `startDaemon=true` does **not** require
   `acceptIncompleteOnionConfig` (**no effect** this module version)
 - Surmount package: `pkgs.artiOnionService` / `packages.*.arti-onion-service`
-  is Surmount-owned Arti **2.5.0** source build + cargo feature
+  is Surmount-owned Arti **2.5.1** source build + cargo feature
   `onion-service-service` (distinct from stock nixpkgs `pkgs.arti` 1.4.2).
   Module prefers it when `package` is null; capability via
   `passthru.surmountOnionServiceCapable` or explicit
@@ -507,7 +524,7 @@ self-signed PEMs are not host ownership or public cutover.
 | **nginx module delete from tree** | Dual-run escape still ships (`web.enable = true`). Unused-detection checklist: [docs/OPS.md](docs/OPS.md). Delete module file only after operators no longer need it **and** explicit operator OK |
 | **:80 redirect listener** | **Wired** in tree (flag + listen + allowlist; dual-run mutex; redirect-only; **same-host** HTTPS upgrade including apex/www so public users are not sent to the operator console). **Operator assumption (2026-08-02):** production port 80 is **free** for that bind. Host public proof still residual. **ACME HTTP-01 on product :80 parked** (Q-EDGE; free :80 does not invent ACME) |
 | **requireDeployMaterial (B2)** | Module shipped; enable on host only after PEMs (and later Arti paths) exist so activation fails loud. Sample host leaves it commented. |
-| **Arti live HS (B3)** | **Do not claim B3 fully closed.** Live Tor Browser / onion-fetch verify still residual (unit active != published). Operator offline backup of HS identity still open. Q-ARTI-2/3 still open. **Package currency shipped:** Surmount-owned Arti **2.5.0** source + `onion-service-service` (`artiOnionService`; not nixpkgs 1.4.2 lag). **Tree cleartext local backend for https+Arti auto-path shipped** (loopback API + onion target). Local temp-key publish (optional `just e2e` row) != operator backup. Do not invent Q-ARTI-2/3 answers. **Onion status product-real (2026-08-10):** when `artiHiddenService.enable`, management-ui derives hostname file + `SURMOUNT_ONION_HS_STATE_DIR` from `onionServiceStateDir` (walk nested hostname); structured status `configured` / `hostname_missing` / `not_provisioned` on SSR + `GET /api/v1/system`; residual names `surmount.artiHiddenService` (not demo env copy). Lab `SURMOUNT_ONION_URL` override only. **Onion-Location + Alt-Svc shipped (2026-08-17; every public Host 2026-08-20):** `security_headers_middleware` on mapped HTTPS 2xx/3xx; mapping loaded once at process start (restart after hostname/env/map change; no hot-reload). Same v3 for apex, www, services, extra static Hosts, and `mta-sts.{apex}`. Non-console Onion-Location uses `/_o/{clearnet-host}{path}`. Mail unmapped. Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`, `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`, `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`. Dump on `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on). **Live host (2026-08-17, private host-local; extra/MTA-STS dual headers 2026-08-20):** unit `surmount-arti-hidden-service` active; durable HS dir (not `/run`); hostname file present (v3 onion; do not paste the address in this public tree); headers proven on HTTPS 307/200 for apex, www, services (2026-08-17) and extra/MTA-STS `/_o/{host}` (2026-08-20). Extra live wiring (host-local only): `HOME=/var/lib/surmount/arti`; `surmount-ui` in group `surmount-arti` to read hostname; keystore 0700. Public module still does not set HOME / `port_info`. Arti does not write `hostname`; host wrote it from `arti hss onion-address`. Tor Browser purple pill **BLOCKED**. Do **not** log full onion addresses in failure tails |
+| **Arti live HS (B3)** | **Do not claim B3 fully closed.** Live Tor Browser / onion-fetch verify still residual (unit active != published). Operator offline backup of HS identity still open. Q-ARTI-2/3 still open. **Package currency shipped:** Surmount-owned Arti **2.5.1** source + `onion-service-service` (`artiOnionService`; not nixpkgs 1.4.2 lag). **Tree cleartext local backend for https+Arti auto-path shipped** (loopback API + onion target). Local temp-key publish (optional `just e2e` row) != operator backup. Do not invent Q-ARTI-2/3 answers. **Onion status product-real (2026-08-10):** when `artiHiddenService.enable`, management-ui derives hostname file + `SURMOUNT_ONION_HS_STATE_DIR` from `onionServiceStateDir` (walk nested hostname); structured status `configured` / `hostname_missing` / `not_provisioned` on SSR + `GET /api/v1/system`; residual names `surmount.artiHiddenService` (not demo env copy). Lab `SURMOUNT_ONION_URL` override only. **Onion-Location + Alt-Svc shipped (2026-08-17; every public Host 2026-08-20):** `security_headers_middleware` on mapped HTTPS 2xx/3xx; mapping loaded once at process start (restart after hostname/env/map change; no hot-reload). Same v3 for apex, www, services, extra static Hosts, and `mta-sts.{apex}`. Non-console Onion-Location uses `/_o/{clearnet-host}{path}`. Mail unmapped. Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`, `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`, `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`. Dump on `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on). **Live host (2026-08-17, private host-local; extra/MTA-STS dual headers 2026-08-20):** unit `surmount-arti-hidden-service` active; durable HS dir (not `/run`); hostname file present (v3 onion; do not paste the address in this public tree); headers proven on HTTPS 307/200 for apex, www, services (2026-08-17) and extra/MTA-STS `/_o/{host}` (2026-08-20). Extra live wiring (host-local only): `HOME=/var/lib/surmount/arti`; `surmount-ui` in group `surmount-arti` to read hostname; keystore 0700. Public module still does not set HOME / `port_info`. Arti does not write `hostname`; host wrote it from `arti hss onion-address`. Tor Browser purple pill **BLOCKED**. Do **not** log full onion addresses in failure tails |
 | **Nostr production auth (B4)** | **Live gated (2026-08-12):** public services `authMode=nostr`; anonymous `/` **307** `/login` (login HTML, not dashboard); anonymous `/api/v1/domains` **401**; `/health` **200**. Apex/www public page is packaged **SurmountSystems/site** (live 2026-08-19 GitHub tip `1c84696`; COMING SOON leftover closed). HTTP/2 `:authority` fallback already shipped. Domain B `session-secret` (EnvironmentFile) + `nostr-allowlist` installed (0600, `surmount-ui`; values never in git). Private host-local: `authMode=nostr` + paths + `publicBaseUrl` + ACME-off + durable TLS. Footgun guard live (public+off refuse). Report: `.agents/reports/impl-auth-live-b4-switch.md`. **Q-AUTH-1 still open** (durable session store, key-loss, first-operator bootstrap UX). Allowlisted operator browser login (NIP-07 / NIP-98) is operator-side proof, not a remaining host install. nsec never on server. |
 | **Merciless ban product (B5)** | **First path + helper scaffold shipped:** Rust decide + memory/file; optional kernel firewall sync via Unix-socket helper oneshot or unsupported direct exec; Nix `accessControl` + sets; `nftHelper` requires `backend=nft` (fail-closed); UI no CAP_NET_ADMIN; EEXIST/already-present treated as apply ok for crash-window re-signal; **`remove_ban` / lab unban shipped** (hermetic delete-element + absent=ok). **Auth-failure BanCandidate stub shipped** + surface audit (404/501 do not auto-ban); bad NIP-98 / session exchange may call `signal_unauthorized` once (missing cookie does not). **Still residual:** Q-ACL-1..6 (which surfaces call the hook); live host helper + sets drop (`just e2e-host`); fail2ban SSH transitional (**B7** after B5 solid). **Not** live host drop / full unauthorized auto-ban product |
 | **Mail earn-trust DNS/TLS (B6)** | **Primary `surmount.systems` live (2026-08-11/12, re-checked 2026-08-20):** Namecheap NS; operator clicked hosted **DNSSEC Status ON**; **live 2026-08-20** still no parent DS and no apex DNSKEY (Insecure, not SERVFAIL; waiting for Namecheap to publish); dual DKIM TXT `stalwart` + `stalwart-rsa`; DMARC **`p=quarantine`**; TLS-RPT; MTA-STS DNS + HTTPS testing; CAA Let's Encrypt. Domain B dual-sign PEMs on host. **Live DkimSignature (Track A, primary Domain):** both selectors stage active (sign-ready; **not** outbound signed mail). **Primary public MX flipped 2026-08-20** (dual-sign + PTR already green; operator Custom MX click; laptop `--live set-mx`). EmailType **MX**. Public and auth NS MX `10 mail.surmount.systems`. SPF `v=spf1 a:mail.surmount.systems -all`. DMARC **`p=quarantine`**. Laptop `issue-le-prod/namecheap.env` **`list` worked** (stored ClientIp accepted; file not rewritten). In-tree `list` prints **EmailType**. Leftover eforward MX gone. **`--live set-mx` still fails closed while EmailType is FWD** (not a public MX flip while Email Forwarding is on; extra domains; no EmailType-set API). `domain-audit` **FAIL**s registrar eforward on claimed mailbox domains. Local Stalwart RCPT for `hunter@surmount.systems` is **250**. **Public MX still eforward/FWD** on `baxterartworks.com` until asked. **MTA-STS HTTPS live (testing, primary only):** leaf covers `mta-sts.surmount.systems`; stay testing; do not enforce. **Extra mailbox domains (operator 2026-08-20; not primary-only):** this host already sends/receives locally for `cryptoquick.com` and `baxterartworks.com`. They do **not** entirely lack dual DKIM / TLS-RPT / CAA. **`cryptoquick.com`:** child (`dig @1.1.1.1 +cd`, SOA serial 1787271066) already has dual DKIM, TLS-RPT, CAA, SPF `v=spf1 a:mail.cryptoquick.com -all`, MX `10 mail.cryptoquick.com`, DMARC **`p=quarantine`** (leave as-is). Validating resolvers **SERVFAIL** on leftover parent **DS** key tag 2368, algorithm 13, digest type 1, **no child DNSKEY**. Operator UI this measure: Advanced DNS **DNSSEC Status off**. Do **not** re-add 2368. Same hosted **ON** after that DS is gone. Extra MTA-STS wait. Do **not** add apex/www to the production leaf. **`baxterartworks.com`:** EmailType still **FWD**; public MX eforward1-5 (do **not** claim MX flipped). getHosts (11 records) has dual DKIM (same `p=` as primary), TLS-RPT, CAA Let's Encrypt, SPF `v=spf1 a:mail.surmount.systems include:spf.efwd.registrar-servers.com -all`. `_dmarc` **intended** **`p=quarantine`**. Do **not** restore getHosts `_dmarc` to `p=none`. Public recursive `1.1.1.1` 2026-08-20: DKIM / `_dmarc` / TLS-RPT **NXDOMAIN** (may stay NXDOMAIN while EmailType is FWD even when getHosts has the TXT), CAA empty NOERROR, SPF still eforward-only `~all`, SOA serial **1787245654** not bumped. Leftover `_acme-challenge` TXT still on getHosts. Extra MTA-STS not published. `--live set-mx` **fails closed** while FWD. Extra-zone API **worked** this slice (not still Invalid request IP). Published Namecheap API has **no** DNSSEC/DS commands. Do **not** whitelist the VPS. **Still residual:** leftover cryptoquick parent DS (required for validating mailers to see those records); Baxter Custom MX only if the operator asks; public NS republish/lag for Baxter getHosts vs served zone; extra MTA-STS wait; `register-dkim --live --domain` as a host user who can read the token; rDNS/PTR; mail-tester. No reboot. Checklist: [docs/DNS.md](docs/DNS.md). |
@@ -670,8 +687,9 @@ or `SKIP_BAN=1` when omitting ban track):
       (operator free-:80 assumption; not ACME-on-product-:80); live :80 was
       management-ui HTTP redirect after free-443 (confirm durable after switch)
 - [x] Certificate and key files on host only under durable Domain B
-      `/var/lib/surmount/secrets/tls/` (mode 0640 `surmount-ui:surmount-tls`,
-      never in git; 2026-08-11 laptop production issue + secrets-install).
+      `/var/lib/surmount/secrets/tls/` (cert 0640 `surmount-ui:surmount-tls`,
+      key 0600 `surmount-ui` owner-only; never in git; 2026-08-11 laptop
+      production issue + secrets-install; 2026-08-27 key 0600).
       **Still residual:** host-local
       ACME-off so next switch does not depend only on runtime drop-in
 - [ ] `systemctl show surmount-management-ui -p MemoryDenyWriteExecute` => yes
@@ -684,7 +702,8 @@ or `SKIP_BAN=1` when omitting ban track):
 - [ ] nginx not product edge when web off
 - [x] Cert **renew** laptop path: `just laptop-renew-cert -- --check|--live
       --directory production` (issue only if due; stages tls-cert/tls-key,
-      installs 0640, restarts UI, proves health + IMAP). Laptop user timer
+      installs cert 0640 / key 0600, restarts UI, proves health + IMAP).
+      Laptop user timer
       `--install-timer --target ...` (without --target is BLOCKED). Host
       ACME stays off. ACME-on-Axum-:80 (HTTP-01)
       still parked; UI still needs a restart after PEM replace (hot-reload
@@ -892,11 +911,12 @@ a host **stop** at docs, tree wiring, and local e2e. Ladder detail:
       crane is 1.95 via `rustPackages_1_95`, see
       [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)). Snapshot:
       [docs/research/version-audit.md](docs/research/version-audit.md)
-- [x] **Arti packaging currency:** Surmount-owned **2.5.0** source build
-      (`nix/packages/arti-onion-service.nix`, GitLab `arti-v2.5.0`) +
+- [x] **Arti packaging currency:** Surmount-owned **2.5.1** source build
+      (`nix/packages/arti-onion-service.nix`, GitLab `arti-v2.5.1`) +
       `onion-service-service`; rustc via `nixpkgs-rust` (MSRV 1.91+); not
-      full OS channel bump. Eval contract locks version 2.5.0. Live Tor
-      verify still residual
+      full OS channel bump. Eval contract locks version 2.5.1 (matches
+      nixpkgs-rust `arti` cargoDeps; crates.io max_stable 2.5.1 as of
+      2026-08-27). Live Tor verify still residual
 - [x] COMPACTION-PIN dual-pin: local cleartext API for https+Arti **shipped**;
       `remove_ban` / lab unban **shipped**; residual host Tor/ban/cutover
       unchanged

@@ -9,15 +9,16 @@
 {
   lib,
   pkgs,
+  pkgsRust ? pkgs,
   craneLib,
   pkg-config,
 }:
 let
-  rustToolchain = import ../rust-toolchain.nix { inherit pkgs; };
+  rustToolchain = import ../rust-toolchain.nix { pkgs = pkgsRust; };
   craneLib' = craneLib.overrideToolchain rustToolchain;
 
   src = lib.cleanSourceWith {
-    src = craneLib'.path ../../crates;
+    src = craneLib'.path ../..;
     filter = path: type: craneLib'.filterCargoSources path type;
   };
 

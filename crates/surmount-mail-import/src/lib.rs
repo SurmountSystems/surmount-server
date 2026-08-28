@@ -89,9 +89,9 @@ fn load_token() -> Option<String> {
     }
     let token_file = env::var("STALWART_TOKEN_FILE")
         .unwrap_or_else(|_| "/var/lib/surmount/secrets/ui/stalwart-api-token".into());
-    fs::read_to_string(token_file).ok().map(|s| {
-        s.trim_end_matches(['\r', '\n']).to_string()
-    })
+    fs::read_to_string(token_file)
+        .ok()
+        .map(|s| s.trim_end_matches(['\r', '\n']).to_string())
 }
 
 fn extract_account_id(json: &str) -> Option<String> {
@@ -160,7 +160,9 @@ where
     }
     if positional.len() < 2 {
         eprint!("{USAGE}");
-        return Err(ToolError::blocked("missing account and Maildir path".to_string()));
+        return Err(ToolError::blocked(
+            "missing account and Maildir path".to_string(),
+        ));
     }
     if import_only && export_only {
         return Err(ToolError::blocked(
@@ -173,7 +175,9 @@ where
     let exclude = env::var("SURMOUNT_MAIL_IMPORT_EXCLUDE").unwrap_or_else(|_| "All Mail".into());
 
     if !export_only && !Path::new(&maildir).is_dir() {
-        return Err(ToolError::fail(format!("Maildir path not found: {maildir}")));
+        return Err(ToolError::fail(format!(
+            "Maildir path not found: {maildir}"
+        )));
     }
 
     let vandelay = which("vandelay").ok_or_else(|| {
@@ -217,7 +221,14 @@ where
         }
         println!("vandelay: import maildir -> archive");
         let mut cmd = Command::new(&vandelay);
-        cmd.args(["import", "maildir", &maildir, &archive, "--exclude", &exclude]);
+        cmd.args([
+            "import",
+            "maildir",
+            &maildir,
+            &archive,
+            "--exclude",
+            &exclude,
+        ]);
         if dry_run {
             cmd.arg("--dry-run");
         }

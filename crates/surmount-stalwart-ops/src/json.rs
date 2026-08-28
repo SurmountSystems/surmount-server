@@ -154,7 +154,7 @@ pub fn file_cert_id_in_query(out: &str, path: &str, expected: &str) -> Option<St
                 }
             }
             let mut hits = 0usize;
-            collect_host_hits(item, expected, &mut hits);
+            collect_host_hits(&item, expected, &mut hits);
             if hits >= 2 && best.as_ref().map(|b| hits > b.1).unwrap_or(true) {
                 best = Some((id.to_string(), hits));
             } else if hits >= 1 && best.as_ref().map(|b| b.1 == 0).unwrap_or(true) {
@@ -217,19 +217,13 @@ pub fn file_cert_id_in_query(out: &str, path: &str, expected: &str) -> Option<St
         best_id = last_id;
         best_hits = hits;
     }
-    if best_hits > 0 {
-        Some(best_id)
-    } else {
-        None
-    }
+    if best_hits > 0 { Some(best_id) } else { None }
 }
 
 fn collect_host_hits(v: &Value, expected: &str, hits: &mut usize) {
     match v {
-        Value::String(s) => {
-            if hostname_is_expected(s, expected) {
-                *hits += 1;
-            }
+        Value::String(s) if hostname_is_expected(s, expected) => {
+            *hits += 1;
         }
         Value::Array(a) => {
             for x in a {

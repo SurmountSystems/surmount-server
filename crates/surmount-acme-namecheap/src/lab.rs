@@ -34,11 +34,18 @@ where
     if !args.is_empty() {
         args.remove(0);
     }
-    let zone = std::env::var("SURMOUNT_ACME_DNS_LAB_ZONE")
-        .map_err(|_| die("acme-dns-hook-lab", "SURMOUNT_ACME_DNS_LAB_ZONE is required (path to lab zone file)"))?;
+    let zone = std::env::var("SURMOUNT_ACME_DNS_LAB_ZONE").map_err(|_| {
+        die(
+            "acme-dns-hook-lab",
+            "SURMOUNT_ACME_DNS_LAB_ZONE is required (path to lab zone file)",
+        )
+    })?;
     let zone = PathBuf::from(zone);
     let parent = zone.parent().ok_or_else(|| {
-        die("acme-dns-hook-lab", format!("zone parent directory missing: {}", zone.display()))
+        die(
+            "acme-dns-hook-lab",
+            format!("zone parent directory missing: {}", zone.display()),
+        )
     })?;
     if !parent.is_dir() {
         return Err(die(
@@ -50,12 +57,19 @@ where
         fs::write(&zone, "").map_err(|e| die("acme-dns-hook-lab", format!("zone create: {e}")))?;
         let _ = fs::set_permissions(&zone, fs::Permissions::from_mode(0o600));
     }
-    let meta = fs::symlink_metadata(&zone)
-        .map_err(|_| die("acme-dns-hook-lab", format!("zone path is not a regular file: {}", zone.display())))?;
+    let meta = fs::symlink_metadata(&zone).map_err(|_| {
+        die(
+            "acme-dns-hook-lab",
+            format!("zone path is not a regular file: {}", zone.display()),
+        )
+    })?;
     if meta.file_type().is_symlink() {
         return Err(die(
             "acme-dns-hook-lab",
-            format!("zone path must be a regular file (symlink refused): {}", zone.display()),
+            format!(
+                "zone path must be a regular file (symlink refused): {}",
+                zone.display()
+            ),
         ));
     }
     if args.is_empty() {
@@ -98,7 +112,10 @@ where
                 Ok(1)
             }
         }
-        other => Err(die("acme-dns-hook-lab", format!("unknown command: {other}"))),
+        other => Err(die(
+            "acme-dns-hook-lab",
+            format!("unknown command: {other}"),
+        )),
     }
 }
 
@@ -106,7 +123,7 @@ fn load(path: &Path) -> anyhow::Result<Vec<(String, String)>> {
     let file = fs::File::open(path).map_err(|e| die("acme-dns-hook-lab", format!("zone: {e}")))?;
     let mut recs = Vec::new();
     for line in BufReader::new(file).lines() {
-        let mut line = line.map_err(|e| die("acme-dns-hook-lab", format!("zone: {e}")))?;
+        let line = line.map_err(|e| die("acme-dns-hook-lab", format!("zone: {e}")))?;
         if line.trim().is_empty() || line.starts_with('#') {
             continue;
         }
@@ -120,10 +137,12 @@ fn save(path: &Path, recs: &[(String, String)]) -> anyhow::Result<()> {
     let parent = path.parent().unwrap();
     let tmp = parent.join(".acme-dns-lab-zone.tmp");
     {
-        let mut f = fs::File::create(&tmp).map_err(|e| die("acme-dns-hook-lab", format!("zone tmp: {e}")))?;
+        let mut f = fs::File::create(&tmp)
+            .map_err(|e| die("acme-dns-hook-lab", format!("zone tmp: {e}")))?;
         let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
         for (fqdn, val) in recs {
-            writeln!(f, "{fqdn} {val}").map_err(|e| die("acme-dns-hook-lab", format!("zone: {e}")))?;
+            writeln!(f, "{fqdn} {val}")
+                .map_err(|e| die("acme-dns-hook-lab", format!("zone: {e}")))?;
         }
     }
     fs::rename(&tmp, path).map_err(|e| die("acme-dns-hook-lab", format!("zone: {e}")))?;

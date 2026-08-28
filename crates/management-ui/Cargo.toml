@@ -56,3 +56,6 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 # rcgen/time are normal deps (mock ACME issuer + expiry checks).
+
+[lints]
+workspace = true

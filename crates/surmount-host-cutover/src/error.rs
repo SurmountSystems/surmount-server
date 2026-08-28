@@ -8,9 +8,9 @@ pub struct ToolError {
 }
 
 impl ToolError {
-    pub fn fail(message: impl Into<String>) -> Self {
+    pub fn fail(message: impl std::fmt::Display) -> Self {
         Self {
-            message: message.into(),
+            message: message.to_string(),
             exit_code: 1,
         }
     }

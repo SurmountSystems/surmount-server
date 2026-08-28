@@ -180,7 +180,7 @@ where
             )));
         }
         let body = fs::read_to_string(&attr_file)?;
-        let mut kind = read_attr(&body, "surmount.kind").unwrap_or_default();
+        let kind = read_attr(&body, "surmount.kind").unwrap_or_default();
         let mut host = read_attr(&body, "surmount.host").unwrap_or_default();
         let path = read_attr(&body, "surmount.path").unwrap_or_default();
         let bw_item = read_attr(&body, "surmount.bw_item").unwrap_or_default();

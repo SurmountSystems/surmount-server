@@ -28,7 +28,13 @@ pub fn run_cli(cli: &str, url: &str, token: &Token, args: &[&str], prefix: &str)
     Ok(out)
 }
 
-pub fn run_cli_ok(cli: &str, url: &str, token: &Token, args: &[&str], prefix: &str) -> Result<String> {
+pub fn run_cli_ok(
+    cli: &str,
+    url: &str,
+    token: &Token,
+    args: &[&str],
+    prefix: &str,
+) -> Result<String> {
     let out = run_cli(cli, url, token, args, prefix)?;
     if !out.status.success() {
         return Err(ToolError::fail(format!(

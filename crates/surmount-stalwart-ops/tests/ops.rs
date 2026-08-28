@@ -57,6 +57,33 @@ fn rec_bin() -> &'static str {
     env!("CARGO_BIN_EXE_stalwart-recovery-unlock")
 }
 
+/// Drop host-leaking env so Nix sandbox / operator laptop cannot SSH or pick
+/// a live SURMOUNT_DEPLOY_TARGET. Tests pass --host / --dest-root / --cli.
+fn hermetic_cmd(bin: &str) -> Command {
+    let mut c = Command::new(bin);
+    c.env_remove("SURMOUNT_DEPLOY_TARGET")
+        .env_remove("SURMOUNT_SECRETS_TARGET")
+        .env_remove("SURMOUNT_SECRETS_HOST_ID")
+        .env_remove("SURMOUNT_SECRETS_STAGING")
+        .env_remove("SURMOUNT_FREE_443_PLAN")
+        .env_remove("SURMOUNT_REGISTER_DKIM_DOMAIN")
+        .env_remove("SURMOUNT_REGISTER_DKIM_ED25519_PEM")
+        .env_remove("SURMOUNT_REGISTER_DKIM_RSA_PEM")
+        .env_remove("SURMOUNT_REGISTER_DKIM_SYSTEMCTL")
+        .env_remove("SURMOUNT_FREE_443_SS")
+        .env_remove("SURMOUNT_FREE_443_SYSTEMCTL")
+        .env_remove("SURMOUNT_RECOVERY_SSH")
+        .env_remove("SURMOUNT_RECOVERY_SYSTEMCTL")
+        .env_remove("STALWART_URL")
+        .env_remove("STALWART_CLI")
+        .env_remove("STALWART_PASSWORD")
+        .env_remove("STALWART_USER")
+        .env_remove("STALWART_TOKEN")
+        .env_remove("STALWART_TOKEN_FILE")
+        .env_remove("HOSTNAME");
+    c
+}
+
 #[test]
 fn dkim_help_and_blocked_token() {
     let out = Command::new(dkim_bin()).arg("--help").output().unwrap();
@@ -69,14 +96,16 @@ fn dkim_help_and_blocked_token() {
     let out = Command::new(dkim_bin())
         .env_remove("STALWART_TOKEN")
         .env_remove("STALWART_TOKEN_FILE")
-        .args([
-            "--dry-run",
-            "--token-file",
-        ])
+        .args(["--dry-run", "--token-file"])
         .arg(work.join("missing-token"))
         .args(["--cli"])
         .arg(&cli)
-        .args(["--url", "http://127.0.0.1:8080", "--skip-sandbox-check", "--skip-pem-check"])
+        .args([
+            "--url",
+            "http://127.0.0.1:8080",
+            "--skip-sandbox-check",
+            "--skip-pem-check",
+        ])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
@@ -98,7 +127,12 @@ fn dkim_refuse_non_loopback() {
         .arg(&tok)
         .args(["--cli"])
         .arg(&cli)
-        .args(["--url", "http://10.0.0.1:8080", "--skip-sandbox-check", "--skip-pem-check"])
+        .args([
+            "--url",
+            "http://10.0.0.1:8080",
+            "--skip-sandbox-check",
+            "--skip-pem-check",
+        ])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
@@ -123,15 +157,15 @@ fn dkim_dry_run_and_live() {
         &work,
         "stalwart-cli",
         &format!(
-            r#"#!/usr/bin/env bash
-set -euo pipefail
+            r#"#!/bin/sh
+set -eu
 printf '%s\n' "$*" >>'{log}'
 args="$*"
 case "$args" in
   *'query Domain'*) echo '{{"items":[{{"id":"dom-surmount-test","name":"surmount.systems"}}]}}'; exit 0 ;;
   *'query DkimSignature'*)
     state="$(cat '{state}' 2>/dev/null || echo empty)"
-    if [[ "$state" == both ]]; then
+    if [ "$state" = both ]; then
       echo '{{"items":[{{"id":"sig-ed","selector":"stalwart","stage":"active","domainId":"dom-surmount-test"}},{{"id":"sig-rsa","selector":"stalwart-rsa","stage":"active","domainId":"dom-surmount-test"}}]}}'
     else
       echo '{{"items":[]}}'
@@ -152,12 +186,16 @@ esac
         "#!/bin/sh\necho ProtectSystem=strict\necho ReadOnlyPaths=/var/lib/surmount/secrets/mail/dkim\nexit 0\n",
     );
     let common = |c: &mut Command| {
-        c.env_remove("STALWART_TOKEN")
-            .args(["--token-file"])
+        c.args(["--token-file"])
             .arg(&tok)
             .args(["--cli"])
             .arg(&cli)
-            .args(["--url", "http://127.0.0.1:8080", "--domain", "surmount.systems"])
+            .args([
+                "--url",
+                "http://127.0.0.1:8080",
+                "--domain",
+                "surmount.systems",
+            ])
             .args(["--ed25519-pem"])
             .arg(dkim.join("ed.pem"))
             .args(["--rsa-pem"])
@@ -165,7 +203,7 @@ esac
             .args(["--systemctl-cmd"])
             .arg(&sys);
     };
-    let mut c = Command::new(dkim_bin());
+    let mut c = hermetic_cmd(dkim_bin());
     common(&mut c);
     c.arg("--dry-run");
     let out = c.output().unwrap();
@@ -179,14 +217,15 @@ esac
 
     fs::write(&log, "").unwrap();
     fs::write(&state, "empty\n").unwrap();
-    let mut c = Command::new(dkim_bin());
+    let mut c = hermetic_cmd(dkim_bin());
     common(&mut c);
     c.arg("--live");
     let out = c.output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
-    assert!(err.to_lowercase().contains("sign-ready"));
-    assert!(err.contains("not claiming outbound"));
+    let err_l = err.to_lowercase();
+    assert!(err_l.contains("sign-ready"), "{err}");
+    assert!(err_l.contains("not claiming outbound"), "{err}");
     let clog = fs::read_to_string(&log).unwrap();
     assert!(clog.contains("Dkim1Ed25519Sha256"));
     assert!(clog.contains("Dkim1RsaSha256"));
@@ -195,24 +234,23 @@ esac
 #[test]
 fn free443_blocked_and_dry_run() {
     let work = temp_dir("443");
-    let plan = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("nix/stalwart/free-public-443-for-axum-edge.ndjson");
+    // Crane filterCargoSources drops repo nix/*.ndjson. Write a fixture plan.
+    let plan = work.join("plan.ndjson");
+    fs::write(
+        &plan,
+        "{\"@type\":\"destroy\",\"object\":\"NetworkListener\",\"value\":{\"name\":\"https\"}}\n",
+    )
+    .unwrap();
     let cli = write_exec(
         &work,
         "stalwart-cli",
         &format!(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>'{}'\n\
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >>'{}'\n\
 case \"$*\" in *query*) echo '{{}}'; exit 0;; *apply*) echo dry-run ok; exit 0;; *) exit 1;; esac\n",
             work.join("cli.log").display()
         ),
     );
-    let out = Command::new(free_bin())
-        .env_remove("STALWART_TOKEN")
-        .env_remove("STALWART_TOKEN_FILE")
+    let out = hermetic_cmd(free_bin())
         .args(["--dry-run", "--token-file"])
         .arg(work.join("missing"))
         .args(["--plan"])
@@ -227,8 +265,7 @@ case \"$*\" in *query*) echo '{{}}'; exit 0;; *apply*) echo dry-run ok; exit 0;;
     let tok = work.join("t");
     fs::write(&tok, format!("{PLANT}\n")).unwrap();
     chmod_600(&tok);
-    let out = Command::new(free_bin())
-        .env_remove("STALWART_TOKEN")
+    let out = hermetic_cmd(free_bin())
         .args(["--dry-run", "--token-file"])
         .arg(&tok)
         .args(["--plan"])
@@ -252,7 +289,11 @@ fn add_token_install_dest_root() {
     let stage = work.join("stage");
     let dest = work.join("dest");
     fs::create_dir_all(stage.join("stalwart-token")).unwrap();
-    fs::write(stage.join("stalwart-token/secret"), "SYNTHETIC-STALWART-TOKEN-NOT-REAL-9f3c2a1b").unwrap();
+    fs::write(
+        stage.join("stalwart-token/secret"),
+        "SYNTHETIC-STALWART-TOKEN-NOT-REAL-9f3c2a1b",
+    )
+    .unwrap();
     fs::write(
         stage.join("stalwart-token/attributes"),
         "surmount.kind=stalwart-token\nsurmount.host=surmount-1\nsurmount.path=/var/lib/surmount/secrets/ui/stalwart-api-token\n",
@@ -260,11 +301,7 @@ fn add_token_install_dest_root() {
     .unwrap();
     chmod_600(&stage.join("stalwart-token/secret"));
     let out = Command::new(add_bin())
-        .args([
-            "--host",
-            "surmount-1",
-            "--staging",
-        ])
+        .args(["--host", "surmount-1", "--staging"])
         .arg(&stage)
         .args(["--dest-root"])
         .arg(&dest)
@@ -325,7 +362,7 @@ fn bootstrap_mint_stage_only() {
     let cli = write_exec(
         &work,
         "stalwart-cli",
-        "#!/usr/bin/env bash\nset -euo pipefail\n\
+        "#!/bin/sh\nset -eu\n\
 if printf '%s' \"$*\" | grep -q SYNTHETIC-ADMIN-PASSWORD; then echo leaked >&2; exit 99; fi\n\
 case \"$*\" in\n\
   *query*domain*) echo '{\"items\":[{\"id\":\"d1\",\"name\":\"surmount.systems\"}]}'; exit 0 ;;\n\
@@ -358,28 +395,34 @@ fn recovery_generate_and_strip() {
     let work = temp_dir("rec");
     let stage = work.join("stage");
     let dest = work.join("dest");
-    let out = Command::new(rec_bin())
+    let host_id = "hermetic-test-host";
+    let out = hermetic_cmd(rec_bin())
+        .env("TMPDIR", &work)
         .args(["--generate", "--staging"])
         .arg(&stage)
-        .args(["--host", "surmount-1", "--no-install"])
+        .args(["--host", host_id, "--no-install"])
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
+    assert!(err.contains(host_id), "{err}");
+    assert!(!err.contains("host=surmount-1"), "{err}");
     let body = fs::read_to_string(stage.join("stalwart-recovery-admin/secret")).unwrap();
     assert!(body.starts_with("STALWART_RECOVERY_ADMIN=admin:"));
     assert!(!err.contains(&body[body.find(':').unwrap() + 1..]));
 
-    let out = Command::new(rec_bin())
+    let out = hermetic_cmd(rec_bin())
+        .env("TMPDIR", &work)
         .args(["--generate", "--install", "--dest-root"])
         .arg(&dest)
         .args(["--staging"])
         .arg(&stage)
-        .args(["--host", "surmount-1", "--no-restart", "--no-probe"])
+        .args(["--host", host_id, "--no-restart", "--no-probe"])
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
+    assert!(!err.contains("host=surmount-1"), "{err}");
     let envp = dest.join("var/lib/surmount/secrets/stalwart/recovery.env");
     assert!(envp.is_file());
     let dropin = dest.join("etc/systemd/system/stalwart-mail.service.d/recovery-admin.conf");
@@ -387,7 +430,8 @@ fn recovery_generate_and_strip() {
     assert!(d.contains("EnvironmentFile=-/var/lib/surmount/secrets/stalwart/recovery.env"));
     assert!(!d.contains("STALWART_RECOVERY_ADMIN="));
 
-    let out = Command::new(rec_bin())
+    let out = hermetic_cmd(rec_bin())
+        .env("TMPDIR", &work)
         .args(["--strip", "--dest-root"])
         .arg(&dest)
         .args(["--no-restart", "--dry-run"])
@@ -395,7 +439,8 @@ fn recovery_generate_and_strip() {
         .unwrap();
     assert!(out.status.success());
     assert!(envp.is_file());
-    let out = Command::new(rec_bin())
+    let out = hermetic_cmd(rec_bin())
+        .env("TMPDIR", &work)
         .args(["--strip", "--dest-root"])
         .arg(&dest)
         .arg("--no-restart")
@@ -408,7 +453,14 @@ fn recovery_generate_and_strip() {
 #[test]
 fn recovery_path_dotdot_refused() {
     let out = Command::new(rec_bin())
-        .args(["--strip", "--dest-root", "/tmp", "--path", "/var/lib/surmount/secrets/../escape", "--dry-run"])
+        .args([
+            "--strip",
+            "--dest-root",
+            "/tmp",
+            "--path",
+            "/var/lib/surmount/secrets/../escape",
+            "--dry-run",
+        ])
         .output()
         .unwrap();
     assert!(!out.status.success());

@@ -18,9 +18,7 @@ impl std::error::Error for DsError {}
 
 impl DsError {
     pub fn new(m: impl Into<String>) -> Self {
-        Self {
-            message: m.into(),
-        }
+        Self { message: m.into() }
     }
 }
 

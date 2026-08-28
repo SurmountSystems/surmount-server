@@ -5,7 +5,9 @@ use std::process::{Command, Stdio};
 
 use crate::add_token;
 use crate::error::{Result, ToolError};
-use crate::json::{account_query_has_admin, extract_created_id, extract_secret_line, find_domain_id};
+use crate::json::{
+    account_query_has_admin, extract_created_id, extract_secret_line, find_domain_id,
+};
 use crate::token::which_or;
 
 const USAGE: &str = "\
@@ -35,7 +37,8 @@ where
     S: AsRef<str>,
 {
     let argv: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
-    let mut host = std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
+    let mut host =
+        std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
     let mut staging = String::new();
     let mut target = std::env::var("SURMOUNT_SECRETS_TARGET")
         .ok()
@@ -118,13 +121,18 @@ where
                 path_override = need(&argv, i)?;
             }
             other if other.starts_with('-') => {
-                return Err(ToolError::fail(format!("unknown option: {other} (try --help)")));
+                return Err(ToolError::fail(format!(
+                    "unknown option: {other} (try --help)"
+                )));
             }
             other => return Err(ToolError::fail(format!("unexpected argument: {other}"))),
         }
         i += 1;
     }
-    if domain.contains('/') || domain.contains(' ') || domain.starts_with('-') || domain.contains('@')
+    if domain.contains('/')
+        || domain.contains(' ')
+        || domain.starts_with('-')
+        || domain.contains('@')
     {
         return Err(ToolError::fail(
             "domain must be a bare hostname (got invalid shape; values not logged)".to_string(),
@@ -188,7 +196,17 @@ where
         log_line(&format!(
             "create mode=remote target={target} (loopback create on host; values not logged)"
         ));
-        remote_create(&ssh_cmd, &target, &password, &user, &url, &cli, &description, &domain, ensure)?
+        remote_create(
+            &ssh_cmd,
+            &target,
+            &password,
+            &user,
+            &url,
+            &cli,
+            &description,
+            &domain,
+            ensure,
+        )?
     } else {
         log_line(&format!("create mode=local cli={cli_bin}"));
         if ensure {
@@ -217,10 +235,7 @@ where
     })?;
     log_line("captured one-time API key from create (value not logged); staging as stalwart-token");
 
-    let tmp = std::env::temp_dir().join(format!(
-        "bootstrap-stalwart-token.{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("bootstrap-stalwart-token.{}", std::process::id()));
     fs::write(&tmp, &token)?;
     let mut perm = fs::metadata(&tmp)?.permissions();
     perm.set_mode(0o600);
@@ -310,21 +325,17 @@ where
     Ok(())
 }
 
-fn ensure_local(
-    cli: &str,
-    url: &str,
-    user: &str,
-    domain: &str,
-    password: &str,
-) -> Result<String> {
+fn ensure_local(cli: &str, url: &str, user: &str, domain: &str, password: &str) -> Result<String> {
     log_line(&format!("ensure directory: query domain name={domain}"));
     let q = Command::new(cli)
-        .args(["--url", url, "--user", user, "query", "domain", "--fields", "id,name", "--json"])
+        .args([
+            "--url", url, "--user", user, "query", "domain", "--fields", "id,name", "--json",
+        ])
         .env("STALWART_PASSWORD", password)
         .env("STALWART_USER", user)
         .output()?;
-    let q_out = String::from_utf8_lossy(&q.stdout).into_owned()
-        + &String::from_utf8_lossy(&q.stderr);
+    let q_out =
+        String::from_utf8_lossy(&q.stdout).into_owned() + &String::from_utf8_lossy(&q.stderr);
     if !q.status.success() {
         return Err(ToolError::fail(
             "ensure directory: query domain failed. Check admin password/URL. Secret values not logged."
@@ -370,7 +381,14 @@ fn ensure_local(
     let domain_id = domain_id.unwrap_or_default();
     let q = Command::new(cli)
         .args([
-            "--url", url, "--user", user, "query", "account", "--fields", "id,name,emailAddress,roles",
+            "--url",
+            url,
+            "--user",
+            user,
+            "query",
+            "account",
+            "--fields",
+            "id,name,emailAddress,roles",
             "--json",
         ])
         .env("STALWART_PASSWORD", password)
@@ -394,7 +412,15 @@ fn ensure_local(
             json_escape(password)
         );
         let mut child = Command::new(cli)
-            .args(["--url", url, "--user", user, "create", "Account/User", "--stdin"])
+            .args([
+                "--url",
+                url,
+                "--user",
+                user,
+                "create",
+                "Account/User",
+                "--stdin",
+            ])
             .env("STALWART_PASSWORD", password)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -429,7 +455,13 @@ fn ensure_local(
     Ok(apikey_user)
 }
 
-fn local_create(cli: &str, url: &str, user: &str, password: &str, desc: &str) -> Result<(String, i32)> {
+fn local_create(
+    cli: &str,
+    url: &str,
+    user: &str,
+    password: &str,
+    desc: &str,
+) -> Result<(String, i32)> {
     let out = Command::new(cli)
         .args([
             "--url",
@@ -448,8 +480,8 @@ fn local_create(cli: &str, url: &str, user: &str, password: &str, desc: &str) ->
         .env("STALWART_PASSWORD", password)
         .env("STALWART_USER", user)
         .output()?;
-    let text = String::from_utf8_lossy(&out.stdout).into_owned()
-        + &String::from_utf8_lossy(&out.stderr);
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     Ok((text, out.status.code().unwrap_or(1)))
 }
 
@@ -472,7 +504,12 @@ exec \"$CLI\" --url \"$URL\" --user \"$STALWART_USER\" create apikey --field \"d
         sh_quote(password),
         sh_quote(user),
         sh_quote(url),
-        sh_quote(Path::new(cli).file_name().and_then(|s| s.to_str()).unwrap_or("stalwart-cli")),
+        sh_quote(
+            Path::new(cli)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("stalwart-cli")
+        ),
         sh_quote(desc),
         sh_quote(domain),
         if ensure { "1" } else { "0" },
@@ -490,8 +527,8 @@ exec \"$CLI\" --url \"$URL\" --user \"$STALWART_USER\" create apikey --field \"d
             }
             c.wait_with_output()
         })?;
-    let text = String::from_utf8_lossy(&out.stdout).into_owned()
-        + &String::from_utf8_lossy(&out.stderr);
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
     let _ = domain;
     Ok((text, out.status.code().unwrap_or(1)))
 }
@@ -509,7 +546,11 @@ fn read_password_file(path: &str) -> Result<String> {
         )));
     }
     let s = fs::read_to_string(p)?;
-    Ok(s.lines().next().unwrap_or("").trim_end_matches('\r').to_string())
+    Ok(s.lines()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\r')
+        .to_string())
 }
 
 fn scrub(out: &str, password: &str) -> String {
@@ -522,7 +563,14 @@ fn scrub(out: &str, password: &str) -> String {
                 let rest = &s[i + 4..];
                 let n = rest
                     .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '+' || *c == '/' || *c == '=' || *c == '_' || *c == '-')
+                    .take_while(|c| {
+                        c.is_ascii_alphanumeric()
+                            || *c == '+'
+                            || *c == '/'
+                            || *c == '='
+                            || *c == '_'
+                            || *c == '-'
+                    })
                     .count();
                 s.replace_range(i..i + 4 + n, "<redacted>");
             }

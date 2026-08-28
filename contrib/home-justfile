@@ -1,0 +1,50 @@
+# Laptop-home wrapper. Copy to ~/justfile (private; not the public git root).
+# Real recipes live in the Surmount Server repo. This file only `cd`s there
+# and calls `just`. Do not add guest-only scripts here. surmount-2 uses the
+# same repo + a copy of this file with SURMOUNT_SERVER set.
+#
+# Default repo path is this laptop's clone. Override:
+#   export SURMOUNT_SERVER=/path/to/surmount-server
+#
+# Second window before `just deploy-host`:
+#   Open another Alacritty, `just et`, leave it at a prompt. Activation can
+#   drop the SSH that started the switch. Docs: docs/deploy-host-local.md.
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+repo := env_var_or_default("SURMOUNT_SERVER", "/home/hunter/Projects/surmount/surmount-server")
+
+default:
+    @echo "Surmount laptop-home justfile → {{repo}}"
+    @echo "Second window before deploy-host: just et  (leave it logged in)"
+    @just --list
+
+_j *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" {{args}}
+
+# Reconnecting shell (Eternal Terminal). Second Alacritty before deploy-host.
+et *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" et {{args}}
+
+# Guest process view via Eternal Terminal (reconnectable; not freeze-paint SSH).
+btop *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" btop {{args}}
+
+inxi *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" host-inxi {{args}}
+
+# One-shot journal diagnose on the guest (no sudo).
+logs *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" host-logs -- --status {{args}}
+
+# Persist host-local (MemoryMax, etserver, guest-agent). Second `just et` first.
+deploy-host *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" deploy-host {{args}}
+
+# Units + builder-slice MemoryMax. Read-only. No IPs printed.
+status:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" host-status
+
+# Laptop: SSH scram --now to the guest (default root@surmount-1).
+scram *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" scram {{args}}

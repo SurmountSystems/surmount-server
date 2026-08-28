@@ -59,8 +59,7 @@ in
         }
         {
           assertion =
-            builtins.match "[0-9]+" log.rateLimitBurst != null
-            && (lib.toInt log.rateLimitBurst) >= 20000;
+            builtins.match "[0-9]+" log.rateLimitBurst != null && (lib.toInt log.rateLimitBurst) >= 20000;
           message = "surmount.logging.rateLimitBurst must be an integer >= 20000 so torture-test and OOM-start lines are not the first dropped (scaffold 50000; completeness over vacuum).";
         }
         {

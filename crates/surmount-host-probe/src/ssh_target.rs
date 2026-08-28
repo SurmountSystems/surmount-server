@@ -63,7 +63,11 @@ pub fn resolve_target(
     }
     let env_file = env_file_override
         .map(PathBuf::from)
-        .or_else(|| env::var("SURMOUNT_AGENT_TARGET_ENV").ok().map(PathBuf::from))
+        .or_else(|| {
+            env::var("SURMOUNT_AGENT_TARGET_ENV")
+                .ok()
+                .map(PathBuf::from)
+        })
         .unwrap_or_else(default_agent_target_env);
     if !env_file.is_file() {
         return Err(ProbeError::fail(format!(

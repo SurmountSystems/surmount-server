@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use crate::cred::{die, fqdn_to_hostname, load_credentials, DEFAULT_CRED_PATH};
+use crate::cred::{DEFAULT_CRED_PATH, die, fqdn_to_hostname, load_credentials};
 use crate::zone::{self, Record};
 
 pub fn run<I, S>(args: I) -> u8
@@ -44,12 +44,18 @@ where
         .unwrap_or_else(|| PathBuf::from(DEFAULT_CRED_PATH));
     let cred = load_credentials(&path, "acme-dns-hook-namecheap")?;
     let mock = std::env::var_os("SURMOUNT_ACME_DNS_NAMECHEAP_MOCK_DIR").map(PathBuf::from);
-    let verbose = std::env::var("SURMOUNT_ACME_DNS_NAMECHEAP_VERBOSE").ok().as_deref() == Some("1");
+    let verbose = std::env::var("SURMOUNT_ACME_DNS_NAMECHEAP_VERBOSE")
+        .ok()
+        .as_deref()
+        == Some("1");
     let cmd = args[0].as_str();
     match cmd {
         "set" => {
             if args.len() < 3 {
-                return Err(die("acme-dns-hook-namecheap", "set requires <fqdn> <txt_value>"));
+                return Err(die(
+                    "acme-dns-hook-namecheap",
+                    "set requires <fqdn> <txt_value>",
+                ));
             }
             cmd_set(&cred, mock.as_deref(), &args[1], &args[2], verbose)?;
             Ok(0)
@@ -63,9 +69,18 @@ where
         }
         "wait" => {
             if args.len() < 3 {
-                return Err(die("acme-dns-hook-namecheap", "wait requires <fqdn> <txt_value>"));
+                return Err(die(
+                    "acme-dns-hook-namecheap",
+                    "wait requires <fqdn> <txt_value>",
+                ));
             }
-            Ok(cmd_wait(&cred, mock.as_deref(), &args[1], &args[2], verbose)?)
+            Ok(cmd_wait(
+                &cred,
+                mock.as_deref(),
+                &args[1],
+                &args[2],
+                verbose,
+            )?)
         }
         other => Err(die(
             "acme-dns-hook-namecheap",
@@ -86,7 +101,10 @@ fn load_zone(mock: Option<&std::path::Path>) -> anyhow::Result<Vec<Record>> {
 
 fn save_zone(mock: Option<&std::path::Path>, recs: &[Record]) -> anyhow::Result<()> {
     let Some(dir) = mock else {
-        return Err(die("acme-dns-hook-namecheap", "live setHosts refused without MOCK_DIR"));
+        return Err(die(
+            "acme-dns-hook-namecheap",
+            "live setHosts refused without MOCK_DIR",
+        ));
     };
     zone::save(dir, recs)
 }
@@ -105,7 +123,10 @@ fn cmd_set(
         return Err(die("acme-dns-hook-namecheap", "set: missing txt_value"));
     }
     if fqdn.chars().any(|c| c.is_control()) || value.chars().any(|c| c.is_control()) {
-        return Err(die("acme-dns-hook-namecheap", "set: control characters refused"));
+        return Err(die(
+            "acme-dns-hook-namecheap",
+            "set: control characters refused",
+        ));
     }
     let host = fqdn_to_hostname(fqdn, &cred.sld, &cred.tld)?;
     let mut recs = load_zone(mock)?;
@@ -134,7 +155,10 @@ fn cmd_clear(
     verbose: bool,
 ) -> anyhow::Result<()> {
     if fqdn.chars().any(|c| c.is_control()) {
-        return Err(die("acme-dns-hook-namecheap", "clear: control characters refused"));
+        return Err(die(
+            "acme-dns-hook-namecheap",
+            "clear: control characters refused",
+        ));
     }
     let host = fqdn_to_hostname(fqdn, &cred.sld, &cred.tld)?;
     let mut recs = load_zone(mock)?;

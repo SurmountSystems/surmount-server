@@ -1120,6 +1120,7 @@ mod tests {
         std::fs::write(&file, format!("{file_hex}\n")).unwrap();
 
         set_env("SURMOUNT_AUTH_MODE", "nostr");
+        // Synthetic HMAC material only. Fail-closed product still requires this.
         set_env("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
         set_env("SURMOUNT_NOSTR_ALLOWLIST_FILE", file.to_str().unwrap());
         let cfg = AppConfig::from_env().unwrap();
@@ -1129,6 +1130,7 @@ mod tests {
         );
 
         set_env("SURMOUNT_NOSTR_ALLOWLIST", &env_hex);
+        set_env("SURMOUNT_SESSION_SECRET", "dev-only-test-secret");
         let cfg2 = AppConfig::from_env().unwrap();
         assert!(
             allowlist_contains(&cfg2.auth.allowlist, &env_hex),

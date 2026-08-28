@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 use surmount_static_sites::{
-    copy_tree, redact_ipv4, resolve_deploy_target, ssh_rsync_e, target_label, which, PROVEN_SLUGS,
-    SitesError,
+    PROVEN_SLUGS, SitesError, copy_tree, redact_ipv4, resolve_deploy_target, ssh_rsync_e,
+    target_label, which,
 };
 
 const USAGE: &str = "\
@@ -93,7 +93,11 @@ fn parse() -> Result<Opts, SitesError> {
             }
             "--site-root" => {
                 i += 1;
-                site_root = Some(PathBuf::from(need(&rest, i, "--site-root requires a directory")?));
+                site_root = Some(PathBuf::from(need(
+                    &rest,
+                    i,
+                    "--site-root requires a directory",
+                )?));
                 i += 1;
             }
             "--extra-from" => {
@@ -129,7 +133,11 @@ fn parse() -> Result<Opts, SitesError> {
                 unit = need(&rest, i, "--restart-unit requires a unit name")?;
                 i += 1;
             }
-            other => return Err(SitesError::new(format!("unknown argument: {other} (try --help)"))),
+            other => {
+                return Err(SitesError::new(format!(
+                    "unknown argument: {other} (try --help)"
+                )));
+            }
         }
     }
     let site_root = site_root.ok_or_else(|| {
@@ -224,7 +232,10 @@ fn main() -> ExitCode {
                 println!("  SKIP     {slug}  (no index.html)");
                 continue;
             }
-            println!("  PLAN     {slug}  -> {}/{slug}/", opts.extra_dest.display());
+            println!(
+                "  PLAN     {slug}  -> {}/{slug}/",
+                opts.extra_dest.display()
+            );
         }
     } else {
         println!(

@@ -1,0 +1,23 @@
+[package]
+name = "surmount-rekey"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SHC zero-knowledge backup re-key paste (PGP wrap via rage/age + gpg)"
+publish = false
+
+[[bin]]
+name = "surmount-rekey"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_rekey"
+path = "src/lib.rs"
+
+[dependencies]
+age.workspace = true
+anyhow.workspace = true
+secrecy = "0.10"
+
+[lints]
+workspace = true

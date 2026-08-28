@@ -51,9 +51,9 @@ pub fn parse_https_base(url: &str, sni_override: Option<&str>) -> Result<Connect
             "SURMOUNT_E2E_BASE_URL must not start with '-' (option-shaped)",
         ));
     }
-    let rest = url
-        .strip_prefix("https://")
-        .ok_or_else(|| ProbeError::fail("SURMOUNT_E2E_BASE_URL must be https://... (got non-https scheme)"))?;
+    let rest = url.strip_prefix("https://").ok_or_else(|| {
+        ProbeError::fail("SURMOUNT_E2E_BASE_URL must be https://... (got non-https scheme)")
+    })?;
     let rest = rest.split(['/', '?', '#']).next().unwrap_or("");
     if rest.is_empty() {
         return Err(ProbeError::fail("SURMOUNT_E2E_BASE_URL has empty host"));
@@ -78,17 +78,23 @@ pub fn parse_https_base(url: &str, sni_override: Option<&str>) -> Result<Connect
         (rest.to_string(), 443)
     };
     if host.is_empty() {
-        return Err(ProbeError::fail("empty host after parsing SURMOUNT_E2E_BASE_URL"));
+        return Err(ProbeError::fail(
+            "empty host after parsing SURMOUNT_E2E_BASE_URL",
+        ));
     }
     if host.starts_with('-') {
-        return Err(ProbeError::fail("host or port must not start with '-' (option-shaped)"));
+        return Err(ProbeError::fail(
+            "host or port must not start with '-' (option-shaped)",
+        ));
     }
     let servername = sni_override
         .filter(|s| !s.is_empty())
         .unwrap_or(host.as_str())
         .to_string();
     if servername.starts_with('-') {
-        return Err(ProbeError::fail("SURMOUNT_TLS_SERVERNAME must not start with '-'"));
+        return Err(ProbeError::fail(
+            "SURMOUNT_TLS_SERVERNAME must not start with '-'",
+        ));
     }
     let connect = if host.contains(':') {
         format!("[{host}]:{port}")
@@ -105,12 +111,14 @@ pub fn parse_https_base(url: &str, sni_override: Option<&str>) -> Result<Connect
 
 fn parse_port(p: &str) -> Result<u16, ProbeError> {
     if p.starts_with('-') {
-        return Err(ProbeError::fail("host or port must not start with '-' (option-shaped)"));
+        return Err(ProbeError::fail(
+            "host or port must not start with '-' (option-shaped)",
+        ));
     }
     let n: u32 = p
         .parse()
         .map_err(|_| ProbeError::fail(format!("invalid port '{p}'")))?;
-    if n < 1 || n > 65535 {
+    if !(1..=65535).contains(&n) {
         return Err(ProbeError::fail(format!("invalid port '{p}'")));
     }
     Ok(n as u16)
@@ -151,7 +159,10 @@ pub fn openssl_has_groups(help: &str) -> bool {
 }
 
 pub fn run_probe() -> Result<i32, ProbeError> {
-    if matches!(std::env::args().nth(1).as_deref(), Some("-h") | Some("--help")) {
+    if matches!(
+        std::env::args().nth(1).as_deref(),
+        Some("-h") | Some("--help")
+    ) {
         print!("{USAGE}");
         return Ok(0);
     }
@@ -228,9 +239,7 @@ pub fn run_probe() -> Result<i32, ProbeError> {
         }
         println!("result=CLASSICAL_ONLY");
         eprintln!("error: classical-only negotiated group: {g}");
-        eprintln!(
-            "\n  Handshake worked, but this probe did not negotiate a hybrid (MLKEM) group."
-        );
+        eprintln!("\n  Handshake worked, but this probe did not negotiate a hybrid (MLKEM) group.");
         return Ok(1);
     }
     if !out.status.success() {
@@ -275,9 +284,6 @@ mod tests {
     #[test]
     fn parse_negotiated_line() {
         let out = "Protocol: TLSv1.3\nNegotiated TLS1.3 group: X25519MLKEM768\n";
-        assert_eq!(
-            negotiated_group(out).as_deref(),
-            Some("X25519MLKEM768")
-        );
+        assert_eq!(negotiated_group(out).as_deref(), Some("X25519MLKEM768"));
     }
 }

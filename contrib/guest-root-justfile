@@ -1,0 +1,49 @@
+# Guest /root/justfile. Shipped by modules/operator-justfile.nix (not a
+# hand-placed snowflake). Diagnose on this box. Real build recipes stay
+# in the clone: cd /root/surmount-server && just
+#
+# Does not print addresses. Does not mutate mail.
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+default:
+    @echo "Surmount guest justfile (this box). Clone: /root/surmount-server"
+    @just --list
+
+# Units + nixbuilder slice MemoryMax. Read-only.
+status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "gen=$(readlink /run/current-system | sed 's|.*/||')"
+    echo "qemu=$(systemctl is-active qemu-guest-agent 2>/dev/null || echo n/a)"
+    echo "et=$(systemctl is-active eternal-terminal 2>/dev/null || echo n/a)"
+    for s in sshd stalwart-mail surmount-management-ui; do
+      printf '%s=%s ' "$s" "$(systemctl is-active "$s")"
+    done
+    echo
+    u="$(id -u nixbuilder 2>/dev/null || true)"
+    if [[ -n "${u}" ]]; then
+      echo "nixbuilder_uid=${u}"
+      systemctl show "user-${u}.slice" -p MemoryMax,MemoryCurrent,Description --no-pager
+    fi
+    echo "lake=$(pgrep -c -x lake 2>/dev/null || echo 0)"
+
+# Journal errors this boot (no follow).
+logs:
+    journalctl -p err -b -n 40 --no-pager
+
+# Live load on THIS box. Never ssh or et to itself.
+# If the clock in this pane stops, the pane is dead. Press q, exit the
+# remote shell, then run `just btop` from the laptop (Eternal Terminal).
+btop *args:
+    #!/usr/bin/env bash
+    echo "Guest btop (this box). If the clock stops, this pane is dead: press q, exit the remote shell, then run just btop from the laptop." >&2
+    exec btop {{args}}
+
+inxi *args:
+    inxi {{args}}
+
+# Local SIGKILL of builder hogs if MemAvailable is below 16 GiB. No SSH.
+# Laptop: `just scram` SSHes --now (default root@surmount-1).
+scram:
+    surmount-scram --now

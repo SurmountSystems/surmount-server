@@ -2,12 +2,23 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_secrets-export-bw-to-staging")
+}
+
+/// Nix sandbox unpack is a flake tree; temp staging under /build would look
+/// "inside" it. SURMOUNT_REPO_ROOT is the documented test pin.
+fn export_cmd() -> Command {
+    let mut c = Command::new(bin());
+    c.env(
+        "SURMOUNT_REPO_ROOT",
+        "/nonexistent-surmount-repo-root-hermetic",
+    );
+    c
 }
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -27,7 +38,7 @@ fn temp_dir(label: &str) -> PathBuf {
 
 const PLANT: &str = "SURMOUNT-TEST-EXPORT-PAYLOAD-7e2a-do-not-log";
 
-fn make_map(map: &PathBuf, id: &str, kind: &str, path: &str, bw_item: &str, wrap: Option<&str>) {
+fn make_map(map: &Path, id: &str, kind: &str, path: &str, bw_item: &str, wrap: Option<&str>) {
     let dir = map.join(id);
     fs::create_dir_all(&dir).unwrap();
     let mut body = format!(
@@ -54,7 +65,7 @@ fn refuse_missing_source() {
     let work = temp_dir("nosrc");
     let map = work.join("map");
     fs::create_dir_all(&map).unwrap();
-    let out = Command::new(bin())
+    let out = export_cmd()
         .args(["--map"])
         .arg(&map)
         .args(["--staging"])
@@ -82,7 +93,7 @@ fn fixture_export_wraps_admin_token() {
         Some("ADMIN_TOKEN"),
     );
     fs::write(fixture.join("vw/secret"), PLANT).unwrap();
-    let out = Command::new(bin())
+    let out = export_cmd()
         .args(["--map"])
         .arg(&map)
         .args(["--staging"])
@@ -118,7 +129,7 @@ fn dry_run_fixture_no_write() {
         None,
     );
     fs::write(fixture.join("a/secret"), PLANT).unwrap();
-    let out = Command::new(bin())
+    let out = export_cmd()
         .args(["--dry-run", "--map"])
         .arg(&map)
         .args(["--staging"])
@@ -145,7 +156,7 @@ fn host_mismatch_fails() {
     )
     .unwrap();
     fs::write(fixture.join("a/secret"), PLANT).unwrap();
-    let out = Command::new(bin())
+    let out = export_cmd()
         .args(["--map"])
         .arg(&map)
         .args(["--staging"])
@@ -172,15 +183,11 @@ fn mock_bw_path() {
         None,
     );
     let bw = work.join("bw");
-    fs::write(
-        &bw,
-        format!("#!/usr/bin/env bash\nset -euo pipefail\necho -n '{PLANT}'\n"),
-    )
-    .unwrap();
+    fs::write(&bw, format!("#!/bin/sh\nset -eu\necho -n '{PLANT}'\n")).unwrap();
     let mut p = fs::metadata(&bw).unwrap().permissions();
     p.set_mode(0o755);
     fs::set_permissions(&bw, p).unwrap();
-    let out = Command::new(bin())
+    let out = export_cmd()
         .args(["--map"])
         .arg(&map)
         .args(["--staging"])
@@ -192,5 +199,8 @@ fn mock_bw_path() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
     assert!(!err.contains(PLANT));
-    assert_eq!(fs::read_to_string(staging.join("tok/secret")).unwrap(), PLANT);
+    assert_eq!(
+        fs::read_to_string(staging.join("tok/secret")).unwrap(),
+        PLANT
+    );
 }

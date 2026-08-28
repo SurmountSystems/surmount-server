@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use surmount_niced_builder::{parse_args, print_help, run, Mode, Settings};
+use surmount_niced_builder::{Mode, Settings, parse_args, print_help, run};
 
 fn main() -> ExitCode {
     match parse_args(std::env::args()) {

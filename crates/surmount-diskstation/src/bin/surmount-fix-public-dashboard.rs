@@ -66,7 +66,8 @@ fn main() -> ExitCode {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let mut host_id = std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
+    let mut host_id =
+        std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
     let mut staging = String::new();
     let mut target = std::env::var("SURMOUNT_SECRETS_TARGET")
         .ok()
@@ -167,7 +168,9 @@ fn main() -> ExitCode {
         });
     }
     if target.is_none() && dest_root.is_none() && password_file.is_none() {
-        eprintln!("fix-public-dashboard: need --target USER@HOST, --dest-root DIR, or --password-file PATH");
+        eprintln!(
+            "fix-public-dashboard: need --target USER@HOST, --dest-root DIR, or --password-file PATH"
+        );
         return ExitCode::from(1);
     }
     eprintln!("fix-public-dashboard: host={host_id} staging={staging}");
@@ -202,8 +205,11 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let free443 = match find_driver(&["surmount-free-stalwart-public-443", "free-stalwart-public-443"])
-        .or_else(|_| leftover("script/free-stalwart-public-443.sh"))
+    let free443 = match find_driver(&[
+        "surmount-free-stalwart-public-443",
+        "free-stalwart-public-443",
+    ])
+    .or_else(|_| leftover("script/free-stalwart-public-443.sh"))
     {
         Ok(p) => p,
         Err(e) => {
@@ -213,9 +219,16 @@ fn main() -> ExitCode {
     };
 
     if dry_run {
-        eprintln!("fix-public-dashboard: dry-run: would run {} then {} then {}", recovery.display(), bootstrap.display(), free443.display());
+        eprintln!(
+            "fix-public-dashboard: dry-run: would run {} then {} then {}",
+            recovery.display(),
+            bootstrap.display(),
+            free443.display()
+        );
         if strip {
-            eprintln!("fix-public-dashboard: dry-run: would strip recovery drop-in + recovery.env after mint (hygiene)");
+            eprintln!(
+                "fix-public-dashboard: dry-run: would strip recovery drop-in + recovery.env after mint (hygiene)"
+            );
         }
         eprintln!("fix-public-dashboard: dry-run compose plan complete (not live free-443 green)");
         return ExitCode::SUCCESS;
@@ -238,23 +251,31 @@ fn main() -> ExitCode {
         if let Some(c) = &cli_bin {
             rec.args(["--cli", c]);
         }
-        eprintln!("fix-public-dashboard: step recovery: running stalwart-recovery-unlock (password not logged)");
+        eprintln!(
+            "fix-public-dashboard: step recovery: running stalwart-recovery-unlock (password not logged)"
+        );
         let st = rec.status();
         if !st.map(|s| s.success()).unwrap_or(false) {
             eprintln!("fix-public-dashboard: recovery unlock failed. Secret values not logged.");
             return ExitCode::from(1);
         }
     } else {
-        eprintln!("fix-public-dashboard: using operator --password-file (skip recovery generate; value not logged)");
+        eprintln!(
+            "fix-public-dashboard: using operator --password-file (skip recovery generate; value not logged)"
+        );
     }
 
     if no_free {
         eprintln!("fix-public-dashboard: skip free-443 (--no-free-443)");
     } else if live_free {
-        eprintln!("fix-public-dashboard: step free-443: LIVE apply + restart (not CI green; operator host only)");
+        eprintln!(
+            "fix-public-dashboard: step free-443: LIVE apply + restart (not CI green; operator host only)"
+        );
         let _ = free443;
     } else {
-        eprintln!("fix-public-dashboard: free-443 dry-run via leftover/bootstrap when present (not live free-443 green)");
+        eprintln!(
+            "fix-public-dashboard: free-443 dry-run via leftover/bootstrap when present (not live free-443 green)"
+        );
     }
     ExitCode::SUCCESS
 }

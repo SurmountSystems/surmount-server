@@ -17,3 +17,6 @@ path = "src/bin/secrets-export-bw-to-staging.rs"
 [lib]
 name = "surmount_secrets_install"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

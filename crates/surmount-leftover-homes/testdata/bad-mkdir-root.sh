@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Detector fixture only: ROOT-relative leftover home (must fail --paths).
 # Synthetic. Never copy this pattern into product scripts.
 ROOT="/tmp/surmount-fixture-root"

@@ -7,8 +7,8 @@ use surmount_secrets_install::run_from_staging;
 use surmount_secrets_prompt::{default_staging_dir, write_staging_item};
 
 use crate::error::{Result, ToolError};
-use crate::paths_local::{path_has_dot_segments, validate_recovery_path};
 use crate::token::which_or;
+use paths_local::{path_has_dot_segments, validate_recovery_path};
 
 mod paths_local {
     use crate::error::{Result, ToolError};
@@ -27,12 +27,19 @@ mod paths_local {
             ));
         }
         if !p.starts_with('/') {
-            return Err(ToolError::fail("Domain B path must be absolute".to_string()));
+            return Err(ToolError::fail(
+                "Domain B path must be absolute".to_string(),
+            ));
         }
         if p.starts_with('-') {
-            return Err(ToolError::fail("Domain B path must not start with '-'".to_string()));
+            return Err(ToolError::fail(
+                "Domain B path must not start with '-'".to_string(),
+            ));
         }
-        if !p.chars().all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c)) {
+        if !p
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c))
+        {
             return Err(ToolError::fail(
                 "Domain B path fails strict charset (only /[A-Za-z0-9._/-]+; no spaces or metacharacters)"
                     .to_string(),
@@ -44,7 +51,9 @@ mod paths_local {
             ));
         }
         if p.contains("//") {
-            return Err(ToolError::fail("Domain B path must not contain '//'".to_string()));
+            return Err(ToolError::fail(
+                "Domain B path must not contain '//'".to_string(),
+            ));
         }
         let ok = p == "/var/lib/surmount/secrets"
             || p.starts_with("/var/lib/surmount/secrets/")
@@ -92,7 +101,8 @@ where
     S: AsRef<str>,
 {
     let argv: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
-    let mut host = std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
+    let mut host =
+        std::env::var("SURMOUNT_SECRETS_HOST_ID").unwrap_or_else(|_| "surmount-1".into());
     let mut staging = String::new();
     let mut target = std::env::var("SURMOUNT_SECRETS_TARGET")
         .ok()
@@ -180,7 +190,9 @@ where
                 systemctl = need(&argv, i)?;
             }
             other if other.starts_with('-') => {
-                return Err(ToolError::fail(format!("unknown option: {other} (try --help)")));
+                return Err(ToolError::fail(format!(
+                    "unknown option: {other} (try --help)"
+                )));
             }
             other => return Err(ToolError::fail(format!("unexpected argument: {other}"))),
         }
@@ -208,20 +220,28 @@ where
 
     if do_strip {
         if do_install == "yes" || install_only {
-            return Err(ToolError::fail("use either --strip or --install, not both".to_string()));
+            return Err(ToolError::fail(
+                "use either --strip or --install, not both".to_string(),
+            ));
         }
         if probe_only {
-            return Err(ToolError::fail("use either --strip or --probe-only, not both".to_string()));
+            return Err(ToolError::fail(
+                "use either --strip or --probe-only, not both".to_string(),
+            ));
         }
         if do_generate {
-            return Err(ToolError::fail("use either --strip or --generate, not both".to_string()));
+            return Err(ToolError::fail(
+                "use either --strip or --generate, not both".to_string(),
+            ));
         }
         if target.is_empty() && dest_root.is_empty() {
             return Err(ToolError::fail(
                 "--strip requires --target USER@HOST or --dest-root DIR".to_string(),
             ));
         }
-        return run_strip(&dest_root, &target, &domain_b, &ssh, &systemctl, no_restart, dry_run);
+        return run_strip(
+            &dest_root, &target, &domain_b, &ssh, &systemctl, no_restart, dry_run,
+        );
     }
 
     if do_install == "auto" {
@@ -261,14 +281,18 @@ where
         log_line("install-only: using existing Domain A staging (values not logged)");
     } else if do_reuse {
         if staging_has(&staging_path) {
-            log_line("reuse: Domain A staging already non-empty (values not logged); skip generate");
+            log_line(
+                "reuse: Domain A staging already non-empty (values not logged); skip generate",
+            );
         } else {
             return Err(ToolError::fail(format!(
                 "reuse requested but Domain A staging empty under {}/{ITEM} (pass --generate)",
                 staging_path.display()
             )));
         }
-    } else if do_generate || (do_install == "yes" && !staging_has(&staging_path)) || !staging_has(&staging_path)
+    } else if do_generate
+        || (do_install == "yes" && !staging_has(&staging_path))
+        || !staging_has(&staging_path)
     {
         if dry_run {
             log_line(&format!(
@@ -280,7 +304,9 @@ where
             write_staging(&staging_path, &host, &domain_b, &user, &pw)?;
         }
     } else {
-        log_line("Domain A staging already present (values not logged); pass --generate to replace");
+        log_line(
+            "Domain A staging already present (values not logged); pass --generate to replace",
+        );
     }
 
     if do_install != "yes" {
@@ -292,14 +318,18 @@ where
     }
 
     if dry_run {
-        log_line(&format!("dry-run: would install kind={KIND} path={domain_b}"));
+        log_line(&format!(
+            "dry-run: would install kind={KIND} path={domain_b}"
+        ));
         if !dest_root.is_empty() {
             log_line(&format!(
                 "dry-run: would materialize under dest-root={dest_root} (durable drop-in {DROPIN})"
             ));
         }
         if !no_restart {
-            log_line(&format!("dry-run: would systemctl daemon-reload + restart {UNIT}"));
+            log_line(&format!(
+                "dry-run: would systemctl daemon-reload + restart {UNIT}"
+            ));
         }
         if !no_probe {
             log_line(&format!(
@@ -317,16 +347,22 @@ where
     }
 
     // Isolated staging: only this kind.
-    let iso = std::env::temp_dir().join(format!("surmount-recovery-install.{}", std::process::id()));
+    let iso =
+        std::env::temp_dir().join(format!("surmount-recovery-install.{}", std::process::id()));
     fs::create_dir_all(iso.join(ITEM))?;
     let _ = set_mode(&iso, 0o700);
     fs::copy(
         staging_path.join(ITEM).join("attributes"),
         iso.join(ITEM).join("attributes"),
     )?;
-    fs::copy(staging_path.join(ITEM).join("secret"), iso.join(ITEM).join("secret"))?;
+    fs::copy(
+        staging_path.join(ITEM).join("secret"),
+        iso.join(ITEM).join("secret"),
+    )?;
     let _ = set_mode(&iso.join(ITEM).join("secret"), 0o600);
-    log_line("installing Domain B kind=stalwart-recovery-admin only (isolated staging; values not logged)");
+    log_line(
+        "installing Domain B kind=stalwart-recovery-admin only (isolated staging; values not logged)",
+    );
     let inst = run_from_staging(
         &iso,
         &host,
@@ -369,7 +405,10 @@ where
             }
             fs::write(&abs, &body)?;
             let _ = set_mode(Path::new(&abs), 0o644);
-            if fs::read_to_string(&abs).unwrap_or_default().contains("STALWART_RECOVERY_ADMIN=") {
+            if fs::read_to_string(&abs)
+                .unwrap_or_default()
+                .contains("STALWART_RECOVERY_ADMIN=")
+            {
                 return Err(ToolError::fail(
                     "internal: drop-in must not contain password material".to_string(),
                 ));
@@ -383,7 +422,9 @@ where
                 log_line(&format!("daemon-reload + restart {UNIT} via {systemctl}"));
                 let st = Command::new(&systemctl).arg("daemon-reload").status()?;
                 if !st.success() {
-                    return Err(ToolError::fail("systemctl daemon-reload failed".to_string()));
+                    return Err(ToolError::fail(
+                        "systemctl daemon-reload failed".to_string(),
+                    ));
                 }
                 let st = Command::new(&systemctl).args(["restart", UNIT]).status()?;
                 if !st.success() {
@@ -440,7 +481,9 @@ fn run_strip(
         if no_restart {
             log_line("dry-run: would skip restart (--no-restart)");
         } else {
-            log_line(&format!("dry-run: would systemctl daemon-reload + restart {UNIT}"));
+            log_line(&format!(
+                "dry-run: would systemctl daemon-reload + restart {UNIT}"
+            ));
         }
         log_line("dry-run: note: Domain A staging is not removed (host strip only;");
         return Ok(());
@@ -459,12 +502,16 @@ fn run_strip(
         let _ = fs::remove_dir(format!("{dest_root}/run/systemd/system/{UNIT}.service.d"));
         if !no_restart {
             if Path::new(systemctl).is_file() || which_or(systemctl).is_ok() {
-                log_line(&format!("strip: daemon-reload + restart {UNIT} via {systemctl}"));
+                log_line(&format!(
+                    "strip: daemon-reload + restart {UNIT} via {systemctl}"
+                ));
                 Command::new(systemctl).arg("daemon-reload").status()?;
                 Command::new(systemctl).args(["restart", UNIT]).status()?;
             }
         } else {
-            log_line("strip: skip restart (--no-restart); process may keep STALWART_RECOVERY_ADMIN until restart");
+            log_line(
+                "strip: skip restart (--no-restart); process may keep STALWART_RECOVERY_ADMIN until restart",
+            );
         }
         log_line("strip finished under dest-root (values not logged)");
         log_line("note: Domain A staging was not removed (host strip only)");
@@ -495,7 +542,9 @@ fn run_strip(
         log_line("remote strip finished");
         return Ok(());
     }
-    Err(ToolError::fail("internal: strip without target or dest-root".to_string()))
+    Err(ToolError::fail(
+        "internal: strip without target or dest-root".to_string(),
+    ))
 }
 
 fn run_probe_only(
@@ -512,7 +561,9 @@ fn run_probe_only(
     let body = if !dest_root.is_empty() {
         let env_file = format!("{dest_root}{domain_b}");
         if !Path::new(&env_file).is_file() {
-            log_line(&format!("probe BLOCKED: recovery env missing at {env_file}"));
+            log_line(&format!(
+                "probe BLOCKED: recovery env missing at {env_file}"
+            ));
             return Err(ToolError::blocked("no recovery env material".to_string()));
         }
         fs::read_to_string(&env_file)?
@@ -600,12 +651,15 @@ fn write_staging(staging: &Path, host: &str, path: &str, user: &str, password: &
 }
 
 fn generate_password() -> Result<String> {
+    use std::io::Read;
     let mut buf = [0u8; 32];
-    // getrandom via /dev/urandom (no extra crate).
-    let ur = fs::read("/dev/urandom").unwrap_or_default();
-    if ur.len() >= 32 {
-        buf.copy_from_slice(&ur[..32]);
-    }
+    // Bounded read. fs::read("/dev/urandom") never EOFs and hangs the Nix check.
+    let mut f = fs::File::open("/dev/urandom").map_err(|_| {
+        ToolError::fail("failed to generate high-entropy password (need /dev/urandom)".to_string())
+    })?;
+    f.read_exact(&mut buf).map_err(|_| {
+        ToolError::fail("failed to generate high-entropy password (need /dev/urandom)".to_string())
+    })?;
     let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let pw: String = buf
         .iter()
@@ -613,7 +667,7 @@ fn generate_password() -> Result<String> {
         .collect();
     if pw.len() < 24 || pw.contains(':') {
         return Err(ToolError::fail(
-            "failed to generate high-entropy password (need /dev/urandom or openssl)".to_string(),
+            "failed to generate high-entropy password (need /dev/urandom)".to_string(),
         ));
     }
     Ok(pw)
@@ -633,11 +687,17 @@ fn extract_password(body: &str) -> Result<String> {
     let line = body
         .lines()
         .find(|l| l.trim_start().starts_with("STALWART_RECOVERY_ADMIN="))
-        .ok_or_else(|| ToolError::fail("probe: could not parse STALWART_RECOVERY_ADMIN from material".to_string()))?;
+        .ok_or_else(|| {
+            ToolError::fail(
+                "probe: could not parse STALWART_RECOVERY_ADMIN from material".to_string(),
+            )
+        })?;
     let rest = line.split_once('=').map(|x| x.1).unwrap_or("").trim();
     let pw = rest.split_once(':').map(|x| x.1).unwrap_or("");
     if pw.is_empty() {
-        return Err(ToolError::fail("probe: could not parse password".to_string()));
+        return Err(ToolError::fail(
+            "probe: could not parse password".to_string(),
+        ));
     }
     Ok(pw.to_string())
 }

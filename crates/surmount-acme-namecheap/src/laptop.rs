@@ -72,11 +72,7 @@ where
         Err(e) => {
             let s = e.to_string();
             eprintln!("{s}");
-            if s.contains("BLOCKED") {
-                2
-            } else {
-                1
-            }
+            if s.contains("BLOCKED") { 2 } else { 1 }
         }
     }
 }
@@ -177,7 +173,10 @@ where
                 i += 1;
             }
             other => {
-                return Err(die("laptop-renew-cert", format!("unknown argument: {other}")));
+                return Err(die(
+                    "laptop-renew-cert",
+                    format!("unknown argument: {other}"),
+                ));
             }
         }
         i += 1;
@@ -201,7 +200,9 @@ where
     let namecheap = match namecheap {
         Some(p) => p,
         None => {
-            return Err(blocked("missing Namecheap env (laptop custody; ClientIp is laptop egress)"));
+            return Err(blocked(
+                "missing Namecheap env (laptop custody; ClientIp is laptop egress)",
+            ));
         }
     };
     let meta = fs::symlink_metadata(&namecheap).map_err(|_| {
@@ -234,11 +235,15 @@ where
         )));
     }
     let settle = env_file_key(&namecheap, "SettleSeconds");
-    let floor = if directory_label == "production" { 120u64 } else { 30u64 };
+    let floor = if directory_label == "production" {
+        120u64
+    } else {
+        30u64
+    };
     if let Some(s) = settle {
-        let n: u64 = s
-            .parse()
-            .map_err(|_| blocked("SettleSeconds in Namecheap env is not an integer (value not logged)."))?;
+        let n: u64 = s.parse().map_err(|_| {
+            blocked("SettleSeconds in Namecheap env is not an integer (value not logged).")
+        })?;
         if n < floor {
             return Err(blocked(format!(
                 "SettleSeconds is below floor {floor} for {directory_label}. Prior production issue needed 120 because hook wait sees Namecheap API, not public NS."
@@ -250,7 +255,9 @@ where
         )));
     }
     if install_timer && target.is_empty() {
-        return Err(blocked("--install-timer requires --target so weekly --live can install PEMs"));
+        return Err(blocked(
+            "--install-timer requires --target so weekly --live can install PEMs",
+        ));
     }
     if domains.is_empty() {
         domains = "services.surmount.systems,mail.surmount.systems,surmount.systems,www.surmount.systems,mta-sts.surmount.systems".into();
@@ -286,7 +293,9 @@ where
         return do_install(&cfg);
     }
     // print-only default
-    eprintln!("laptop-renew-cert: directory={directory_label} url={directory_url} (explicit; not silent)");
+    eprintln!(
+        "laptop-renew-cert: directory={directory_label} url={directory_url} (explicit; not silent)"
+    );
     eprintln!("laptop-renew-cert: host ACME stays off");
     eprintln!("laptop-renew-cert: domains={}", cfg.domains);
     eprintln!("laptop-renew-cert: print-only (pass --live or --issue to issue)");
@@ -316,7 +325,14 @@ fn do_check(cfg: &Cfg, label: &str, url: &str) -> anyhow::Result<u8> {
     }
     let secs = cfg.renew_days.saturating_mul(86400);
     let status = Command::new("openssl")
-        .args(["x509", "-in", &cert.to_string_lossy(), "-noout", "-checkend", &secs.to_string()])
+        .args([
+            "x509",
+            "-in",
+            &cert.to_string_lossy(),
+            "-noout",
+            "-checkend",
+            &secs.to_string(),
+        ])
         .status();
     match status {
         Ok(s) if s.success() => {
@@ -335,7 +351,7 @@ fn do_issue(cfg: &Cfg, label: &str, url: &str) -> anyhow::Result<u8> {
     let wrap = cfg.work_dir.join("acme-dns-hook-wrap.sh");
     let home = std::env::var("HOME").unwrap_or_default();
     let wrap_body = format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\nexport SURMOUNT_ACME_DNS_NAMECHEAP_ENV={}\nexport HOME={}\nexec acme-dns-hook-namecheap \"$@\"\n",
+        "#!/bin/sh\nset -eu\nexport SURMOUNT_ACME_DNS_NAMECHEAP_ENV={}\nexport HOME={}\nexec acme-dns-hook-namecheap \"$@\"\n",
         cfg.namecheap_env.display(),
         home
     );

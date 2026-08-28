@@ -92,6 +92,11 @@ in
     # SSH is stuck. Default off; host-local enables on this QEMU VPS.
     (mkIf (cfg.enable && cfg.hardening.enable && cfg.hardening.qemuGuestAgent.enable) {
       services.qemuGuest.enable = true;
+      # Stock nixpkgs only starts the unit via udev SYSTEMD_WANTS on the
+      # virtio port. After a switch that udev event has already fired, so
+      # the unit stays dead. Want multi-user so SHC inject works on boot
+      # and after this generation.
+      systemd.services.qemu-guest-agent.wantedBy = [ "multi-user.target" ];
     })
 
     # Access-control nft fragment: opt-in, lean private default off.

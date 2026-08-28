@@ -100,7 +100,11 @@ pub fn save_mock(dir: &Path, zone: &Zone) -> Result<()> {
     fs::create_dir_all(dir).map_err(|e| die(format!("mock dir: {e}")))?;
     let hosts = dir.join("hosts.txt");
     let tmp = dir.join(".hosts.tmp");
-    if tmp.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if tmp
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         let _ = fs::remove_file(&tmp);
         return Err(die("refuse: mktemp produced a symlink"));
     }
@@ -150,7 +154,11 @@ pub fn drop_caa_tag_at_host(zone: &mut Zone, host: &str, tag: &str) {
         if r.name == host && r.r#type == "CAA" {
             let mut toks = r.address.split_whitespace();
             let _flags = toks.next();
-            let t = toks.next().unwrap_or("").trim_matches('"').to_ascii_lowercase();
+            let t = toks
+                .next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .to_ascii_lowercase();
             t != want
         } else {
             true

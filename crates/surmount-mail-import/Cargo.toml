@@ -13,3 +13,6 @@ path = "src/bin/surmount-mail-import-maildir.rs"
 [lib]
 name = "surmount_mail_import"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

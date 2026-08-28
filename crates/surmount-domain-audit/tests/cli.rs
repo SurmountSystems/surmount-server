@@ -42,30 +42,31 @@ impl Harness {
         fs::write(
             &dig,
             format!(
-                r#"#!/usr/bin/env bash
-set -euo pipefail
+                r#"#!/bin/sh
+set -eu
 FIXTURE={fixture_q:?}
 name=""
 rrtype="A"
 ptr=""
-positional=()
-while (( $# > 0 )); do
+while [ "$#" -gt 0 ]; do
   case "$1" in
     +*) shift ;;
     @*) shift ;;
     -x) ptr="$2"; shift 2 ;;
-    *) positional+=("$1"); shift ;;
+    *)
+      if [ -z "$name" ]; then name="$1"; else rrtype="$1"; fi
+      shift
+      ;;
   esac
 done
-if [[ -n "$ptr" ]]; then
+if [ -n "$ptr" ]; then
   f="$FIXTURE/$ptr/PTR"
-  [[ -f "$f" ]] && cat "$f"
+  [ -f "$f" ] && cat "$f"
   exit 0
 fi
-name="${{positional[0]:-}}"
-rrtype="${{positional[1]:-A}}"
+[ -n "$rrtype" ] || rrtype="A"
 f="$FIXTURE/$name/$rrtype"
-[[ -f "$f" ]] && cat "$f"
+[ -f "$f" ] && cat "$f"
 exit 0
 "#
             ),
@@ -75,11 +76,11 @@ exit 0
         let curl = bin_dir.join("curl");
         fs::write(
             &curl,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
+            r#"#!/bin/sh
+set -eu
 url=""
 have_write_out=0
-while (( $# > 0 )); do
+while [ "$#" -gt 0 ]; do
   case "$1" in
     --write-out) have_write_out=1; shift 2 ;;
     --output|--max-redirs|--connect-timeout|--max-time|--user-agent) shift 2 ;;
@@ -88,10 +89,10 @@ while (( $# > 0 )); do
     *) shift ;;
   esac
 done
-if [[ "$url" == *mta-sts.* ]]; then
-  exit 22
-fi
-if (( have_write_out == 1 )); then
+case "$url" in
+  *mta-sts.*) exit 22 ;;
+esac
+if [ "$have_write_out" = 1 ]; then
   printf '%s' "code=200 remote=203.0.113.10 connect=0.001s tls=0.002s total=0.003s redirects=0 final=${url}"
 fi
 exit 0
@@ -102,16 +103,22 @@ exit 0
         let openssl = bin_dir.join("openssl");
         fs::write(
             &openssl,
-            r#"#!/usr/bin/env bash
-set -euo pipefail
-if [[ "${1:-}" == "s_client" ]]; then
+            r#"#!/bin/sh
+set -eu
+if [ "${1:-}" = "s_client" ]; then
   printf '%s\n' "CONNECTED(00000003)"
   exit 0
 fi
-if [[ "${1:-}" == "x509" ]]; then
-  if [[ "$*" == *-subject* ]]; then printf '%s\n' "subject=CN=hermetic.test"; fi
-  if [[ "$*" == *-issuer* ]]; then printf '%s\n' "issuer=CN=hermetic-issuer"; fi
-  if [[ "$*" == *-dates* ]]; then printf '%s\n' "notBefore=Jan 1 00:00:00 2026 GMT" "notAfter=Jan 1 00:00:00 2027 GMT"; fi
+if [ "${1:-}" = "x509" ]; then
+  case " $* " in
+    *" -subject "*) printf '%s\n' "subject=CN=hermetic.test" ;;
+  esac
+  case " $* " in
+    *" -issuer "*) printf '%s\n' "issuer=CN=hermetic-issuer" ;;
+  esac
+  case " $* " in
+    *" -dates "*) printf '%s\n' "notBefore=Jan 1 00:00:00 2026 GMT" "notAfter=Jan 1 00:00:00 2027 GMT" ;;
+  esac
   exit 0
 fi
 exit 0
@@ -132,10 +139,7 @@ exit 0
         self.write_rr(
             apex,
             "NS",
-            &[
-                "dns1.registrar-servers.com.",
-                "dns2.registrar-servers.com.",
-            ],
+            &["dns1.registrar-servers.com.", "dns2.registrar-servers.com."],
         );
         self.write_rr(
             apex,
@@ -204,7 +208,11 @@ fn leftover_parent_dnssec_without_dnskey_is_fail() {
         "DS",
         &["370 13 2 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     );
-    h.write_rr("cryptoquick.com", "MX", &["10 eforward1.registrar-servers.com."]);
+    h.write_rr(
+        "cryptoquick.com",
+        "MX",
+        &["10 eforward1.registrar-servers.com."],
+    );
     h.write_rr("eforward1.registrar-servers.com", "A", &["203.0.113.53"]);
     let (rc, out) = h.run(&["--no-color", "--timeout", "2", "cryptoquick.com"]);
     assert!(out.contains("[FAIL]") && out.contains("DS record exists but no DNSKEY"));
@@ -220,7 +228,13 @@ fn sha1_digest_type_1_fails_with_and_without_dnskey() {
         "DS",
         &["2368 13 1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     );
-    let (rc, out) = h.run(&["--no-color", "--timeout", "2", "--static-site", "sha1-noden.test"]);
+    let (rc, out) = h.run(&[
+        "--no-color",
+        "--timeout",
+        "2",
+        "--static-site",
+        "sha1-noden.test",
+    ]);
     assert!(out.contains("[FAIL]") && (out.contains("digest type 1") || out.contains("SHA-1")));
     assert_eq!(rc, 2);
 
@@ -262,7 +276,13 @@ fn type2_ds_plus_dnskey_pass_unsigned_info() {
         "DNSKEY",
         &["257 3 13 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
     );
-    let (rc, out) = h.run(&["--no-color", "--timeout", "2", "--static-site", "dnssec-ok.test"]);
+    let (rc, out) = h.run(&[
+        "--no-color",
+        "--timeout",
+        "2",
+        "--static-site",
+        "dnssec-ok.test",
+    ]);
     assert!(out.contains("[PASS] DNSSEC delegation and DNSKEY"));
     assert!(!out.contains("[FAIL]") || !out.contains("digest type 1"));
     assert!(!out.contains("[INFO] DNSSEC is not enabled"));
@@ -270,7 +290,13 @@ fn type2_ds_plus_dnskey_pass_unsigned_info() {
 
     h.reset();
     h.seed_apex_web("unsigned.test");
-    let (_rc, out) = h.run(&["--no-color", "--timeout", "2", "--static-site", "unsigned.test"]);
+    let (_rc, out) = h.run(&[
+        "--no-color",
+        "--timeout",
+        "2",
+        "--static-site",
+        "unsigned.test",
+    ]);
     assert!(out.contains("[INFO] DNSSEC is not enabled"));
     assert!(!out.contains("[FAIL]") || !out.contains("digest type"));
 }
@@ -292,7 +318,10 @@ fn mailbox_complete(h: &Harness, apex: &str, mx: &str) {
     h.write_rr(
         apex,
         "CAA",
-        &[r#"0 issue "letsencrypt.org""#, r#"0 issuewild "letsencrypt.org""#],
+        &[
+            r#"0 issue "letsencrypt.org""#,
+            r#"0 issuewild "letsencrypt.org""#,
+        ],
     );
     h.write_rr(
         &format!("_dmarc.{apex}"),
@@ -320,7 +349,11 @@ fn mailbox_complete(h: &Harness, apex: &str, mx: &str) {
 fn extra_mailbox_missing_and_eforward_and_custom_mx() {
     let h = Harness::new();
     h.seed_apex_web("cryptoquick.com");
-    h.write_rr("cryptoquick.com", "MX", &["10 eforward1.registrar-servers.com."]);
+    h.write_rr(
+        "cryptoquick.com",
+        "MX",
+        &["10 eforward1.registrar-servers.com."],
+    );
     h.write_rr("eforward1.registrar-servers.com", "A", &["203.0.113.53"]);
     let (rc, out) = h.run(&["--no-color", "--timeout", "2", "cryptoquick.com"]);
     assert!(out.contains("[FAIL]") && out.contains("SPF"));
@@ -329,18 +362,28 @@ fn extra_mailbox_missing_and_eforward_and_custom_mx() {
     assert!(out.contains("DMARC"));
     assert!(out.contains("TLS-RPT") || out.contains("TLS reporting"));
     assert!(out.contains("CAA"));
-    assert!(out.contains("eforward") || out.contains("Email Forwarding") || out.contains("public MX"));
+    assert!(
+        out.contains("eforward") || out.contains("Email Forwarding") || out.contains("public MX")
+    );
     assert!(!out.contains("[FAIL]") || !out.contains("MTA-STS") || out.contains("not required"));
     assert_eq!(rc, 2);
 
     h.reset();
-    mailbox_complete(&h, "baxterartworks.com", "10 eforward1.registrar-servers.com.");
+    mailbox_complete(
+        &h,
+        "baxterartworks.com",
+        "10 eforward1.registrar-servers.com.",
+    );
     let (rc, out) = h.run(&["--no-color", "--timeout", "2", "baxterartworks.com"]);
-    assert!(out.contains("eforward") || out.contains("Email Forwarding") || out.contains("public MX"));
+    assert!(
+        out.contains("eforward") || out.contains("Email Forwarding") || out.contains("public MX")
+    );
     assert!(out.contains("[WARN]") && out.contains("p=none"));
     assert!(
         out.to_ascii_lowercase().contains("mta-sts is not required")
-            || out.to_ascii_lowercase().contains("mta-sts is not configured")
+            || out
+                .to_ascii_lowercase()
+                .contains("mta-sts is not configured")
     );
     assert_eq!(rc, 2);
 
@@ -375,7 +418,9 @@ fn emailtype_fwd_static_site_and_flags() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(text.contains("EmailType") || text.contains("FWD") || text.contains("Email Forwarding"));
+    assert!(
+        text.contains("EmailType") || text.contains("FWD") || text.contains("Email Forwarding")
+    );
     assert_eq!(out.status.code().unwrap_or(1), 2);
 
     h.reset();
@@ -383,18 +428,26 @@ fn emailtype_fwd_static_site_and_flags() {
     h.write_rr("btcfur.com", "MX", &["10 eforward1.registrar-servers.com."]);
     h.write_rr("eforward1.registrar-servers.com", "A", &["203.0.113.53"]);
     let (_rc, out) = h.run(&["--no-color", "--timeout", "2", "btcfur.com"]);
-    assert!(
-        !out.contains("[FAIL]")
-            || !(out.contains("eforward") && out.contains("[FAIL]"))
-    );
+    assert!(!out.contains("[FAIL]") || !(out.contains("eforward") && out.contains("[FAIL]")));
     let fail_mail = out.contains("[FAIL]")
-        && (out.contains("SPF") || out.contains("DKIM") || out.contains("DMARC") || out.contains("TLS-RPT") || out.contains("CAA"));
+        && (out.contains("SPF")
+            || out.contains("DKIM")
+            || out.contains("DMARC")
+            || out.contains("TLS-RPT")
+            || out.contains("CAA"));
     assert!(!fail_mail);
-    assert!(!(out.to_ascii_lowercase().contains("mailbox domain") && out.contains("Mail records: required")));
+    assert!(
+        !(out.to_ascii_lowercase().contains("mailbox domain")
+            && out.contains("Mail records: required"))
+    );
 
     h.reset();
     h.seed_apex_web("mail.example.test");
-    h.write_rr("mail.example.test", "MX", &["10 eforward1.registrar-servers.com."]);
+    h.write_rr(
+        "mail.example.test",
+        "MX",
+        &["10 eforward1.registrar-servers.com."],
+    );
     h.write_rr("eforward1.registrar-servers.com", "A", &["203.0.113.53"]);
     let (rc, out) = h.run(&[
         "--no-color",

@@ -67,6 +67,9 @@ let
     assert failedAssertions e == [ ];
     assert e.config.surmount.hardening.qemuGuestAgent.enable == true;
     assert e.config.services.qemuGuest.enable == true;
+    assert builtins.elem "multi-user.target" (
+      e.config.systemd.services.qemu-guest-agent.wantedBy or [ ]
+    );
     "t43c-qemu-guest-agent-on-when-enabled-ok";
 in
 {

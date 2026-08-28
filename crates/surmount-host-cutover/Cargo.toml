@@ -20,3 +20,6 @@ path = "src/bin/surmount-host-material-inventory.rs"
 
 [dependencies]
 surmount-deploy-host = { path = "../surmount-deploy-host" }
+
+[lints]
+workspace = true

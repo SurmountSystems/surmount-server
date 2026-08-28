@@ -1,4 +1,5 @@
-# Host convenience: pkgs.btop so operators can SSH and inspect live load.
+# Host convenience: pkgs.btop so operators can inspect live load via
+# Eternal Terminal (`just btop`) or a guest local `just btop`.
 # Not a critical service. Do not set Nice= on mail or other product units.
 # A deploy-host switch is required before the package exists on the box.
 # Operator laptop look lives in ./btop.conf (flat-remix, no theme background).

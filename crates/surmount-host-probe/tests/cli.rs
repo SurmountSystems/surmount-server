@@ -40,7 +40,10 @@ fn fake_ssh(dir: &std::path::Path) -> (PathBuf, PathBuf) {
     let bin = dir.join("fake-ssh");
     fs::write(
         &bin,
-        format!("#!/bin/sh\nprintf 'ssh-args: %s\\n' \"$*\" >>{}\nexit 0\n", log.display()),
+        format!(
+            "#!/bin/sh\nprintf 'ssh-args: %s\\n' \"$*\" >>{}\nexit 0\n",
+            log.display()
+        ),
     )
     .unwrap();
     chmod_x(&bin);
@@ -106,7 +109,14 @@ fn inxi_dry_run_defaults() {
 #[test]
 fn inxi_extra_args_replace_default() {
     let out = Command::new(inxi())
-        .args(["--dry-run", "--target", "root@example.test", "--", "-C", "-c0"])
+        .args([
+            "--dry-run",
+            "--target",
+            "root@example.test",
+            "--",
+            "-C",
+            "-c0",
+        ])
         .output()
         .unwrap();
     let t = String::from_utf8_lossy(&out.stdout);
@@ -184,39 +194,168 @@ fn inxi_missing_ssh() {
     assert!(err.contains("ssh") && err.contains("not found"));
 }
 
+fn btop_remote_env(cmd: &mut Command) -> &mut Command {
+    cmd.env("SURMOUNT_BTOP_SESSION", "remote")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_CLIENT")
+        .env_remove("SSH_TTY")
+        .env("SURMOUNT_GUEST_MARKER", "0")
+}
+
 #[test]
 fn btop_help() {
     let out = Command::new(btop()).arg("--help").output().unwrap();
     assert!(out.status.success());
     let t = String::from_utf8_lossy(&out.stdout);
     assert!(t.contains("btop"));
-    assert!(t.contains("TTY") || t.contains("tty") || t.contains("-t"));
+    assert!(t.contains("Eternal Terminal") || t.contains("et"));
     assert!(t.contains("SURMOUNT_DEPLOY_TARGET"));
+    assert!(t.contains("live tty") || t.contains("live terminal"));
+    assert!(t.to_ascii_lowercase().contains("nested"));
 }
 
 #[test]
 fn btop_dry_run_tty() {
-    let out = Command::new(btop())
+    let out = btop_remote_env(&mut Command::new(btop()))
         .args(["--dry-run", "--target", "root@example.test"])
         .output()
         .unwrap();
     assert!(out.status.success());
     let t = String::from_utf8_lossy(&out.stdout);
-    assert!(t.contains("-t") && t.contains("btop") && t.contains("example.test"));
+    assert!(t.contains("-c") && t.contains("btop"), "{t}");
+    assert!(t.contains("example.test"), "{t}");
+    assert!(!t.contains(" ssh "), "{t}");
+    // -e is et --noexit: after btop the session would drop to a guest shell.
+    assert!(
+        !t.split_whitespace().any(|w| w == "-e"),
+        "just btop must not pass et --noexit (-e): {t}"
+    );
 }
 
 #[test]
-fn btop_fake_ssh() {
-    let dir = temp_dir("btop-ssh");
-    let (ssh, log) = fake_ssh(&dir);
-    let out = Command::new(btop())
+fn btop_fake_et() {
+    let dir = temp_dir("btop-et");
+    let (et, log) = fake_ssh(&dir);
+    let out = btop_remote_env(&mut Command::new(btop()))
         .env("SURMOUNT_DEPLOY_TARGET", "root@example.test")
-        .env("SURMOUNT_BTOP_SSH", &ssh)
+        .env("SURMOUNT_ET_BIN", &et)
+        .env("SURMOUNT_BTOP_REQUIRE_TTY", "0")
         .output()
         .unwrap();
     assert!(out.status.success());
     let args = fs::read_to_string(log).unwrap_or_default();
-    assert!(args.contains("-t") && args.contains("btop") && args.contains("example.test"));
+    assert!(args.contains("-c") && args.contains("btop"), "{args}");
+    assert!(args.contains("example.test"), "{args}");
+    assert!(
+        !args.split_whitespace().any(|w| w == "-e"),
+        "et --noexit (-e) leaves a guest shell after btop: {args}"
+    );
+}
+
+#[test]
+fn btop_refuses_non_tty() {
+    let dir = temp_dir("btop-notty");
+    let (et, log) = fake_ssh(&dir);
+    let out = btop_remote_env(&mut Command::new(btop()))
+        .env("SURMOUNT_DEPLOY_TARGET", "root@example.test")
+        .env("SURMOUNT_ET_BIN", &et)
+        .env_remove("SURMOUNT_BTOP_REQUIRE_TTY")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "piped stdin/stdout is not a live tty; must fail loud, not attach"
+    );
+    let err = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
+    assert!(
+        err.contains("live tty") || err.contains("not a tty") || err.contains("terminal"),
+        "{err}"
+    );
+    assert!(
+        !log.is_file() || fs::read_to_string(log).unwrap_or_default().is_empty(),
+        "must not spawn et without a live tty"
+    );
+}
+
+#[test]
+fn btop_nested_guest_dry_run_runs_local() {
+    let out = Command::new(btop())
+        .arg("--dry-run")
+        .env("SURMOUNT_BTOP_SESSION", "local")
+        .env_remove("SURMOUNT_DEPLOY_TARGET")
+        .env_remove("SURMOUNT_AGENT_TARGET_ENV")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "nested guest must not require a deploy target: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
+    assert!(t.contains("btop"), "{t}");
+    assert!(
+        !t.split_whitespace().any(|w| w == "-c"),
+        "local guest btop must not invoke et -c: {t}"
+    );
+    assert!(!t.contains("example.test"), "{t}");
+    assert!(
+        err.contains("already") || err.contains("nested") || err.contains("this box"),
+        "{err}"
+    );
+}
+
+#[test]
+fn btop_nested_ssh_marker_runs_local() {
+    let dir = temp_dir("btop-marker");
+    let marker = dir.join("root-justfile");
+    fs::write(&marker, "# guest marker\n").unwrap();
+    let out = Command::new(btop())
+        .arg("--dry-run")
+        .env_remove("SURMOUNT_BTOP_SESSION")
+        .env("SSH_CONNECTION", "present")
+        .env("SURMOUNT_GUEST_MARKER", &marker)
+        .env_remove("SURMOUNT_DEPLOY_TARGET")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(t.contains("btop"), "{t}");
+    assert!(!t.split_whitespace().any(|w| w == "-c"), "{t}");
+}
+
+#[test]
+fn btop_nested_execs_local_btop() {
+    let dir = temp_dir("btop-local-bin");
+    let log = dir.join("btop.log");
+    let bin = dir.join("fake-btop");
+    fs::write(
+        &bin,
+        format!(
+            "#!/bin/sh\nprintf 'btop-args: %s\\n' \"$*\" >>{}\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    chmod_x(&bin);
+    let out = Command::new(btop())
+        .env("SURMOUNT_BTOP_SESSION", "local")
+        .env("SURMOUNT_BTOP_BIN", &bin)
+        .env("SURMOUNT_BTOP_REQUIRE_TTY", "0")
+        .env_remove("SURMOUNT_DEPLOY_TARGET")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let args = fs::read_to_string(&log).unwrap_or_default();
+    assert!(args.contains("btop-args:"), "{args}");
 }
 
 #[test]
@@ -311,7 +450,11 @@ exit 99
 fn tls_classical_mock() {
     let dir = temp_dir("openssl-c");
     install_mock_openssl(&dir);
-    let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let out = Command::new(tls())
         .env("PATH", path)
         .env("SURMOUNT_TEST_OPENSSL_MODE", "classical")
@@ -332,7 +475,11 @@ fn tls_classical_mock() {
 fn tls_mlkem_mock() {
     let dir = temp_dir("openssl-m");
     install_mock_openssl(&dir);
-    let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
+    let path = format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let out = Command::new(tls())
         .env("PATH", path)
         .env("SURMOUNT_TEST_OPENSSL_MODE", "mlkem")

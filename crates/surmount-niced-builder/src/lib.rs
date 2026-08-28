@@ -62,7 +62,8 @@ impl Settings {
             message: "SURMOUNT_BUILDER_DISK_GUARD_PERCENT must be an integer".into(),
             exit_code: 1,
         })?;
-        let cpu_quota_raw = env::var("SURMOUNT_BUILDER_CPU_QUOTA").unwrap_or_else(|_| "auto".into());
+        let cpu_quota_raw =
+            env::var("SURMOUNT_BUILDER_CPU_QUOTA").unwrap_or_else(|_| "auto".into());
         let nproc = online_cpus();
         let cpu_quota = if cpu_quota_raw.is_empty() || cpu_quota_raw == "auto" {
             format!("{}%", 95u32.saturating_mul(nproc))
@@ -182,7 +183,7 @@ pub fn user_bus_socket() -> PathBuf {
 fn rustix_uid() -> u32 {
     #[cfg(unix)]
     {
-        unsafe { libc_uid() }
+        libc_uid()
     }
     #[cfg(not(unix))]
     {

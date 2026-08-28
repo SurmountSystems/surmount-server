@@ -37,85 +37,89 @@ in
       ];
     })
     (mkIf (cfg.enable && lake.enable) {
-    assertions = [
-      {
-        assertion = lake.package != null;
-        message = "surmount.lake.package must be set when surmount.lake.enable is true (bin/lake). Default-off leaves package null so eval does not pull Lean.";
-      }
-      {
-        assertion = lake.memoryMax != null && lake.memoryMax != "";
-        message = "surmount.lake.memoryMax must be a non-empty systemd MemoryMax string when enable is true (empty/null refuse; scaffold default 4G is a Lake budget, not 95 percent of the whole guest; never publish the guest size in git).";
-      }
-      {
-        assertion = builtins.substring 0 1 lake.workDir == "/";
-        message = "surmount.lake.workDir must be an absolute path.";
-      }
-    ];
+      assertions = [
+        {
+          assertion = lake.package != null;
+          message = "surmount.lake.package must be set when surmount.lake.enable is true (bin/lake). Default-off leaves package null so eval does not pull Lean.";
+        }
+        {
+          assertion = lake.memoryMax != null && lake.memoryMax != "";
+          message = "surmount.lake.memoryMax must be a non-empty systemd MemoryMax string when enable is true (empty/null refuse; scaffold default 4G is a Lake budget, not 95 percent of the whole guest; never publish the guest size in git).";
+        }
+        {
+          assertion = builtins.substring 0 1 lake.workDir == "/";
+          message = "surmount.lake.workDir must be an absolute path.";
+        }
+      ];
 
-    users.groups.surmount-lake = { };
-    users.users.surmount-lake = {
-      isSystemUser = true;
-      group = "surmount-lake";
-      description = "Niced Lake (keyless; not ssh-ng)";
-      home = lake.workDir;
-    };
+      users.groups.surmount-lake = { };
+      users.users.surmount-lake = {
+        isSystemUser = true;
+        group = "surmount-lake";
+        description = "Niced Lake (keyless; not ssh-ng)";
+        home = lake.workDir;
+      };
 
-    systemd.tmpfiles.rules = [
-      "d ${lake.workDir} 0750 surmount-lake surmount-lake -"
-    ];
+      systemd.tmpfiles.rules = [
+        "d ${lake.workDir} 0750 surmount-lake surmount-lake -"
+      ];
 
-    systemd.slices.${sliceName} = {
-      description = "Surmount Lake (hard memory cap)";
-      sliceConfig = {
-        MemoryAccounting = true;
-        CPUAccounting = true;
-        IOAccounting = true;
-        MemoryMax = lake.memoryMax;
-      }
-      // sliceCpu;
-    };
+      systemd.slices.${sliceName} = {
+        description = "Surmount Lake (hard memory cap)";
+        sliceConfig = {
+          MemoryAccounting = true;
+          CPUAccounting = true;
+          IOAccounting = true;
+          MemoryMax = lake.memoryMax;
+        }
+        // sliceCpu;
+      };
 
-    systemd.services.surmount-lake = {
-      description = "Niced memory-capped Lake (Lean). Default-off; enable from host-local only.";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" ];
-      serviceConfig = {
-        Type = "simple";
-        Restart = "no";
-        TimeoutStartSec = "infinity";
-        User = "surmount-lake";
-        Group = "surmount-lake";
-        WorkingDirectory = lake.workDir;
-        ExecStart =
-          if lake.package == null then
-            "${pkgs.coreutils}/bin/false"
-          else
-            lib.escapeShellArgs (
-              [ "${lake.package}/bin/lake" "-j${toString lake.jobs}" ] ++ lake.extraArgs
-            );
-        Slice = "${sliceName}.slice";
-        MemoryAccounting = true;
-        CPUAccounting = true;
-        IOAccounting = true;
-        MemoryMax = lake.memoryMax;
-        Nice = 19;
-        IOSchedulingClass = "idle";
-        OOMScoreAdjust = 500;
-        SyslogIdentifier = "surmount-lake";
-        StandardOutput = "journal";
-        StandardError = "journal";
-        LogRateLimitIntervalSec = "30s";
-        LogRateLimitBurst = 50000;
-        NoNewPrivileges = true;
-      }
-      // sliceCpu;
-    };
+      systemd.services.surmount-lake = {
+        description = "Niced memory-capped Lake (Lean). Default-off; enable from host-local only.";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network-online.target" ];
+        serviceConfig = {
+          Type = "simple";
+          Restart = "no";
+          TimeoutStartSec = "infinity";
+          User = "surmount-lake";
+          Group = "surmount-lake";
+          WorkingDirectory = lake.workDir;
+          ExecStart =
+            if lake.package == null then
+              "${pkgs.coreutils}/bin/false"
+            else
+              lib.escapeShellArgs (
+                [
+                  "${lake.package}/bin/lake"
+                  "-j${toString lake.jobs}"
+                ]
+                ++ lake.extraArgs
+              );
+          Slice = "${sliceName}.slice";
+          MemoryAccounting = true;
+          CPUAccounting = true;
+          IOAccounting = true;
+          MemoryMax = lake.memoryMax;
+          Nice = 19;
+          IOSchedulingClass = "idle";
+          OOMScoreAdjust = 500;
+          SyslogIdentifier = "surmount-lake";
+          StandardOutput = "journal";
+          StandardError = "journal";
+          LogRateLimitIntervalSec = "30s";
+          LogRateLimitBurst = 50000;
+          NoNewPrivileges = true;
+        }
+        // sliceCpu;
+      };
 
-    # Do not Nice= mail, management-ui, sshd, Arti, or networking here.
-    systemd.services.stalwart-mail.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
-    systemd.services.surmount-management-ui.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
-    systemd.services.sshd.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
-    systemd.services.surmount-arti-hidden-service.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
+      # Do not Nice= mail, management-ui, sshd, Arti, or networking here.
+      systemd.services.stalwart-mail.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
+      systemd.services.surmount-management-ui.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
+      systemd.services.sshd.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
+      systemd.services.surmount-arti-hidden-service.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
     })
   ];
 }

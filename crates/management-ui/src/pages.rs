@@ -1029,6 +1029,7 @@ pub fn render_system_page(data: &AdminPageData) -> String {
 /// `csrf_token` is embedded in a hidden field so the form script does not depend
 /// on `document.cookie`. The matching `surmount_csrf` cookie is HttpOnly.
 /// Empty when the request has no valid session.
+#[cfg(test)]
 pub fn render_mail_page(
     data: &AdminPageData,
     status: &StalwartStatus,

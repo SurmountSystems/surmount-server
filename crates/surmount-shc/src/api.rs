@@ -112,7 +112,7 @@ pub fn write_with_confirm(
     verbose: bool,
 ) -> Result<HttpOutcome> {
     let first = transport.request(creds, method, rel_path, body, None, verbose)?;
-    if matches!(first.code, 200 | 201 | 202) {
+    if matches!(first.code, 200..=202) {
         return Ok(first);
     }
     if first.code == 409 && is_confirmation_required(&first.body) {
@@ -128,7 +128,7 @@ pub fn write_with_confirm(
             );
         }
         let second = transport.request(creds, method, rel_path, body, Some(&cid), verbose)?;
-        if matches!(second.code, 200 | 201 | 202) {
+        if matches!(second.code, 200..=202) {
             return Ok(second);
         }
         return Err(die(format!(

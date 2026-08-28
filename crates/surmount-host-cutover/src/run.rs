@@ -1,6 +1,5 @@
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -244,9 +243,7 @@ fn extract_acme_domains(profile: &Path) -> Result<Vec<String>, ToolError> {
         }
     }
     if domains.is_empty() {
-        return Err(ToolError::fail(
-            "step dns: no acme_domains in host profile".into(),
-        ));
+        return Err(ToolError::fail("step dns: no acme_domains in host profile"));
     }
     Ok(domains)
 }
@@ -278,7 +275,7 @@ fn run_cutover(mut opts: CutoverOpts) -> Result<(), ToolError> {
             let i = inv_from(&opts)?;
             if opts.host_id.is_none() {
                 return Err(ToolError::fail(
-                    "--emit-fragments-only --with-vaultwarden requires --host-id".into(),
+                    "--emit-fragments-only --with-vaultwarden requires --host-id",
                 ));
             }
             assert_safe_token("host-id", opts.host_id.as_deref().unwrap())?;
@@ -362,8 +359,7 @@ fn step_material(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
     let inv = inv_from(opts)?;
     if run_inventory(&inv, repo).is_err() {
         return Err(ToolError::fail(
-            "step material: inventory incomplete. Fill private staging or pass --generate-material for non-CA kinds."
-                .into(),
+            "step material: inventory incomplete. Fill private staging or pass --generate-material for non-CA kinds.",
         ));
     }
     log_line("step=material: inventory complete (values not logged)");
@@ -395,9 +391,7 @@ fn step_prep(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
             print_next(opts, "install", "--target HOST --acme-path");
             return Ok(());
         }
-        return Err(ToolError::fail(
-            "--step prep requires --host-local DIR".into(),
-        ));
+        return Err(ToolError::fail("--step prep requires --host-local DIR"));
     }
     render_profile(opts, repo)?;
     log_line("step=prep: host-local-acme.nix rendered (non-secret)");
@@ -431,9 +425,7 @@ fn step_install(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
             return Err(ToolError::fail("--live install requires --target"));
         }
         if opts.dest_root.is_some() {
-            return Err(ToolError::fail(
-                "--live cannot combine with --dest-root".into(),
-            ));
+            return Err(ToolError::fail("--live cannot combine with --dest-root"));
         }
     }
     let kinds = require_kinds(opts);
@@ -445,7 +437,7 @@ fn step_install(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
 
 fn secrets_plan(
     opts: &CutoverOpts,
-    repo: &Path,
+    _repo: &Path,
     staging_canon: &Path,
     kinds: &[String],
 ) -> Result<(), ToolError> {
@@ -464,7 +456,7 @@ fn secrets_plan(
             return Ok(());
         }
         return Err(ToolError::fail(
-            "step install requires --target or --dest-root".into(),
+            "step install requires --target or --dest-root",
         ));
     }
     let mut cmd = vec![sh.to_string_lossy().into_owned()];
@@ -537,10 +529,7 @@ fn step_free_443(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
 }
 
 fn run_free_443(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
-    let sh = resolve_tool(
-        "SURMOUNT_CUTOVER_FREE_443",
-        &["free-stalwart-public-443"],
-    )?;
+    let sh = resolve_tool("SURMOUNT_CUTOVER_FREE_443", &["free-stalwart-public-443"])?;
     let ssh = env::var("SURMOUNT_CUTOVER_SSH").unwrap_or_else(|_| "ssh".into());
     let token = if let Some(d) = opts.dest_root.as_ref() {
         format!("{}{PATH_STALWART}", d.display())
@@ -608,7 +597,7 @@ fn run_free_443(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
             );
             if opts.live && !opts.dry_run {
                 Err(ToolError::fail(
-                    "free-443 blocked on live cutover: missing Domain B stalwart-token (or engine auth). Secret values not logged.".into(),
+                    "free-443 blocked on live cutover: missing Domain B stalwart-token (or engine auth). Secret values not logged.",
                 ))
             } else {
                 Ok(())
@@ -618,7 +607,7 @@ fn run_free_443(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
     }
 }
 
-fn step_dns(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
+fn step_dns(opts: &CutoverOpts, _repo: &Path) -> Result<(), ToolError> {
     let zone = resolve_tool(
         "SURMOUNT_CUTOVER_DNS_ZONE",
         &["surmount-dns-zone", "dns-zone-namecheap"],
@@ -703,9 +692,7 @@ fn step_deploy(opts: &CutoverOpts, _repo: &Path) -> Result<(), ToolError> {
         return Err(ToolError::fail("target must not start with '-'"));
     }
     if opts.live && opts.host_local.is_none() {
-        return Err(ToolError::fail(
-            "--live deploy requires --host-local".into(),
-        ));
+        return Err(ToolError::fail("--live deploy requires --host-local"));
     }
     invoke_deploy(opts)?;
     print_next(opts, "prove", "");
@@ -765,14 +752,10 @@ fn step_le_prod(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
     );
     print_honesty("le-prod");
     if opts.host_profile.is_none() {
-        return Err(ToolError::fail(
-            "--step le-prod requires --host-profile".into(),
-        ));
+        return Err(ToolError::fail("--step le-prod requires --host-profile"));
     }
     if opts.host_local.is_none() {
-        return Err(ToolError::fail(
-            "--step le-prod requires --host-local".into(),
-        ));
+        return Err(ToolError::fail("--step le-prod requires --host-local"));
     }
     render_profile(opts, repo)?;
     log_line("step=le-prod: re-render done; next is deploy then prove (no auto HTTPS claim)");
@@ -828,7 +811,7 @@ fn render_profile(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
     }
     let Some(out_dir) = opts.host_local.as_ref() else {
         return Err(ToolError::fail(
-            "--host-profile requires --host-local DIR (or SURMOUNT_HOST_LOCAL_DIR)".into(),
+            "--host-profile requires --host-local DIR (or SURMOUNT_HOST_LOCAL_DIR)",
         ));
     };
     if !out_dir.is_dir() {
@@ -896,7 +879,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
     if opts.live {
         if opts.target.is_none() {
             return Err(ToolError::fail(
-                "--live requires --target HOST (or SURMOUNT_DEPLOY_TARGET)".into(),
+                "--live requires --target HOST (or SURMOUNT_DEPLOY_TARGET)",
             ));
         }
         let hl = opts.host_local.as_ref().ok_or_else(|| {
@@ -910,7 +893,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
         }
         if opts.dest_root.is_some() {
             return Err(ToolError::fail(
-                "--live cannot combine with --dest-root (dest-root is hermetic local only)".into(),
+                "--live cannot combine with --dest-root (dest-root is hermetic local only)",
             ));
         }
     }
@@ -929,7 +912,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
     let inv = inv_from(opts)?;
     if run_inventory(&inv, repo).is_err() {
         return Err(ToolError::fail(
-            "gate G1 failed: material inventory incomplete. Fill private staging (or pass --generate-material for non-CA kinds) before install/deploy. No remote mutation performed.".into(),
+            "gate G1 failed: material inventory incomplete. Fill private staging (or pass --generate-material for non-CA kinds) before install/deploy. No remote mutation performed.",
         ));
     }
     log_line("gate G1 complete: required material present (values not logged)");
@@ -967,7 +950,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
                 );
             } else {
                 return Err(ToolError::fail(
-                    "--host-profile requires --host-local DIR (or SURMOUNT_HOST_LOCAL_DIR)".into(),
+                    "--host-profile requires --host-local DIR (or SURMOUNT_HOST_LOCAL_DIR)",
                 ));
             }
         } else {
@@ -996,7 +979,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
                 println!();
             } else {
                 return Err(ToolError::fail(
-                    "secrets-install requires --target or --dest-root".into(),
+                    "secrets-install requires --target or --dest-root",
                 ));
             }
         } else {
@@ -1048,7 +1031,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
                 );
             } else {
                 return Err(ToolError::fail(
-                    "--acme-path ensure-acme-parents requires --target or --dest-root".into(),
+                    "--acme-path ensure-acme-parents requires --target or --dest-root",
                 ));
             }
         } else {
@@ -1096,7 +1079,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
             );
         } else if opts.target.is_none() {
             return Err(ToolError::fail(
-                "deploy requires --target (or --skip-deploy)".into(),
+                "deploy requires --target (or --skip-deploy)",
             ));
         } else {
             let prefix = if opts.dry_run {
@@ -1118,9 +1101,7 @@ fn full_cutover(opts: &CutoverOpts, repo: &Path) -> Result<(), ToolError> {
                     "note: no --host-local; deploy-host dry-run may fail lockout checks (pass --host-local for full plan)",
                 );
             } else {
-                return Err(ToolError::fail(
-                    "--live deploy requires --host-local".into(),
-                ));
+                return Err(ToolError::fail("--live deploy requires --host-local"));
             }
             if opts.skip_secrets {
                 argv.push("--install-secrets".into());

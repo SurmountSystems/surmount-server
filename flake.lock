@@ -1,5 +1,21 @@
 {
   "nodes": {
+    "advisory-db": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787625737,
+        "narHash": "sha256-YBoms9lLCFwvTGkiuw8abRHHup26xEcxQcJU7VFLHik=",
+        "owner": "rustsec",
+        "repo": "advisory-db",
+        "rev": "a7bfe16948bf6f3ee25bdee4822209f87da21b80",
+        "type": "github"
+      },
+      "original": {
+        "owner": "rustsec",
+        "repo": "advisory-db",
+        "type": "github"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1785284101,
@@ -34,11 +50,11 @@
     },
     "nixpkgs-rust": {
       "locked": {
-        "lastModified": 1785454630,
-        "narHash": "sha256-LQy14TZp77TwbQf40gg1V3jo8FwJG0jGDkAH+zRHqg8=",
+        "lastModified": 1787736819,
+        "narHash": "sha256-cV5xEJJK3BvhU8rEd4mC9UsmDi5qscv/kzGPhBRC5WA=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "1559d3daa3ecc813a650b79375ea61b6741b8746",
+        "rev": "9fbb54b33e91ee4ca368e35a78e0613c720600b3",
         "type": "github"
       },
       "original": {
@@ -50,6 +66,7 @@
     },
     "root": {
       "inputs": {
+        "advisory-db": "advisory-db",
         "crane": "crane",
         "nixpkgs": "nixpkgs",
         "nixpkgs-rust": "nixpkgs-rust",
@@ -81,11 +98,11 @@
     "surmount-site": {
       "flake": false,
       "locked": {
-        "lastModified": 1787605156,
-        "narHash": "sha256-QQH6o/rbQjBheRpO+orVnUC0X2xkHxRDUikgGDmWHcQ=",
+        "lastModified": 1787766211,
+        "narHash": "sha256-YdJ2r/8MTwJzOAjtV9W7tDsrcSFxj8bKSPDg9Ubemeo=",
         "owner": "SurmountSystems",
         "repo": "site",
-        "rev": "eee7ec234c7243cae130ad1ebae44f7ac1a28ef8",
+        "rev": "4463b07de98d1f617bd6eba4a002edf26a4a5ce7",
         "type": "github"
       },
       "original": {

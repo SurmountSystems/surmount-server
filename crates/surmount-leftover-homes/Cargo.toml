@@ -13,3 +13,6 @@ path = "src/main.rs"
 [lib]
 name = "surmount_leftover_homes"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

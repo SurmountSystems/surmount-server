@@ -1,0 +1,21 @@
+[package]
+name = "surmount-scram"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Highest-priority last line: SIGKILL builder hogs when host RAM is nearly gone."
+publish = false
+
+[[bin]]
+name = "surmount-scram"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_scram"
+path = "src/lib.rs"
+
+[dependencies]
+libc.workspace = true
+
+[lints]
+workspace = true

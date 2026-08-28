@@ -4,13 +4,12 @@ use std::process::Command;
 use crate::cli::run_cli_ok;
 use crate::error::{Result, ToolError};
 use crate::json::{file_cert_id_in_query, query_has_file_path};
-use crate::token::{
-    DEFAULT_TOKEN_FILE, assert_loopback_8080, assert_safe, load_token, which_or,
-};
+use crate::token::{DEFAULT_TOKEN_FILE, assert_loopback_8080, assert_safe, load_token, which_or};
 
-const DEFAULT_CERT: &str = "/var/lib/surmount/secrets/tls/cert.pem";
-const DEFAULT_KEY: &str = "/var/lib/surmount/secrets/tls/key.pem";
-const DEFAULT_TLS_DIR: &str = "/var/lib/surmount/secrets/tls";
+const DEFAULT_CERT: &str = "/var/lib/surmount/secrets/mail/tls/cert.pem";
+const DEFAULT_KEY: &str = "/var/lib/surmount/secrets/mail/tls/key.pem";
+const DEFAULT_TLS_DIR: &str = "/var/lib/surmount/secrets/mail/tls";
+const AXUM_TLS_DIR: &str = "/var/lib/surmount/secrets/tls";
 const DEFAULT_EXPECT: &str = "services.surmount.systems,mail.surmount.systems,surmount.systems,www.surmount.systems,mta-sts.surmount.systems";
 
 const USAGE: &str = "\
@@ -20,8 +19,9 @@ Usage:
   point-stalwart-mail-tls --live [options]
   point-stalwart-mail-tls --query-only [options]
 
-Register a Stalwart Certificate object whose File paths are the same durable
-Let's Encrypt PEMs Axum uses. Default is dry-run. Never logs secret values.
+Register a Stalwart Certificate object whose File paths are the mail-plane
+copies of the durable Let's Encrypt PEMs (secrets/mail/tls). Axum keeps
+secrets/tls with key mode 0600. Default is dry-run. Never logs secret values.
 URL is loopback :8080 only.
 ";
 
@@ -44,16 +44,22 @@ where
     let mut cli = std::env::var("STALWART_CLI").unwrap_or_default();
     let mut systemctl =
         std::env::var("SURMOUNT_POINT_MAIL_TLS_SYSTEMCTL").unwrap_or_else(|_| "systemctl".into());
-    let mut cert = std::env::var("SURMOUNT_POINT_MAIL_TLS_CERT").unwrap_or_else(|_| DEFAULT_CERT.into());
-    let mut key = std::env::var("SURMOUNT_POINT_MAIL_TLS_KEY").unwrap_or_else(|_| DEFAULT_KEY.into());
+    let mut cert =
+        std::env::var("SURMOUNT_POINT_MAIL_TLS_CERT").unwrap_or_else(|_| DEFAULT_CERT.into());
+    let mut key =
+        std::env::var("SURMOUNT_POINT_MAIL_TLS_KEY").unwrap_or_else(|_| DEFAULT_KEY.into());
     let mut plan = String::new();
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
-                println!("  --dry-run  --live  --query-only  --restart  --token-file  --url  --cli");
-                println!("  --cert  --key  --plan  --systemctl-cmd  --skip-sandbox-check  --skip-pem-check");
+                println!(
+                    "  --dry-run  --live  --query-only  --restart  --token-file  --url  --cli"
+                );
+                println!(
+                    "  --cert  --key  --plan  --systemctl-cmd  --skip-sandbox-check  --skip-pem-check"
+                );
                 println!("  --expect-hostnames  Certificate File paths. loopback :8080.");
                 return Ok(());
             }
@@ -107,7 +113,11 @@ where
                 i += 1;
                 expect = need(&argv, i)?;
             }
-            other => return Err(ToolError::fail(format!("unknown argument: {other} (try --help)"))),
+            other => {
+                return Err(ToolError::fail(format!(
+                    "unknown argument: {other} (try --help)"
+                )));
+            }
         }
         i += 1;
     }
@@ -165,7 +175,9 @@ where
         cert_id.as_deref().unwrap_or("unknown")
     );
     if query_only {
-        eprintln!("point-stalwart-mail-tls: query-only complete (not claiming IMAP presents Let's Encrypt)");
+        eprintln!(
+            "point-stalwart-mail-tls: query-only complete (not claiming IMAP presents Let's Encrypt)"
+        );
         return Ok(());
     }
     if dry_run {
@@ -176,25 +188,40 @@ where
             );
         } else {
             eprintln!(
-                "point-stalwart-mail-tls: dry-run: --live would create Certificate File paths cert={DEFAULT_CERT} key={DEFAULT_KEY} and set SystemSettings.defaultCertificateId"
+                "point-stalwart-mail-tls: dry-run: --live would create Certificate File paths cert={cert} key={key} and set SystemSettings.defaultCertificateId"
             );
         }
-        eprintln!("point-stalwart-mail-tls: dry-run complete (not claiming IMAP presents Let's Encrypt)");
+        eprintln!(
+            "point-stalwart-mail-tls: dry-run complete (not claiming IMAP presents Let's Encrypt)"
+        );
         return Ok(());
     }
     if !have_file {
-        let field_c = format!("certificate={{\"@type\":\"File\",\"filePath\":\"{DEFAULT_CERT}\"}}");
-        let field_k = format!("privateKey={{\"@type\":\"File\",\"filePath\":\"{DEFAULT_KEY}\"}}");
-        eprintln!("point-stalwart-mail-tls: create Certificate File cert={DEFAULT_CERT} key={DEFAULT_KEY}");
+        let field_c = format!("certificate={{\"@type\":\"File\",\"filePath\":\"{cert}\"}}");
+        let field_k = format!("privateKey={{\"@type\":\"File\",\"filePath\":\"{key}\"}}");
+        eprintln!("point-stalwart-mail-tls: create Certificate File cert={cert} key={key}");
         run_cli_ok(
             &cli,
             &url,
             &token,
-            &["create", "Certificate", "--field", &field_c, "--field", &field_k],
+            &[
+                "create",
+                "Certificate",
+                "--field",
+                &field_c,
+                "--field",
+                &field_k,
+            ],
             "point-stalwart-mail-tls",
         )?;
         eprintln!("point-stalwart-mail-tls: create Certificate ok");
-        let cert_out = run_cli_ok(&cli, &url, &token, &["query", "Certificate", "--json"], "point-stalwart-mail-tls")?;
+        let cert_out = run_cli_ok(
+            &cli,
+            &url,
+            &token,
+            &["query", "Certificate", "--json"],
+            "point-stalwart-mail-tls",
+        )?;
         cert_id = file_cert_id_in_query(&cert_out, DEFAULT_CERT, &expect)
             .or_else(|| file_cert_id_in_query(&cert_out, &cert, &expect));
         have_file = cert_id.is_some();
@@ -205,6 +232,26 @@ where
             "could not resolve File Certificate id after create/query (refusing first-boot rcgen). Secret values not logged.".to_string(),
         )
     })?;
+    let field_c = format!("certificate={{\"@type\":\"File\",\"filePath\":\"{cert}\"}}");
+    let field_k = format!("privateKey={{\"@type\":\"File\",\"filePath\":\"{key}\"}}");
+    eprintln!(
+        "point-stalwart-mail-tls: update Certificate {cert_id} File paths cert={cert} key={key}"
+    );
+    run_cli_ok(
+        &cli,
+        &url,
+        &token,
+        &[
+            "update",
+            "Certificate",
+            &cert_id,
+            "--field",
+            &field_c,
+            "--field",
+            &field_k,
+        ],
+        "point-stalwart-mail-tls",
+    )?;
     let field = format!("defaultCertificateId={cert_id}");
     eprintln!("point-stalwart-mail-tls: update SystemSettings defaultCertificateId={cert_id}");
     run_cli_ok(
@@ -217,18 +264,27 @@ where
     eprintln!("point-stalwart-mail-tls: SystemSettings.defaultCertificateId set");
     if do_restart {
         eprintln!("point-stalwart-mail-tls: restart stalwart-mail");
-        let st = Command::new(&systemctl).args(["restart", "stalwart-mail"]).status()?;
+        let st = Command::new(&systemctl)
+            .args(["restart", "stalwart-mail"])
+            .status()?;
         if !st.success() {
-            return Err(ToolError::fail("systemctl restart stalwart-mail failed".to_string()));
+            return Err(ToolError::fail(
+                "systemctl restart stalwart-mail failed".to_string(),
+            ));
         }
     }
-    eprintln!("point-stalwart-mail-tls: live complete: File Certificate id={cert_id} (not a live :993 handshake proof)");
+    eprintln!(
+        "point-stalwart-mail-tls: live complete: File Certificate id={cert_id} (not a live :993 handshake proof)"
+    );
     Ok(())
 }
 
 fn assert_regular(label: &str, path: &str) -> Result<()> {
     let p = Path::new(path);
-    if p.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if p.symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         return Err(ToolError::fail(format!(
             "{label} must be a regular file (symlink refused): {path}"
         )));
@@ -269,11 +325,15 @@ fn sandbox(systemctl: &str, cert: &str) -> Result<()> {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
     if show.contains("ProtectSystem=strict") {
-        if show.contains(&tls_dir) || show.contains(DEFAULT_TLS_DIR) || show.contains(DEFAULT_CERT) {
+        if show.contains(&tls_dir)
+            || show.contains(DEFAULT_TLS_DIR)
+            || show.contains(AXUM_TLS_DIR)
+            || show.contains(DEFAULT_CERT)
+        {
             eprintln!("point-stalwart-mail-tls: sandbox grants TLS PEM dir ({tls_dir})");
         } else {
             return Err(ToolError::blocked(
-                "ProtectSystem=strict and /var/lib/surmount/secrets/tls is not on ReadOnlyPaths/ReadWritePaths. Add Nix ReadOnlyPaths grant (modules/mail.nix) before creating File Certificate objects.".to_string(),
+                "ProtectSystem=strict and mail/tls (or secrets/tls) is not on ReadOnlyPaths/ReadWritePaths. Add Nix ReadOnlyPaths grant (modules/mail.nix) before creating File Certificate objects.".to_string(),
             ));
         }
     }

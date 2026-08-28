@@ -4,7 +4,7 @@ Plain English. No assumption that the reader already knows Fix ladder codes.
 Ladder detail still lives in [fix-and-fixos.md](fix-and-fixos.md) if you
 want depth.
 
-**Last updated:** 2026-08-25 (every `nix/packages/surmount-*.nix` is `callPackage`'d in the flake overlay, packages, apps, and hermetic checks. `just` aliases only `nix run`. No leftover product `script/*.sh`.)
+**Last updated:** 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
 ---
@@ -46,7 +46,7 @@ package bumps in this repo.
 | `nix/packages/stalwart-spam-filter.nix` | Spam rules FODs |
 | `nix/packages/management-ui.nix` | Surmount Axum UI (crane) |
 | `nix/packages/surmount-public-site.nix` | Apex/www static site from flake input `github:SurmountSystems/site` (no NPM; operator bumps rev) |
-| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.5.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti` |
+| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.5.1** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti` |
 | `nix/packages/surmount-private-data.nix` | Private-data pattern scanner (crane). `nix run .#surmount-private-data`. Pre-commit + `just check-private-data` / `just private-data`. |
 | `nix/packages/surmount-host-logs.nix` | Host journal status/follow (crane). `nix run .#surmount-host-logs`. `just host-logs`. Journald stays source of truth. |
 | `nix/packages/surmount-shc.nix` | SHC customer user-api client (crane; rDNS PTR + tickets). `nix run .#surmount-shc`. `just rdns-shc`. No python3. |
@@ -64,6 +64,7 @@ package bumps in this repo.
 | `nix/packages/surmount-mail-import.nix` | Maildir++ import via Vandelay (crane). `nix run .#surmount-mail-import-maildir`. |
 | `nix/packages/surmount-secrets-install.nix` | Domain A to Domain B install + Vaultwarden export-to-staging (crane). `nix run .#secrets-install-host` / `.#secrets-export-bw-to-staging`. |
 | `nix/packages/surmount-secrets-prompt.nix` | Domain A no-echo intake (crane). `nix run .#surmount-secrets-prompt`. `just secrets-prompt`. |
+| `nix/packages/surmount-rekey.nix` | SHC backup re-key paste (age crate + gpg wrap). `nix run .#surmount-rekey`. `just rekey`. Prints `age1...` for type PGP. Never prints the age secret. |
 | `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary) |
 | `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |
@@ -86,8 +87,8 @@ Do **not** wrap leftover bash in `writeShellApplication`. Do **not** grow
 thin just alias.
 
 **Arti note:** stock nixpkgs `pkgs.arti` often lags (client-default, not
-HS-capable). Surmount owns a **current** Arti pin (`2.5.0` from GitLab
-`arti-v2.5.0`) at `nix/packages/arti-onion-service.nix` with cargo feature
+HS-capable). Surmount owns a **current** Arti pin (`2.5.1` from GitLab
+`arti-v2.5.1`) at `nix/packages/arti-onion-service.nix` with cargo feature
 `onion-service-service`, exposed as `pkgs.artiOnionService` /
 `packages.*.arti-onion-service` (does **not** replace `pkgs.arti`). rustc
 comes from flake input `nixpkgs-rust` when Arti MSRV exceeds the host

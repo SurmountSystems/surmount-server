@@ -3,7 +3,7 @@
 use std::process::ExitCode;
 
 use surmount_host_probe::ssh_target::resolve_target;
-use surmount_host_probe::{exec_ssh, format_argv, key_only_ssh_opts, resolve_program, ProbeError};
+use surmount_host_probe::{ProbeError, exec_ssh, format_argv, key_only_ssh_opts, resolve_program};
 
 const USAGE: &str = "\
 Usage:
@@ -74,7 +74,9 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Opts, ProbeError> {
             }
             "--target" => {
                 i += 1;
-                let v = rest.get(i).ok_or_else(|| ProbeError::fail("--target requires a value"))?;
+                let v = rest
+                    .get(i)
+                    .ok_or_else(|| ProbeError::fail("--target requires a value"))?;
                 target = Some(v.clone());
                 i += 1;
             }
@@ -139,10 +141,7 @@ fn main() -> ExitCode {
     }
     let ssh_spec = std::env::var("SURMOUNT_INXI_SSH").unwrap_or_else(|_| "ssh".into());
     if opts.dry_run {
-        println!(
-            "inxi-host: dry-run: {}",
-            format_argv(&ssh_spec, &ssh_args)
-        );
+        println!("inxi-host: dry-run: {}", format_argv(&ssh_spec, &ssh_args));
         return ExitCode::SUCCESS;
     }
     let ssh = match resolve_program(&ssh_spec, "ssh") {

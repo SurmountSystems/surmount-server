@@ -28,9 +28,7 @@ impl std::error::Error for SitesError {}
 
 impl SitesError {
     pub fn new(m: impl Into<String>) -> Self {
-        Self {
-            message: m.into(),
-        }
+        Self { message: m.into() }
     }
 }
 
@@ -166,7 +164,9 @@ fn copy_recursive(src: &Path, dest: &Path) -> Result<(), SitesError> {
     for ent in std::fs::read_dir(src).map_err(|e| SitesError::new(e.to_string()))? {
         let ent = ent.map_err(|e| SitesError::new(e.to_string()))?;
         let to = dest.join(ent.file_name());
-        let ty = ent.file_type().map_err(|e| SitesError::new(e.to_string()))?;
+        let ty = ent
+            .file_type()
+            .map_err(|e| SitesError::new(e.to_string()))?;
         if ty.is_dir() {
             copy_recursive(&ent.path(), &to)?;
         } else {

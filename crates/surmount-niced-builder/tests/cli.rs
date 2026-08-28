@@ -35,9 +35,32 @@ fn fake_df(dir: &std::path::Path, pct: u32) -> PathBuf {
     path
 }
 
+fn fake_ionice(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("ionice");
+    fs::write(&path, "#!/bin/sh\nwhile [ \"$1\" = \"-c3\" ] || [ \"$1\" = \"-c\" ]; do\n  if [ \"$1\" = \"-c\" ]; then shift; fi\n  shift\ndone\nexec \"$@\"\n").unwrap();
+    let mut perms = fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&path, perms).unwrap();
+    path
+}
+
 fn run_with_df(df: &std::path::Path, args: &[&str]) -> std::process::Output {
+    let bindir = df.parent().unwrap().join("bin");
+    fs::create_dir_all(&bindir).unwrap();
+    let _ = fake_ionice(&bindir);
+    let true_bin = bindir.join("true");
+    fs::write(&true_bin, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut tp = fs::metadata(&true_bin).unwrap().permissions();
+    tp.set_mode(0o755);
+    fs::set_permissions(&true_bin, tp).unwrap();
+    let path = format!(
+        "{}:{}",
+        bindir.display(),
+        std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".into())
+    );
     Command::new(bin())
         .args(args)
+        .env("PATH", path)
         .env("SURMOUNT_BUILDER_USE_SYSTEMD_RUN", "0")
         .env("SURMOUNT_BUILDER_DF", df)
         .env("SURMOUNT_BUILDER_DISK_GUARD_PERCENT", "95")
@@ -102,7 +125,7 @@ fn disk_at_96_refuses() {
 fn disk_at_94_runs_true() {
     let dir = temp_dir("94");
     let df = fake_df(&dir, 94);
-    let out = run_with_df(&df, &["--", "/bin/true"]);
+    let out = run_with_df(&df, &["--", "true"]);
     assert!(
         out.status.success(),
         "stderr={} stdout={}",

@@ -25,7 +25,7 @@
 # auto-points at managementUi local cleartext (loopback API bind). Pointing
 # cleartext Arti at the primary https TCP without that path still warns.
 #
-# Version assumption: arti.toml shape matches Surmount-owned Arti 2.5.0
+# Version assumption: arti.toml shape matches Surmount-owned Arti 2.5.1
 # (nix/packages/arti-onion-service.nix; not stock nixpkgs 1.4.x lag). Keys:
 # [storage] cache_dir/state_dir, [onion_services."<nickname>"] proxy_ports,
 # [proxy] socks_listen (not legacy socks_port). See upstream
@@ -126,8 +126,8 @@ let
     # No private keys in this file. Onion service identity lives under
     # onionServiceStateDir on the host (deploy secrets; never in git).
     #
-    # Version assumption: Surmount-owned Arti 2.5.0 config shape
-    # (nix/packages/arti-onion-service.nix; GitLab arti-v2.5.0). Not stock
+    # Version assumption: Surmount-owned Arti 2.5.1 config shape
+    # (nix/packages/arti-onion-service.nix; GitLab arti-v2.5.1). Not stock
     # nixpkgs 1.4.x lag. Keys: socks_listen, onion_services, proxy_ports.
     # Command: arti proxy -c /etc/surmount/arti.toml
     #

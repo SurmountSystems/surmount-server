@@ -571,6 +571,7 @@ struct RequestLogFields {
     peer: String,
 }
 
+#[cfg(test)]
 fn request_log_fields(
     uri: &axum::http::Uri,
     host_header: Option<&str>,
@@ -6995,7 +6996,11 @@ mod edge_wire_tests {
             "ab".repeat(32),
             "cd".repeat(32)
         );
-        let nsec = concat!("nsec", "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq").to_string();
+        let nsec = concat!(
+            "nsec",
+            "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        )
+        .to_string();
 
         let ok = client
             .post(format!("{base}/api/v1/accounts/nwc"))
@@ -7040,7 +7045,7 @@ mod edge_wire_tests {
         let refuse_body: serde_json::Value = refuse.json().await.unwrap();
         assert_eq!(refuse_body["ok"], false);
         assert!(
-            !format!("{refuse_body}").contains(nsec),
+            !format!("{refuse_body}").contains(&nsec),
             "nsec must not be echoed: {refuse_body}"
         );
 
@@ -7206,7 +7211,11 @@ mod edge_wire_tests {
             "User session must not grant console login"
         );
 
-        let nsec = concat!("nsec", "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq").to_string();
+        let nsec = concat!(
+            "nsec",
+            "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        )
+        .to_string();
         let nsec_create = client
             .post(format!("{base}/api/v1/accounts"))
             .header(reqwest::header::COOKIE, &admin_session)
@@ -7228,7 +7237,7 @@ mod edge_wire_tests {
             "nsec must be refused by name: {nsec_body}"
         );
         assert!(
-            !nsec_body.contains(nsec),
+            !nsec_body.contains(&nsec),
             "create error must not echo nsec: {nsec_body}"
         );
 
@@ -7461,7 +7470,11 @@ mod edge_wire_tests {
             "grant error must not echo garbage token: {garbage_body}"
         );
 
-        let nsec = concat!("nsec", "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq").to_string();
+        let nsec = concat!(
+            "nsec",
+            "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        )
+        .to_string();
         let nsec_grant = client
             .post(&grant_url)
             .header(reqwest::header::COOKIE, &admin_session)
@@ -7482,7 +7495,7 @@ mod edge_wire_tests {
             "nsec must be refused by name: {nsec_body}"
         );
         assert!(
-            !nsec_body.contains(nsec),
+            !nsec_body.contains(&nsec),
             "grant error must not echo nsec: {nsec_body}"
         );
 

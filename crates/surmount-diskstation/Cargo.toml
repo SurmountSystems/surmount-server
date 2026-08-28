@@ -25,3 +25,6 @@ path = "src/bin/surmount-fix-public-dashboard.rs"
 [lib]
 name = "surmount_diskstation"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

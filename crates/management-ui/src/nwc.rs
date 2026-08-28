@@ -148,7 +148,7 @@ fn normalize_wallet_hex(host: &str) -> Result<String, String> {
 
 fn normalize_secret_hex(secret: &str) -> Result<String, String> {
     let h = secret.trim().to_ascii_lowercase();
-    if h.len() < 32 || h.len() % 2 != 0 || !h.bytes().all(|c| c.is_ascii_hexdigit()) {
+    if h.len() < 32 || !h.len().is_multiple_of(2) || !h.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err("Invalid NWC URI (secret must be even-length hex).".into());
     }
     Ok(h)
@@ -277,6 +277,7 @@ fn lock_nwc_store(path: &Path) -> Result<File, String> {
     let lock_path = lock_path_for(path);
     let f = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .mode(0o600)
@@ -432,14 +433,18 @@ mod tests {
     /// Named contract: nsec and garbage are refused without echo.
     #[test]
     fn nwc_uri_nsec_and_garbage_refused_without_echo() {
-        let nsec = concat!("nsec", "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq").to_string();
-        let err = parse_nwc_uri(nsec).unwrap_err();
+        let nsec = concat!(
+            "nsec",
+            "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        )
+        .to_string();
+        let err = parse_nwc_uri(&nsec).unwrap_err();
         let err_l = err.to_ascii_lowercase();
         assert!(
             err_l.contains("nsec") || err_l.contains("refused") || err_l.contains("invalid"),
             "nsec must be refused: {err}"
         );
-        assert!(!err.contains(nsec), "error must not echo the nsec: {err}");
+        assert!(!err.contains(&nsec), "error must not echo the nsec: {err}");
 
         let pasted_nsec_in_uri = format!(
             "nostr+walletconnect://{}?relay=wss://relay.example.test&secret={nsec}",
@@ -447,7 +452,7 @@ mod tests {
         );
         let err2 = parse_nwc_uri(&pasted_nsec_in_uri).unwrap_err();
         assert!(
-            !err2.contains(nsec),
+            !err2.contains(&nsec),
             "error must not echo nsec from a fake URI: {err2}"
         );
 

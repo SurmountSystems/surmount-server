@@ -35,11 +35,11 @@
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.5.0 source build).
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.5.1 source build).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     # Rustc/cargo only for engines whose MSRV exceeds the host channel default.
-    # Arti 2.5.0 MSRV is 1.91. Keep a separate input so we can pin newer rustc
+    # Arti 2.5.1 MSRV is 1.91. Keep a separate input so we can pin newer rustc
     # without waiting on every host-channel package set. Bump when Arti needs it.
     nixpkgs-rust.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -59,6 +59,13 @@
       url = "github:SurmountSystems/site";
       flake = false;
     };
+
+    # RustSec advisory-db for hermetic cargo-audit (offline in checks.ci).
+    # Bump: nix flake update advisory-db
+    advisory-db = {
+      url = "github:rustsec/advisory-db";
+      flake = false;
+    };
   };
 
   outputs =
@@ -69,6 +76,7 @@
       crane,
       sops-nix,
       surmount-site,
+      advisory-db,
       ...
     }:
     let
@@ -123,6 +131,7 @@
         surmount-host-logs = self.packages.${system}.surmount-host-logs;
         surmount-shc = self.packages.${system}.surmount-shc;
         surmount-niced-builder = self.packages.${system}.surmount-niced-builder;
+        surmount-scram = self.packages.${system}.surmount-scram;
         surmount-leftover-homes = self.packages.${system}.surmount-leftover-homes;
         surmount-host-probe = self.packages.${system}.surmount-host-probe;
         surmount-static-sites = self.packages.${system}.surmount-static-sites;
@@ -136,6 +145,7 @@
         surmount-mail-import = self.packages.${system}.surmount-mail-import;
         surmount-secrets-install = self.packages.${system}.surmount-secrets-install;
         surmount-secrets-prompt = self.packages.${system}.surmount-secrets-prompt;
+        surmount-rekey = self.packages.${system}.surmount-rekey;
       };
 
       mkPkgs =
@@ -146,15 +156,16 @@
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
-      # Toolchain from nix/rust-toolchain.nix (nixos-26.05: rustPackages_1_95).
+      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust / nixos-unstable).
       mkManagementUiCrane =
         system:
         let
           pkgs = mkPkgsBare system;
-          rustToolchain = import ./nix/rust-toolchain.nix { inherit pkgs; };
+          pkgsRust = mkPkgsRust system;
+          rustToolchain = import ./nix/rust-toolchain.nix { pkgs = pkgsRust; };
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
           src = lib.cleanSourceWith {
-            src = craneLib.path ./crates;
+            src = craneLib.path ./.;
             filter =
               path: type:
               (craneLib.filterCargoSources path type)
@@ -274,11 +285,17 @@
         system:
         let
           pkgs = mkPkgsBare system;
-          craneLib = crane.mkLib pkgs;
-          e2ePkgs = pkgs.callPackage ./nix/packages/surmount-e2e.nix { inherit craneLib; };
+          pkgsRust = mkPkgsRust system;
+          rustToolchain = import ./nix/rust-toolchain.nix { pkgs = pkgsRust; };
+          craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+          e2ePkgs = pkgs.callPackage ./nix/packages/surmount-e2e.nix {
+            inherit craneLib pkgsRust;
+          };
         in
         {
-          management-ui = pkgs.callPackage ./nix/packages/management-ui.nix { inherit craneLib; };
+          management-ui = pkgs.callPackage ./nix/packages/management-ui.nix {
+            inherit craneLib pkgsRust;
+          };
           stalwart-mail = pkgs.callPackage ./nix/packages/stalwart-mail.nix { };
           stalwart = self.packages.${system}.stalwart-mail;
           stalwart-cli = pkgs.callPackage ./nix/packages/stalwart-cli.nix { };
@@ -291,7 +308,7 @@
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.5.0 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.5.1 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
           # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
           # vendor handoff avoids crates.io 403). C deps from host pkgs.
@@ -306,53 +323,61 @@
           # just aliases only nix-run. Crate src missing => package evals,
           # build fails closed.
           surmount-private-data = pkgs.callPackage ./nix/packages/surmount-private-data.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-host-logs = pkgs.callPackage ./nix/packages/surmount-host-logs.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
-          surmount-shc = pkgs.callPackage ./nix/packages/surmount-shc.nix { inherit craneLib; };
+          surmount-shc = pkgs.callPackage ./nix/packages/surmount-shc.nix {
+            inherit craneLib pkgsRust;
+          };
           surmount-niced-builder = pkgs.callPackage ./nix/packages/surmount-niced-builder.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
+          };
+          surmount-scram = pkgs.callPackage ./nix/packages/surmount-scram.nix {
+            inherit craneLib pkgsRust;
           };
           surmount-leftover-homes = pkgs.callPackage ./nix/packages/surmount-leftover-homes.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-host-probe = pkgs.callPackage ./nix/packages/surmount-host-probe.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-static-sites = pkgs.callPackage ./nix/packages/surmount-static-sites.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-diskstation = pkgs.callPackage ./nix/packages/surmount-diskstation.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-deploy-host = pkgs.callPackage ./nix/packages/surmount-deploy-host.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-dns-zone = pkgs.callPackage ./nix/packages/surmount-dns-zone.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-domain-audit = pkgs.callPackage ./nix/packages/surmount-domain-audit.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-host-cutover = pkgs.callPackage ./nix/packages/surmount-host-cutover.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-acme-namecheap = pkgs.callPackage ./nix/packages/surmount-acme-namecheap.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-stalwart-ops = pkgs.callPackage ./nix/packages/surmount-stalwart-ops.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-mail-import = pkgs.callPackage ./nix/packages/surmount-mail-import.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-secrets-install = pkgs.callPackage ./nix/packages/surmount-secrets-install.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
           };
           surmount-secrets-prompt = pkgs.callPackage ./nix/packages/surmount-secrets-prompt.nix {
-            inherit craneLib;
+            inherit craneLib pkgsRust;
+          };
+          surmount-rekey = pkgs.callPackage ./nix/packages/surmount-rekey.nix {
+            inherit craneLib pkgsRust;
           };
           # RFC-style nixfmt (same as formatter / checks.ci / devShell).
           # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt …
@@ -389,6 +414,10 @@
         surmount-niced-builder = {
           type = "app";
           program = "${self.packages.${system}.surmount-niced-builder}/bin/surmount-niced-builder";
+        };
+        surmount-scram = {
+          type = "app";
+          program = "${self.packages.${system}.surmount-scram}/bin/surmount-scram";
         };
         surmount-leftover-homes = {
           type = "app";
@@ -460,7 +489,9 @@
         };
         surmount-render-host-profile-acme = {
           type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/surmount-render-host-profile-acme";
+          program = "${
+            self.packages.${system}.surmount-acme-namecheap
+          }/bin/surmount-render-host-profile-acme";
         };
         acme-dns-hook-namecheap-dispatch = {
           type = "app";
@@ -472,7 +503,9 @@
         };
         surmount-deploy-host-post-switch-smoke = {
           type = "app";
-          program = "${self.packages.${system}.surmount-deploy-host}/bin/surmount-deploy-host-post-switch-smoke";
+          program = "${
+            self.packages.${system}.surmount-deploy-host
+          }/bin/surmount-deploy-host-post-switch-smoke";
         };
         surmount-host-material-inventory = {
           type = "app";
@@ -517,6 +550,10 @@
         surmount-secrets-prompt = {
           type = "app";
           program = "${self.packages.${system}.surmount-secrets-prompt}/bin/surmount-secrets-prompt";
+        };
+        surmount-rekey = {
+          type = "app";
+          program = "${self.packages.${system}.surmount-rekey}/bin/surmount-rekey";
         };
       });
 
@@ -627,6 +664,13 @@
             }
             {
               crate = "surmount-niced-builder";
+              extraNative = [
+                pkgs.util-linux
+                pkgs.coreutils
+              ];
+            }
+            {
+              crate = "surmount-scram";
               extraNative = [ ];
             }
             {
@@ -675,11 +719,15 @@
             }
             {
               crate = "surmount-secrets-install";
-              extraNative = [ ];
+              extraNative = [ pkgs.coreutils ];
             }
             {
               crate = "surmount-secrets-prompt";
               extraNative = [ pkgs.bash ];
+            }
+            {
+              crate = "surmount-rekey";
+              extraNative = [ ];
             }
           ];
 
@@ -758,6 +806,33 @@
             in
             pkgs.writeText "arti-onion-package-contract" (builtins.toJSON r.ok);
 
+          # Offline RustSec audit of Cargo.lock (no crates.io).
+          cargo-audit =
+            pkgs.runCommand "surmount-cargo-audit"
+              {
+                nativeBuildInputs = [ pkgs.cargo-audit ];
+              }
+              ''
+                set -euo pipefail
+                cargo-audit audit --no-fetch --stale \
+                  -d ${advisory-db} \
+                  -f ${./Cargo.lock}
+                mkdir -p "$out"
+                echo ok > "$out/ok"
+              '';
+
+          # Ban sha1/md5 *crate names* in the lockfile (no cargo metadata).
+          # deny.toml is the human/cargo-deny config for a full shell.
+          cargo-deny-bans = pkgs.runCommand "surmount-cargo-deny-bans" { } ''
+            set -euo pipefail
+            if grep -E '^name = "(sha1|sha-1|md5|md-5)"$' ${./Cargo.lock}; then
+              echo "banned hasher crate name in Cargo.lock" >&2
+              exit 1
+            fi
+            mkdir -p "$out"
+            echo ok > "$out/ok"
+          '';
+
           nix-fmt-check =
             pkgs.runCommand "nix-fmt-check"
               {
@@ -802,6 +877,8 @@
               arti-onion-package-contract
               public-site-package-contract
               nix-fmt-check
+              cargo-deny-bans
+              cargo-audit
             ]
             ++ wave1CiExtras;
           };
@@ -819,6 +896,8 @@
             arti-onion-package-contract
             public-site-package-contract
             nix-fmt-check
+            cargo-audit
+            cargo-deny-bans
             ci
             ;
 
@@ -872,11 +951,8 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              # Match crane management-ui toolchain (nix/rust-toolchain.nix).
-              rustPackages_1_95.rustc
-              rustPackages_1_95.cargo
-              rustPackages_1_95.rustfmt
-              rustPackages_1_95.clippy
+              # Match crane toolchain (nix/rust-toolchain.nix via nixpkgs-rust).
+              (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
               rust-analyzer
               pkg-config
               nixfmt
@@ -893,6 +969,8 @@
               echo "  just dev            # local management console → http://127.0.0.1:8080/"
               echo "  just check          # fmt --check + clippy + test (CI-style host bar)"
               echo "  just ci             # full flake checks.<system>.ci (GHA quality job)"
+              echo "  just audit          # cargo-audit --offline (RustSec advisory-db)"
+              echo "  just deny           # cargo-deny bans (no sha1/md5 crates)"
               echo "  just fmt-write      # apply cargo fmt + flake nixfmt"
               echo "  just e2e            # local hermetic end-to-end (nix run .#e2e)"
               echo "  just e2e-host       # host probes (needs SURMOUNT_E2E_HOST=1)"

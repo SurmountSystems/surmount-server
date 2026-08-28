@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 use surmount_static_sites::{
-    copy_tree, redact_gvfs_path, validate_target, which, PROVEN_SLUGS, SitesError,
+    PROVEN_SLUGS, SitesError, copy_tree, redact_gvfs_path, validate_target, which,
 };
 
 const USAGE: &str = "\
@@ -45,8 +45,10 @@ fn parse() -> Result<Opts, SitesError> {
     let uid = std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {
-            s.lines()
-                .find_map(|l| l.strip_prefix("Uid:").and_then(|r| r.split_whitespace().next().map(|x| x.to_string())))
+            s.lines().find_map(|l| {
+                l.strip_prefix("Uid:")
+                    .and_then(|r| r.split_whitespace().next().map(|x| x.to_string()))
+            })
         })
         .unwrap_or_else(|| "1000".into());
     let mut live = false;
@@ -113,7 +115,11 @@ fn parse() -> Result<Opts, SitesError> {
                 share = need(&rest, i, "--share requires a name")?;
                 i += 1;
             }
-            other => return Err(SitesError::new(format!("unknown argument: {other} (try --help)"))),
+            other => {
+                return Err(SitesError::new(format!(
+                    "unknown argument: {other} (try --help)"
+                )));
+            }
         }
     }
     if host_id != "DS3018xs" {
@@ -213,10 +219,7 @@ fn main() -> ExitCode {
         let user = t.split('@').next().unwrap_or("user");
         println!("  target={user}@<mail-host>");
     }
-    println!(
-        "  mode: {}",
-        if opts.live { "LIVE" } else { "dry-run" }
-    );
+    println!("  mode: {}", if opts.live { "LIVE" } else { "dry-run" });
 
     let mut missing = false;
     for slug in PROVEN_SLUGS {

@@ -41,8 +41,12 @@ pub fn require_owner_only(path: &Path, prefix: &str) -> Result<fs::Metadata> {
     if path.as_os_str().is_empty() {
         return Err(die(prefix, "credentials path empty"));
     }
-    let meta = fs::symlink_metadata(path)
-        .map_err(|_| die(prefix, format!("credentials file missing: {}", path.display())))?;
+    let meta = fs::symlink_metadata(path).map_err(|_| {
+        die(
+            prefix,
+            format!("credentials file missing: {}", path.display()),
+        )
+    })?;
     if meta.file_type().is_symlink() {
         return Err(die(
             prefix,
@@ -53,7 +57,10 @@ pub fn require_owner_only(path: &Path, prefix: &str) -> Result<fs::Metadata> {
         ));
     }
     if !meta.is_file() {
-        return Err(die(prefix, format!("credentials file missing: {}", path.display())));
+        return Err(die(
+            prefix,
+            format!("credentials file missing: {}", path.display()),
+        ));
     }
     let mode = meta.permissions().mode() & 0o777;
     if mode & 0o077 != 0 {
@@ -71,8 +78,12 @@ pub fn require_owner_only(path: &Path, prefix: &str) -> Result<fs::Metadata> {
 
 pub fn load_credentials(path: &Path, prefix: &str) -> Result<Credentials> {
     require_owner_only(path, prefix)?;
-    let file = File::open(path)
-        .map_err(|_| die(prefix, format!("credentials file unreadable: {}", path.display())))?;
+    let file = File::open(path).map_err(|_| {
+        die(
+            prefix,
+            format!("credentials file unreadable: {}", path.display()),
+        )
+    })?;
     let mut api_user = String::new();
     let mut api_key = String::new();
     let mut user_name = String::new();
@@ -82,7 +93,12 @@ pub fn load_credentials(path: &Path, prefix: &str) -> Result<Credentials> {
     let mut settle_secs = 0u64;
     let mut txt_ttl = 60u32;
     for line in BufReader::new(file).lines() {
-        let mut line = line.map_err(|_| die(prefix, format!("credentials unreadable: {}", path.display())))?;
+        let mut line = line.map_err(|_| {
+            die(
+                prefix,
+                format!("credentials unreadable: {}", path.display()),
+            )
+        })?;
         if let Some(s) = line.strip_suffix('\r') {
             line = s.to_string();
         }
@@ -93,7 +109,10 @@ pub fn load_credentials(path: &Path, prefix: &str) -> Result<Credentials> {
         let Some((key, val)) = line.split_once('=') else {
             return Err(die(
                 prefix,
-                format!("credentials line must be KEY=value (file={})", path.display()),
+                format!(
+                    "credentials line must be KEY=value (file={})",
+                    path.display()
+                ),
             ));
         };
         let key = key.trim();
@@ -125,16 +144,28 @@ pub fn load_credentials(path: &Path, prefix: &str) -> Result<Credentials> {
         }
     }
     if api_user.is_empty() {
-        return Err(die(prefix, format!("credentials missing ApiUser (file={})", path.display())));
+        return Err(die(
+            prefix,
+            format!("credentials missing ApiUser (file={})", path.display()),
+        ));
     }
     if api_key.is_empty() {
-        return Err(die(prefix, format!("credentials missing ApiKey (file={})", path.display())));
+        return Err(die(
+            prefix,
+            format!("credentials missing ApiKey (file={})", path.display()),
+        ));
     }
     if sld.is_empty() {
-        return Err(die(prefix, format!("credentials missing SLD (file={})", path.display())));
+        return Err(die(
+            prefix,
+            format!("credentials missing SLD (file={})", path.display()),
+        ));
     }
     if tld.is_empty() {
-        return Err(die(prefix, format!("credentials missing TLD (file={})", path.display())));
+        return Err(die(
+            prefix,
+            format!("credentials missing TLD (file={})", path.display()),
+        ));
     }
     if txt_ttl < 60 {
         return Err(die(prefix, "TxtTtl must be an integer >= 60"));

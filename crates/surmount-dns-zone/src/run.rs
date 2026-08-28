@@ -6,9 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::cred::{
-    DEFAULT_TTL, die, load_credentials, resolve_cred_path,
-};
+use crate::cred::{DEFAULT_TTL, die, load_credentials, resolve_cred_path};
 use crate::dnssec::refuse_sha1_ds;
 use crate::hostname::to_hostname;
 use crate::zone::{
@@ -128,8 +126,17 @@ where
             if rest.len() < 2 {
                 return Err(die("set-a requires HOST A_IPV4"));
             }
-            let (host, a, ttl) = parse_ttl_tail(&rest[0], Some(&rest[1]), None, &rest[2..], &flags)?;
-            cmd_set_records(&cred, mock.as_deref(), flags.live, &host, Some(&a), None, &ttl)
+            let (host, a, ttl) =
+                parse_ttl_tail(&rest[0], Some(&rest[1]), None, &rest[2..], &flags)?;
+            cmd_set_records(
+                &cred,
+                mock.as_deref(),
+                flags.live,
+                &host,
+                Some(&a),
+                None,
+                &ttl,
+            )
         }
         "set-aaaa" => {
             if rest.len() < 2 {
@@ -322,11 +329,7 @@ fn parse_ttl_tail(
             other => return Err(die(format!("unknown argument: {other}"))),
         }
     }
-    Ok((
-        host.to_string(),
-        val.unwrap_or("").to_string(),
-        ttl,
-    ))
+    Ok((host.to_string(), val.unwrap_or("").to_string(), ttl))
 }
 
 fn load_zone(mock: Option<&std::path::Path>) -> Result<Zone> {
@@ -341,7 +344,9 @@ fn load_zone(mock: Option<&std::path::Path>) -> Result<Zone> {
 fn save_zone(mock: Option<&std::path::Path>, zone: &Zone) -> Result<()> {
     refuse_sha1_ds(&zone.records)?;
     let Some(dir) = mock else {
-        return Err(die("live Namecheap API write refused without MOCK_DIR in this binary path"));
+        return Err(die(
+            "live Namecheap API write refused without MOCK_DIR in this binary path",
+        ));
     };
     save_mock(dir, zone)
 }
@@ -408,15 +413,18 @@ fn apply_or_dry(
     Ok(0)
 }
 
-fn plan_header(cred: &crate::cred::Credentials, host: &str, live: bool, before: usize, after: usize) {
+fn plan_header(
+    cred: &crate::cred::Credentials,
+    host: &str,
+    live: bool,
+    before: usize,
+    after: usize,
+) {
     println!(
         "dns-zone-namecheap: plan for host={host} zone={}",
         cred.zone()
     );
-    println!(
-        "  mode: {}",
-        if live { "LIVE" } else { "dry-run" }
-    );
+    println!("  mode: {}", if live { "LIVE" } else { "dry-run" });
     println!("  records before merge: {before}; after: {after}");
     println!("  note: setHosts replaces entire zone; other records are re-applied from getHosts");
     println!("  note: do not --live concurrent with ACME DNS-01 challenge set/clear");
@@ -538,6 +546,7 @@ fn cmd_set_txt(
     apply_or_dry(live, mock, &zone, &host, " type=TXT")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_set_caa(
     cred: &crate::cred::Credentials,
     mock: Option<&std::path::Path>,
@@ -570,7 +579,9 @@ fn cmd_set_caa(
         return Err(die("CAA VALUE empty"));
     }
     if value.contains('"') {
-        return Err(die("CAA VALUE must not contain double quotes (tool adds them)"));
+        return Err(die(
+            "CAA VALUE must not contain double quotes (tool adds them)",
+        ));
     }
     let ttl = assert_ttl(ttl)?;
     let host = to_hostname(host_raw, &cred.sld, &cred.tld)?;
@@ -608,20 +619,27 @@ fn cmd_set_mx(
     if exchange.is_empty() {
         return Err(die("MX exchange empty"));
     }
-    if exchange.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    if exchange
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace())
+    {
         return Err(die("MX exchange: control/space refused"));
     }
     if !exchange
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
-        return Err(die(format!("MX exchange has invalid characters: {exchange}")));
+        return Err(die(format!(
+            "MX exchange has invalid characters: {exchange}"
+        )));
     }
     let pref_n: u32 = pref
         .parse()
         .map_err(|_| die(format!("MX preference must be integer 0-65535: {pref}")))?;
     if pref_n > 65535 {
-        return Err(die(format!("MX preference must be integer 0-65535: {pref}")));
+        return Err(die(format!(
+            "MX preference must be integer 0-65535: {pref}"
+        )));
     }
     let ttl = assert_ttl(ttl)?;
     let host = to_hostname(host_raw, &cred.sld, &cred.tld)?;
@@ -673,7 +691,10 @@ fn cmd_delete_host(
     if rec_type.is_empty() {
         return Err(die("record type empty"));
     }
-    if rec_type.chars().any(|c| c.is_control() || c.is_whitespace()) {
+    if rec_type
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace())
+    {
         return Err(die("record type: control/space refused"));
     }
     if rec_type.len() > 16
@@ -684,7 +705,9 @@ fn cmd_delete_host(
             .unwrap_or(false)
         || !rec_type.chars().all(|c| c.is_ascii_alphanumeric())
     {
-        return Err(die(format!("record type has invalid characters: {rec_type}")));
+        return Err(die(format!(
+            "record type has invalid characters: {rec_type}"
+        )));
     }
     let host = to_hostname(host_raw, &cred.sld, &cred.tld)?;
     let mut zone = load_zone(mock)?;
@@ -696,14 +719,24 @@ fn cmd_delete_host(
     let after = zone.records.len();
     let dropped = before.saturating_sub(after);
     if dropped == 0 {
-        return Err(die(format!("no {rec_type} record at host={host} to delete")));
+        return Err(die(format!(
+            "no {rec_type} record at host={host} to delete"
+        )));
     }
     if after == 0 {
-        return Err(die("delete-host would leave an empty zone (refuse empty setHosts)"));
+        return Err(die(
+            "delete-host would leave an empty zone (refuse empty setHosts)",
+        ));
     }
     plan_header(cred, &host, live, before, after);
     println!("  delete {rec_type} at {host} (dropped={dropped})");
     println!("  planned zone:");
     print!("{}", print_hosts(&zone));
-    apply_or_dry(live, mock, &zone, &host, &format!(" delete type={rec_type}"))
+    apply_or_dry(
+        live,
+        mock,
+        &zone,
+        &host,
+        &format!(" delete type={rec_type}"),
+    )
 }

@@ -40,7 +40,8 @@ where
     let mut url = std::env::var("STALWART_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".into());
     let mut cli = std::env::var("STALWART_CLI").unwrap_or_default();
     let mut ss_cmd = std::env::var("SURMOUNT_FREE_443_SS").unwrap_or_else(|_| "ss".into());
-    let mut systemctl = std::env::var("SURMOUNT_FREE_443_SYSTEMCTL").unwrap_or_else(|_| "systemctl".into());
+    let mut systemctl =
+        std::env::var("SURMOUNT_FREE_443_SYSTEMCTL").unwrap_or_else(|_| "systemctl".into());
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -91,7 +92,11 @@ where
                 i += 1;
                 systemctl = need(&argv, i)?;
             }
-            other => return Err(ToolError::fail(format!("unknown argument: {other} (try --help)"))),
+            other => {
+                return Err(ToolError::fail(format!(
+                    "unknown argument: {other} (try --help)"
+                )));
+            }
         }
         i += 1;
     }
@@ -122,8 +127,14 @@ where
 
     if !query_only {
         let p = Path::new(&plan);
-        if p.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) && !p.exists() {
-            return Err(ToolError::fail(format!("plan path is a dangling symlink: {plan}")));
+        if p.symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+            && !p.exists()
+        {
+            return Err(ToolError::fail(format!(
+                "plan path is a dangling symlink: {plan}"
+            )));
         }
         if !p.is_file() && !p.symlink_metadata().is_ok() {
             return Err(ToolError::fail(format!("plan file missing: {plan}")));
@@ -168,22 +179,39 @@ where
         return Ok(());
     }
     if dry_run {
-        eprintln!("free-stalwart-public-443: dry-run: apply plan with --dry-run (no datastore mutation claimed)");
-        let out = run_cli(&cli, &url, &token, &["apply", "--file", &plan, "--dry-run"], "free-stalwart-public-443")?;
+        eprintln!(
+            "free-stalwart-public-443: dry-run: apply plan with --dry-run (no datastore mutation claimed)"
+        );
+        let out = run_cli(
+            &cli,
+            &url,
+            &token,
+            &["apply", "--file", &plan, "--dry-run"],
+            "free-stalwart-public-443",
+        )?;
         if !out.status.success() {
             return Err(ToolError::fail(
-                "stalwart-cli apply --dry-run failed (plan or auth). Secret values not logged.".to_string(),
+                "stalwart-cli apply --dry-run failed (plan or auth). Secret values not logged."
+                    .to_string(),
             ));
         }
         if !out.stdout.is_empty() {
             let _ = std::io::Write::write_all(&mut std::io::stdout(), &out.stdout);
         }
-        eprintln!("free-stalwart-public-443: dry-run complete: no live free of :443 claimed. Re-run with --live on the operator host when ready.");
+        eprintln!(
+            "free-stalwart-public-443: dry-run complete: no live free of :443 claimed. Re-run with --live on the operator host when ready."
+        );
         return Ok(());
     }
 
     eprintln!("free-stalwart-public-443: live: apply plan (datastore mutation)");
-    let out = run_cli(&cli, &url, &token, &["apply", "--file", &plan], "free-stalwart-public-443")?;
+    let out = run_cli(
+        &cli,
+        &url,
+        &token,
+        &["apply", "--file", &plan],
+        "free-stalwart-public-443",
+    )?;
     if !out.status.success() {
         return Err(ToolError::fail(
             "stalwart-cli apply failed. Mail left as-is. Secret values not logged.".to_string(),
@@ -192,7 +220,9 @@ where
     eprintln!("free-stalwart-public-443: live apply finished");
     if restart {
         eprintln!("free-stalwart-public-443: restarting stalwart-mail ({systemctl})");
-        let st = Command::new(&systemctl).args(["restart", "stalwart-mail"]).status()?;
+        let st = Command::new(&systemctl)
+            .args(["restart", "stalwart-mail"])
+            .status()?;
         if !st.success() {
             return Err(ToolError::fail(
                 "systemctl restart stalwart-mail failed after apply".to_string(),
@@ -200,17 +230,20 @@ where
         }
         eprintln!("free-stalwart-public-443: stalwart-mail restart requested");
     } else {
-        eprintln!("free-stalwart-public-443: note: not restarting stalwart-mail (pass --restart if binds persist until process restart)");
+        eprintln!(
+            "free-stalwart-public-443: note: not restarting stalwart-mail (pass --restart if binds persist until process restart)"
+        );
     }
     if skip_ss {
         eprintln!("free-stalwart-public-443: skip ss check (--skip-ss-check)");
         eprintln!("free-stalwart-public-443: live complete: apply ok; ss not proven this run");
         return Ok(());
     }
-    let ss_out = Command::new(&ss_cmd)
-        .arg("-lntp")
-        .output()
-        .map_err(|_| ToolError::fail(format!("ss not found ({ss_cmd}); pass --skip-ss-check or --ss-cmd for hermetic")))?;
+    let ss_out = Command::new(&ss_cmd).arg("-lntp").output().map_err(|_| {
+        ToolError::fail(format!(
+            "ss not found ({ss_cmd}); pass --skip-ss-check or --ss-cmd for hermetic"
+        ))
+    })?;
     if !ss_out.status.success() {
         return Err(ToolError::fail(format!(
             "ss failed (rc={}); cannot prove :443 free",
@@ -218,18 +251,22 @@ where
         )));
     }
     let text = String::from_utf8_lossy(&ss_out.stdout);
-    let has_443_stalwart = text.lines().any(|l| {
-        l.contains(":443") && l.to_ascii_lowercase().contains("stalwart")
-    });
+    let has_443_stalwart = text
+        .lines()
+        .any(|l| l.contains(":443") && l.to_ascii_lowercase().contains("stalwart"));
     if has_443_stalwart {
         return Err(ToolError::fail(
             "prove failed: stalwart still appears on :443 (ss). Restart may be required, or plan name filters may not match first-boot listeners. Query listeners and adjust host-local plan copy.".to_string(),
         ));
     }
     if text.contains(":443") {
-        eprintln!("free-stalwart-public-443: note: something still listens on :443 (not matched as stalwart); confirm it is product edge when enabled");
+        eprintln!(
+            "free-stalwart-public-443: note: something still listens on :443 (not matched as stalwart); confirm it is product edge when enabled"
+        );
     } else {
-        eprintln!("free-stalwart-public-443: no :443 listeners visible in ss (free for Axum product edge)");
+        eprintln!(
+            "free-stalwart-public-443: no :443 listeners visible in ss (free for Axum product edge)"
+        );
     }
     eprintln!("free-stalwart-public-443: live complete: apply ok; stalwart not observed on :443");
     Ok(())

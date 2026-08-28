@@ -273,15 +273,36 @@ scratch. Call on-disk handoffs **reports**, never "joins".
 
 ## Git is operator-owned (operator 2026-08-17)
 
-Git is operator-owned. Agents never `git add`, `git commit`, `git push`, or
-stage. Do not nag about commits. Do not mention uncommitted trees in reports.
-The operator owns VCS.
+Git is operator-owned. The index and the working tree are **how the
+operator keeps track of what agents did**. Agents never `git add`,
+`git commit`, `git push`, stage, or **touch the index at all**
+(`git restore --staged`, `git reset`, `git rm --cached`, anything that
+writes the index). Finding a staged tree is **not** a reason to unstage.
+Do not "fix" or "clean up" Git. That erases their tracker. Tell them if
+they asked. Do not nag about commits. Do not mention uncommitted trees
+in reports unless they asked about Git that turn. Operator 2026-08-28:
+stop touching Git. Unstaging is still touching Git.
+
+## "Always remember" is dual-pin law (operator 2026-08-27)
+
+When the operator says **always remember**, that is not a chat promise.
+Write it in **both** this file **and** [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)
+in the same turn (standing rule + compaction reload table). One file is
+attention dilution. Chat-only is compaction loss. Nix needing an untracked
+file is still not a reason to stage.
 
 ## Mention is in scope; remote builder and niceness (operator 2026-08-17)
 
 If the operator mentioned work, that work is in scope. Implement it. Do **not**
 park mentioned residual as "need hostname" or "operator-gated" when access
 already exists.
+
+**After a guest incident, finish the named process (operator 2026-08-27).**
+Do not tell the operator they need do nothing, or to wait, when leftover is
+`just check-remote`, then `just deploy-host -- --dry-run`, then the real
+switch. A reboot does not cancel that slice. Agents never reboot. Keep the
+Eternal Terminal window. Continue test, dry-run, and switch unless they said
+stop.
 
 Comprehensive residual means finish the **named leftover slices**. Do **not**
 invent unlocked tracks. Do not start an MX flip, a DMARC `p=reject`
@@ -376,7 +397,7 @@ onto `modules/remote-builder.nix`.
 
 | Knob | Machine | Source of truth |
 |------|---------|-----------------|
-| Laptop local `max-jobs` / cores | Operator laptop (this session host) | Live `inxi` on the laptop. 8 physical / 16 threads. If setting laptop system `max-jobs`, use 16 threads. Separate from machines-file slots. |
+| Laptop local `max-jobs` / cores | Operator laptop (this session host) | Live `inxi` on the laptop. 8 physical / 16 threads. If setting laptop system `max-jobs`, use 16 threads. Separate from machines-file slots. Guest down: `BUILD_LOCAL=true just ...` (empty builders, local `max-jobs = auto`). |
 | machines-file `max-jobs` (jobs sent to the builder) | Mail host surmount-1 | Live guest `nix.settings.max-jobs` after measuring that box with `ssh surmount-1 inxi` / `lscpu`. Not laptop inxi. |
 | Guest `MemoryMax` / `CPUQuota` | Mail host | Live guest facts. Do not change unless those remote facts prove they are still wrong. |
 

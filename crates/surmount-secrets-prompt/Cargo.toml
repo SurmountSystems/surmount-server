@@ -19,3 +19,6 @@ anyhow.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 getrandom.workspace = true
 rpassword = "7"
+
+[lints]
+workspace = true

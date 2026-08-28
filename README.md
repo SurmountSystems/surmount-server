@@ -115,6 +115,9 @@ nix develop                            # puts nixfmt, just, rustc, … on PATH
 just dev                               # local management console → http://127.0.0.1:8080/
 just check                             # CI-style host bar: fmt --check, clippy, test
 just ci                                # full flake checks.<system>.ci (GHA runs this)
+just check-remote                      # same ci aggregate, max-jobs 0 (ssh-ng builder)
+just audit                             # cargo-audit vs locked RustSec DB (not in ci yet)
+just deny                              # lockfile ban on sha1/md5 crate names (in ci)
 just check-ci                          # alias of just ci
 just fmt                               # format check only (errors if dirty; no write)
 just fmt-write                         # apply cargo fmt + flake nixfmt

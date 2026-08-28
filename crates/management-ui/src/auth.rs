@@ -388,7 +388,7 @@ pub fn verify_nip98_event_unlisted(
     // Cryptographic verify (id + schnorr sig).
     event.verify().map_err(|_| AuthError::BadSignature)?;
 
-    let created = event.created_at.as_u64();
+    let created = event.created_at.as_secs();
     if now_unix.abs_diff(created) > max_skew_secs {
         return Err(AuthError::Skew);
     }
@@ -855,10 +855,14 @@ mod tests {
     /// parse failures are a fixed "invalid npub" with no token.
     #[test]
     fn normalize_pubkey_token_refuses_nsec_without_echo() {
-        let nsec = concat!("nsec", "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq").to_string();
-        let err = normalize_pubkey_token(nsec).unwrap_err();
+        let nsec = concat!(
+            "nsec",
+            "1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+        )
+        .to_string();
+        let err = normalize_pubkey_token(&nsec).unwrap_err();
         assert_eq!(err, "nsec is not allowed");
-        assert!(!err.contains(nsec), "must not echo nsec: {err}");
+        assert!(!err.contains(&nsec), "must not echo nsec: {err}");
         let mixed = "NSEC1not-a-real-secret-token";
         let err = normalize_pubkey_token(mixed).unwrap_err();
         assert_eq!(err, "nsec is not allowed");

@@ -66,15 +66,18 @@ fn deploy_dry_run_plans_and_redacts() {
         "<html><title>Surmount Systems</title>Bitcoin-focused Deep Tech</html>\n",
     )
     .unwrap();
-    fs::write(extra.join("cryptoquick/index.html"), "<html>CRYPTOQUICK-FIXTURE</html>\n").unwrap();
-    fs::write(extra.join("yiffa/index.html"), "<html>YIFFA-FIXTURE</html>\n").unwrap();
+    fs::write(
+        extra.join("cryptoquick/index.html"),
+        "<html>CRYPTOQUICK-FIXTURE</html>\n",
+    )
+    .unwrap();
+    fs::write(
+        extra.join("yiffa/index.html"),
+        "<html>YIFFA-FIXTURE</html>\n",
+    )
+    .unwrap();
     let out = Command::new(deploy())
-        .args([
-            "--dry-run",
-            "--target",
-            "root@example.test",
-            "--site-root",
-        ])
+        .args(["--dry-run", "--target", "root@example.test", "--site-root"])
         .arg(&site)
         .arg("--extra-from")
         .arg(&extra)
@@ -82,7 +85,12 @@ fn deploy_dry_run_plans_and_redacts() {
         .unwrap();
     assert!(out.status.success());
     let t = String::from_utf8_lossy(&out.stdout);
-    assert!(t.contains("dry-run") && t.contains("apex") && t.contains("cryptoquick") && t.contains("yiffa"));
+    assert!(
+        t.contains("dry-run")
+            && t.contains("apex")
+            && t.contains("cryptoquick")
+            && t.contains("yiffa")
+    );
     assert!(!t.contains("root@example.test"));
     assert!(!regex_ipv4(&t));
 }
@@ -101,8 +109,16 @@ fn deploy_local_dest_copies() {
         "<html>Bitcoin-focused Deep Tech</html>\n",
     )
     .unwrap();
-    fs::write(extra.join("cryptoquick/index.html"), "<html>CRYPTOQUICK-FIXTURE</html>\n").unwrap();
-    fs::write(extra.join("yiffa/index.html"), "<html>YIFFA-FIXTURE</html>\n").unwrap();
+    fs::write(
+        extra.join("cryptoquick/index.html"),
+        "<html>CRYPTOQUICK-FIXTURE</html>\n",
+    )
+    .unwrap();
+    fs::write(
+        extra.join("yiffa/index.html"),
+        "<html>YIFFA-FIXTURE</html>\n",
+    )
+    .unwrap();
     let out = Command::new(deploy())
         .args(["--live", "--local-dest"])
         .arg(&dest)
@@ -120,9 +136,11 @@ fn deploy_local_dest_copies() {
     );
     let apex = fs::read_to_string(dest.join("public-site/index.html")).unwrap();
     assert!(apex.contains("Bitcoin-focused Deep Tech"));
-    assert!(fs::read_to_string(dest.join("static-sites/cryptoquick/index.html"))
-        .unwrap()
-        .contains("CRYPTOQUICK-FIXTURE"));
+    assert!(
+        fs::read_to_string(dest.join("static-sites/cryptoquick/index.html"))
+            .unwrap()
+            .contains("CRYPTOQUICK-FIXTURE")
+    );
 }
 
 #[test]
@@ -197,19 +215,22 @@ fn sync_dry_run_and_live() {
         .output()
         .unwrap();
     assert!(out.status.success());
-    assert!(fs::read_to_string(dest.join("cryptoquick/index.html"))
-        .unwrap()
-        .contains("cryptoquick-FIXTURE"));
-    assert!(fs::read_to_string(dest.join("yiffa/index.html"))
-        .unwrap()
-        .contains("yiffa-FIXTURE"));
+    assert!(
+        fs::read_to_string(dest.join("cryptoquick/index.html"))
+            .unwrap()
+            .contains("cryptoquick-FIXTURE")
+    );
+    assert!(
+        fs::read_to_string(dest.join("yiffa/index.html"))
+            .unwrap()
+            .contains("yiffa-FIXTURE")
+    );
     assert!(!dest.join("denverspace/index.html").exists());
     assert!(!regex_ipv4(&String::from_utf8_lossy(&out.stdout)));
 }
 
 fn regex_ipv4(s: &str) -> bool {
-    let re = regex_lite(s);
-    re
+    regex_lite(s)
 }
 
 fn regex_lite(s: &str) -> bool {

@@ -16,3 +16,6 @@ path = "src/lib.rs"
 
 [dependencies]
 # std only: git CLI for --staged / --tree, no ripgrep.
+
+[lints]
+workspace = true

@@ -17,3 +17,6 @@ path = "src/bin/surmount-sync-static-sites.rs"
 [lib]
 name = "surmount_static_sites"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

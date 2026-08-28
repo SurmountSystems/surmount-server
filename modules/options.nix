@@ -285,8 +285,9 @@ in
         example = "/var/lib/surmount/secrets/tls/key.pem";
         description = ''
           Absolute host path to TLS private key PEM when listenMode is https.
-          Prefer durable Domain B (mode 0640 surmount-ui:surmount-tls after
-          install/issue; do not chmod 0600). Ephemeral
+          Prefer durable Domain B (mode 0600 surmount-ui after install/issue;
+          owner-only, not group-readable). Stalwart mail-plane TLS uses copies
+          under secrets/mail/tls. Ephemeral
           /run/surmount-secrets/tls/key.pem remains valid.
         '';
       };
@@ -1687,6 +1688,28 @@ in
           merge; ROCKET_ADDRESS / ROCKET_PORT are forced from rocketAddress /
           rocketPort after this merge (extraConfig cannot rebind listen).
         '';
+      };
+    };
+
+    swapFile = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Create a swap file. Path is host-local (disk). Default off.
+          Enable without path is an eval refuse. Scram still keys off
+          MemAvailable, not swap fill. vm.swappiness is 1 in scram.nix.
+        '';
+      };
+      path = mkOption {
+        type = types.str;
+        default = "";
+        description = "Absolute swap file path. Required when enable. Not a public SKU path.";
+      };
+      sizeGiB = mkOption {
+        type = types.ints.positive;
+        default = 256;
+        description = "Swap file size in GiB. Default 256. Host-local may lower it.";
       };
     };
   };

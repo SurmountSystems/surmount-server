@@ -7,8 +7,8 @@ use std::process::{Command, Stdio};
 
 use crate::error::{Result, ToolError};
 use crate::kinds::{
-    kind_needs_ui_owner, kind_tls_shared_leaf, leaf_install_mode, read_attr, rewrite_namecheap_client_ip,
-    safe_stage_id, validate_kind,
+    kind_needs_ui_owner, kind_tls_axum_leaf, leaf_install_mode, read_attr,
+    rewrite_namecheap_client_ip, safe_stage_id, validate_kind,
 };
 use crate::paths::{
     DURABLE_MATERIAL, EPHEMERAL_MATERIAL, PRODUCT_STATE, assert_safe_token, discover_repo_root,
@@ -58,7 +58,8 @@ Options:
 
 Notes:
   - Durable Domain B root is /var/lib/surmount/secrets (survives reboot).
-  - TLS leaves are mode 0640 (group-readable, not world).
+  - TLS cert is mode 0640 (group-readable, not world). TLS key is 0600
+    (owner-only). Remote install also copies both to mail/tls for Stalwart.
   - Secret values never printed. Labels, kinds, paths, exit codes only.
   - Hermetic tests: crate tests (no live Stalwart, no live keyring).
 ";
@@ -503,7 +504,13 @@ fn load_secret_service(a: &Args, repo_root: &Path) -> Result<Vec<Item>> {
     for kind in kinds {
         validate_kind(&kind)?;
         let search = Command::new("secret-tool")
-            .args(["search", "surmount.host", &a.host_id, "surmount.kind", &kind])
+            .args([
+                "search",
+                "surmount.host",
+                &a.host_id,
+                "surmount.kind",
+                &kind,
+            ])
             .output();
         let Ok(out) = search else {
             log_line(&format!(
@@ -537,7 +544,13 @@ fn load_secret_service(a: &Args, repo_root: &Path) -> Result<Vec<Item>> {
             )));
         }
         let lookup = Command::new("secret-tool")
-            .args(["lookup", "surmount.host", &a.host_id, "surmount.kind", &kind])
+            .args([
+                "lookup",
+                "surmount.host",
+                &a.host_id,
+                "surmount.kind",
+                &kind,
+            ])
             .output()
             .map_err(|e| ToolError::fail(format!("secret-tool lookup failed: {e}")))?;
         if !lookup.status.success() || lookup.stdout.is_empty() {
@@ -794,7 +807,12 @@ fn ensure_parent_dirs(final_path: &Path, base: &Path, host_material: &str) -> Re
     Ok(())
 }
 
-fn ensure_ui_parent_modes_local(kind: &str, final_path: &Path, dest_root: &Path, host_material: &str) {
+fn ensure_ui_parent_modes_local(
+    kind: &str,
+    final_path: &Path,
+    dest_root: &Path,
+    host_material: &str,
+) {
     if !kind_needs_ui_owner(kind) || host_material.is_empty() {
         return;
     }
@@ -814,7 +832,8 @@ fn ensure_ui_parent_modes_local(kind: &str, final_path: &Path, dest_root: &Path,
             break;
         }
     }
-    if host_material == DURABLE_MATERIAL || host_material.starts_with(&format!("{DURABLE_MATERIAL}/"))
+    if host_material == DURABLE_MATERIAL
+        || host_material.starts_with(&format!("{DURABLE_MATERIAL}/"))
     {
         let state = dest_root.join("var/lib/surmount");
         if state.is_dir() {
@@ -855,12 +874,11 @@ fn install_remote(
         .parent()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/".into());
-    let material = host_material_root_for(hpath).ok_or_else(|| {
-        ToolError::fail("refuse: remote path outside material roots".to_string())
-    })?;
+    let material = host_material_root_for(hpath)
+        .ok_or_else(|| ToolError::fail("refuse: remote path outside material roots".to_string()))?;
     let mat_mode = material_root_create_mode(material);
     let ui_chown = if kind_needs_ui_owner(kind) { 1 } else { 0 };
-    let tls_shared = if kind_tls_shared_leaf(kind) { 1 } else { 0 };
+    let tls_axum = if kind_tls_axum_leaf(kind) { 1 } else { 0 };
     let script = format!(
         "set -euo pipefail\n\
 material={}\n\
@@ -869,7 +887,8 @@ final={}\n\
 mat_mode={}\n\
 ui_chown={}\n\
 leaf_mode={}\n\
-tls_shared={}\n\
+tls_axum={}\n\
+kind={}\n\
 if [ -L \"$final\" ]; then echo \"secrets-install-host: refuse: destination is a symlink\" >&2; exit 1; fi\n\
 if [ -d \"$final\" ]; then echo \"secrets-install-host: refuse: destination is a directory\" >&2; exit 1; fi\n\
 if [ -e \"$final\" ] && [ ! -f \"$final\" ]; then echo \"secrets-install-host: refuse: destination is not a regular file\" >&2; exit 1; fi\n\
@@ -900,6 +919,16 @@ chmod 0600 \"$tmp\"\n\
 if [ -d \"$final\" ] || [ -L \"$final\" ]; then rm -f \"$tmp\"; echo \"secrets-install-host: refuse: destination is directory or symlink\" >&2; exit 1; fi\n\
 mv -f \"$tmp\" \"$final\"\n\
 chmod \"$leaf_mode\" \"$final\"\n\
+if [ \"$tls_axum\" = 1 ]; then\n\
+  mail_tls=/var/lib/surmount/secrets/mail/tls\n\
+  mkdir -p \"$mail_tls\"\n\
+  chmod 0750 \"$mail_tls\"\n\
+  chown stalwart-mail:stalwart-mail \"$mail_tls\" 2>/dev/null || true\n\
+  leaf=$(basename \"$final\")\n\
+  cp -f \"$final\" \"$mail_tls/$leaf\"\n\
+  if [ \"$kind\" = tls-key ]; then chmod 0600 \"$mail_tls/$leaf\"; else chmod 0640 \"$mail_tls/$leaf\"; fi\n\
+  chown stalwart-mail:stalwart-mail \"$mail_tls/$leaf\" 2>/dev/null || true\n\
+fi\n\
 if [ -L \"$final\" ] || [ ! -f \"$final\" ]; then echo \"secrets-install-host: refuse: install did not produce a regular file\" >&2; exit 1; fi\n",
         sh_quote(material),
         sh_quote(&parent),
@@ -907,7 +936,8 @@ if [ -L \"$final\" ] || [ ! -f \"$final\" ]; then echo \"secrets-install-host: r
         sh_quote(&format!("{mat_mode:o}")),
         sh_quote(&ui_chown.to_string()),
         sh_quote(&format!("{mode:o}")),
-        sh_quote(&tls_shared.to_string()),
+        sh_quote(&tls_axum.to_string()),
+        sh_quote(kind),
     );
     let mut child = Command::new(ssh_cmd)
         .args(["--", host, &script])
@@ -917,9 +947,10 @@ if [ -L \"$final\" ] || [ ! -f \"$final\" ]; then echo \"secrets-install-host: r
         .spawn()
         .map_err(|e| ToolError::fail(format!("ssh failed to start: {e}")))?;
     {
-        let mut stdin = child.stdin.take().ok_or_else(|| {
-            ToolError::fail("ssh stdin was not piped".to_string())
-        })?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ToolError::fail("ssh stdin was not piped".to_string()))?;
         stdin.write_all(src)?;
     }
     let out = child

@@ -157,7 +157,10 @@ fn root_target_dry_run_mentions_laptop_identity() {
     let s = combined(&out);
     assert!(out.status.success(), "{s}");
     assert!(s.contains("id_ed25519"), "{s}");
-    assert!(s.contains("keepalives") || s.contains("SURMOUNT_DEPLOY_SSH_IDENTITY"), "{s}");
+    assert!(
+        s.contains("keepalives") || s.contains("SURMOUNT_DEPLOY_SSH_IDENTITY"),
+        "{s}"
+    );
 }
 
 #[test]

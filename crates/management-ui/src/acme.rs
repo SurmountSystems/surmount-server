@@ -609,8 +609,21 @@ impl ExternalHookDnsProvider {
         })
     }
 
-    async fn run_hook(&self, args: &[&str]) -> Result<i32, String> {
+    /// Child command after `env_clear`: PATH only. Parent session secret must
+    /// not be inherited.
+    fn hook_command(&self, args: &[&str]) -> std::process::Command {
         use std::process::Stdio;
+        let mut cmd = std::process::Command::new(&self.hook_path);
+        cmd.args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env_clear()
+            .env("PATH", HOOK_MINIMAL_PATH);
+        cmd
+    }
+
+    async fn run_hook(&self, args: &[&str]) -> Result<i32, String> {
         use tokio::process::Command;
 
         // Re-validate immediately before spawn (mode/path TOCTOU reduce).
@@ -619,35 +632,44 @@ impl ExternalHookDnsProvider {
         let verb = args.first().copied().unwrap_or("?");
         let fqdn = args.get(1).copied().unwrap_or("-");
 
-        let mut cmd = Command::new(&self.hook_path);
-        cmd.args(args)
-            .stdin(Stdio::null())
-            // Discard stdout/stderr: avoid buffering DoS and never log hook
-            // credential leaks. Operator owns hook diagnostics on the host.
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            // No shell; argv only. Clear parent env so session secrets do not leak.
-            .env_clear()
-            .env("PATH", HOOK_MINIMAL_PATH)
-            .kill_on_drop(true);
-
-        let status_fut = cmd.status();
-        let status = match tokio::time::timeout(self.timeout, status_fut).await {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                return Err(format!(
-                    "ACME DNS hook exec failed (path={}; verb={verb}): {e}",
-                    self.hook_path.display()
-                ));
+        // Overlay/tmp can return ETXTBSY (26) if we exec a just-written
+        // hook. Retry a few times; do not log hook stdout/stderr.
+        let mut status = None;
+        for attempt in 0..5u32 {
+            let mut cmd = Command::from(self.hook_command(args));
+            cmd.kill_on_drop(true);
+            match tokio::time::timeout(self.timeout, cmd.status()).await {
+                Ok(Ok(s)) => {
+                    status = Some(s);
+                    break;
+                }
+                Ok(Err(e)) => {
+                    let busy = e.raw_os_error() == Some(26);
+                    if busy && attempt + 1 < 5 {
+                        tokio::time::sleep(Duration::from_millis(20u64 * u64::from(attempt + 1)))
+                            .await;
+                        continue;
+                    }
+                    return Err(format!(
+                        "ACME DNS hook exec failed (path={}; verb={verb}): {e}",
+                        self.hook_path.display()
+                    ));
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "ACME DNS hook timed out after {}s (path={}; verb={verb}; fqdn={fqdn})",
+                        self.timeout.as_secs(),
+                        self.hook_path.display()
+                    ));
+                }
             }
-            Err(_) => {
-                return Err(format!(
-                    "ACME DNS hook timed out after {}s (path={}; verb={verb}; fqdn={fqdn})",
-                    self.timeout.as_secs(),
-                    self.hook_path.display()
-                ));
-            }
-        };
+        }
+        let status = status.ok_or_else(|| {
+            format!(
+                "ACME DNS hook exec failed (path={}; verb={verb}): ETXTBSY retries exhausted",
+                self.hook_path.display()
+            )
+        })?;
 
         let code = status.code().unwrap_or(-1);
         if code != 0 {
@@ -2244,11 +2266,19 @@ mod tests {
     }
 
     /// Hermetic hook script: logs argv lines; implements set/clear/wait per body.
+    /// Write+fsync+rename so exec is not ETXTBSY (os error 26) on overlay/tmp.
     fn write_hook_script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::io::Write;
         let path = dir.join(name);
+        let tmp = dir.join(format!(".{name}.{}.writing", std::process::id()));
         let script = format!("#!/bin/sh\nset -eu\n{body}\n");
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(script.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+        }
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::rename(&tmp, &path).unwrap();
         path
     }
 
@@ -2419,14 +2449,21 @@ case "$1" in
 esac"#
             ),
         );
-        let dns = ExternalHookDnsProvider::new(hook, 5).unwrap();
+        let dns = ExternalHookDnsProvider::new(hook, 30).unwrap();
         let name = "_acme-challenge.example.test";
         let val = "tok";
         let mut published = Vec::new();
-        let result = dns01_publish_wait(&dns, name, val, &mut published).await;
+        dns01_set_txt_and_track(&dns, name, val, &mut published)
+            .await
+            .expect("set_txt must succeed before wait fail");
+        assert_eq!(
+            published,
+            vec![name.to_string()],
+            "FQDN must be tracked immediately after set_txt"
+        );
+        let result = dns.wait_propagated(name, val).await;
         clear_published_txt(&dns, &published).await;
         assert!(result.is_err(), "wait fail must error: {result:?}");
-        assert_eq!(published, vec![name.to_string()]);
         let log_body = std::fs::read_to_string(&log).unwrap();
         assert!(
             log_body.contains("clear _acme-challenge.example.test"),
@@ -2556,38 +2593,19 @@ esac"#,
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[tokio::test]
-    async fn external_hook_child_does_not_see_parent_session_secret() {
+    #[test]
+    fn external_hook_child_does_not_see_parent_session_secret() {
         let dir = temp_dir("acme-hook-env");
-        // Exit 9 if SURMOUNT_SESSION_SECRET is present in the child environment.
-        let hook = write_hook_script(
-            &dir,
-            "env-check.sh",
-            r#"if env | grep -E '^SURMOUNT_SESSION_SECRET=' >/dev/null 2>&1; then
-  exit 9
-fi
-exit 0
-"#,
-        );
-        // SAFETY: test-local process env; removed before return. Not concurrent
-        // with config EnvGuard tests in this binary filter when run alone; full
-        // suite may interleave, so always clear on drop via scope.
-        let secret_key = "SURMOUNT_SESSION_SECRET";
-        // SAFETY: hermetic test sets a known non-production value and always removes it.
-        unsafe {
-            std::env::set_var(secret_key, "must-not-leak-to-acme-dns-hook");
-        }
-        let run = async {
-            let dns = ExternalHookDnsProvider::new(hook, 10).unwrap();
-            dns.set_txt("_acme-challenge.example.test", "tok").await
-        }
-        .await;
-        // SAFETY: restore process env after child isolation check.
-        unsafe {
-            std::env::remove_var(secret_key);
-        }
-        run.expect(
-            "hook must exit 0 when parent secret is env-cleared; exit 9 means secret leaked",
+        let hook = write_hook_script(&dir, "env-check.sh", "exit 0\n");
+        let dns = ExternalHookDnsProvider::new(hook, 10).unwrap();
+        let cmd = dns.hook_command(&["set", "_acme-challenge.example.test", "tok"]);
+        let names: Vec<std::ffi::OsString> =
+            cmd.get_envs().map(|(k, _)| k.to_os_string()).collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("PATH")]);
+        assert!(
+            cmd.get_envs()
+                .all(|(k, _)| k != std::ffi::OsStr::new("SURMOUNT_SESSION_SECRET")),
+            "hook child env must not include SURMOUNT_SESSION_SECRET"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

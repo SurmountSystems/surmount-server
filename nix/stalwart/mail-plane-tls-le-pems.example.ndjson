@@ -1,1 +1,1 @@
-{"@type":"create","object":"Certificate","value":{"certificate":{"@type":"File","filePath":"/var/lib/surmount/secrets/tls/cert.pem"},"privateKey":{"@type":"File","filePath":"/var/lib/surmount/secrets/tls/key.pem"}}}
+{"@type":"create","object":"Certificate","value":{"certificate":{"@type":"File","filePath":"/var/lib/surmount/secrets/mail/tls/cert.pem"},"privateKey":{"@type":"File","filePath":"/var/lib/surmount/secrets/mail/tls/key.pem"}}}

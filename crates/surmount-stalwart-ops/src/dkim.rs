@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -35,23 +34,23 @@ where
     let mut token_file = std::env::var("STALWART_TOKEN_FILE").unwrap_or_default();
     let mut url = std::env::var("STALWART_URL").unwrap_or_else(|_| "http://127.0.0.1:8080".into());
     let mut cli = std::env::var("STALWART_CLI").unwrap_or_default();
-    let mut systemctl = std::env::var("SURMOUNT_REGISTER_DKIM_SYSTEMCTL")
-        .unwrap_or_else(|_| "systemctl".into());
+    let mut systemctl =
+        std::env::var("SURMOUNT_REGISTER_DKIM_SYSTEMCTL").unwrap_or_else(|_| "systemctl".into());
     let mut domain = std::env::var("SURMOUNT_REGISTER_DKIM_DOMAIN")
         .unwrap_or_else(|_| "surmount.systems".into());
-    let mut ed_pem = std::env::var("SURMOUNT_REGISTER_DKIM_ED25519_PEM").unwrap_or_else(|_| {
-        "/var/lib/surmount/secrets/mail/dkim/stalwart-ed25519.pem".into()
-    });
-    let mut rsa_pem = std::env::var("SURMOUNT_REGISTER_DKIM_RSA_PEM").unwrap_or_else(|_| {
-        "/var/lib/surmount/secrets/mail/dkim/stalwart-rsa4096.pem".into()
-    });
+    let mut ed_pem = std::env::var("SURMOUNT_REGISTER_DKIM_ED25519_PEM")
+        .unwrap_or_else(|_| "/var/lib/surmount/secrets/mail/dkim/stalwart-ed25519.pem".into());
+    let mut rsa_pem = std::env::var("SURMOUNT_REGISTER_DKIM_RSA_PEM")
+        .unwrap_or_else(|_| "/var/lib/surmount/secrets/mail/dkim/stalwart-rsa4096.pem".into());
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
             "-h" | "--help" => {
                 print!("{USAGE}");
                 println!("  --dry-run  --live  --query-only  --token-file  --url  --cli  --domain");
-                println!("  --ed25519-pem  --rsa-pem  --systemctl-cmd  --skip-sandbox-check  --skip-pem-check");
+                println!(
+                    "  --ed25519-pem  --rsa-pem  --systemctl-cmd  --skip-sandbox-check  --skip-pem-check"
+                );
                 println!("Management HTTP is loopback :8080 only.");
                 return Ok(());
             }
@@ -100,7 +99,11 @@ where
             }
             "--skip-sandbox-check" => skip_sandbox = true,
             "--skip-pem-check" => skip_pem = true,
-            other => return Err(ToolError::fail(format!("unknown argument: {other} (try --help)"))),
+            other => {
+                return Err(ToolError::fail(format!(
+                    "unknown argument: {other} (try --help)"
+                )));
+            }
         }
         i += 1;
     }
@@ -193,7 +196,9 @@ where
     let need_rsa = !have_rsa;
     if dry_run {
         if !need_ed && !need_rsa {
-            eprintln!("register-dkim: dry-run: both selectors already present; --live would succeed honestly (no create)");
+            eprintln!(
+                "register-dkim: dry-run: both selectors already present; --live would succeed honestly (no create)"
+            );
         } else {
             if need_ed {
                 eprintln!(
@@ -206,7 +211,9 @@ where
                 );
             }
         }
-        eprintln!("register-dkim: dry-run complete: no DkimSignature create claimed. Re-run with --live on the operator host when ready. Not claiming outbound signed mail.");
+        eprintln!(
+            "register-dkim: dry-run complete: no DkimSignature create claimed. Re-run with --live on the operator host when ready. Not claiming outbound signed mail."
+        );
         return Ok(());
     }
 
@@ -214,12 +221,28 @@ where
         eprintln!("register-dkim: idempotent: both selectors already present; no create");
     } else {
         if need_ed {
-            create_one(&cli, &url, &token, "DkimSignature/Dkim1Ed25519Sha256", "stalwart", &ed_pem, &domain_id)?;
+            create_one(
+                &cli,
+                &url,
+                &token,
+                "DkimSignature/Dkim1Ed25519Sha256",
+                "stalwart",
+                &ed_pem,
+                &domain_id,
+            )?;
         } else {
             eprintln!("register-dkim: skip create selector=stalwart (already present)");
         }
         if need_rsa {
-            create_one(&cli, &url, &token, "DkimSignature/Dkim1RsaSha256", "stalwart-rsa", &rsa_pem, &domain_id)?;
+            create_one(
+                &cli,
+                &url,
+                &token,
+                "DkimSignature/Dkim1RsaSha256",
+                "stalwart-rsa",
+                &rsa_pem,
+                &domain_id,
+            )?;
         } else {
             eprintln!("register-dkim: skip create selector=stalwart-rsa (already present)");
         }
@@ -259,7 +282,9 @@ where
             "prove failed: selector=stalwart-rsa not stage=active".to_string(),
         ));
     }
-    eprintln!("register-dkim: live complete: both DkimSignature objects present stage=active (selectors stalwart + stalwart-rsa). Sign-ready. Not claiming outbound signed mail (MX / mail-tester residual).");
+    eprintln!(
+        "register-dkim: live complete: both DkimSignature objects present stage=active (selectors stalwart + stalwart-rsa). Sign-ready. Not claiming outbound signed mail (MX / mail-tester residual)."
+    );
     Ok(())
 }
 
@@ -273,7 +298,9 @@ fn create_one(
     domain_id: &str,
 ) -> Result<()> {
     let pk = format!("{{\"@type\":\"File\",\"filePath\":\"{pem}\"}}");
-    eprintln!("register-dkim: create {variant} selector={selector} privateKey=File path (value not logged)");
+    eprintln!(
+        "register-dkim: create {variant} selector={selector} privateKey=File path (value not logged)"
+    );
     let field_domain = format!("domainId={domain_id}");
     let field_sel = format!("selector={selector}");
     let field_pk = format!("privateKey={pk}");
@@ -300,7 +327,10 @@ fn create_one(
 
 fn assert_regular_secret(label: &str, path: &str) -> Result<()> {
     let p = Path::new(path);
-    if p.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    if p.symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
         return Err(ToolError::fail(format!(
             "{label} must be a regular file (symlink refused): {path}"
         )));
@@ -354,9 +384,10 @@ fn sandbox_preflight(systemctl: &str, ed_pem: &str) -> Result<()> {
             )));
         }
     } else {
-        eprintln!("register-dkim: sandbox: ProtectSystem is not strict (or unset); File path grant not required this run");
+        eprintln!(
+            "register-dkim: sandbox: ProtectSystem is not strict (or unset); File path grant not required this run"
+        );
     }
-    let _ = fs::metadata;
     Ok(())
 }
 

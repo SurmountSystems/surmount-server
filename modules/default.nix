@@ -22,8 +22,14 @@
     # Domain C human vault (Vaultwarden; sample host stays enable=false).
     ./vaultwarden.nix
     ./backups.nix
-    # Operator host console: pkgs.btop (SSH / just btop).
+    # Operator host console: pkgs.btop (Eternal Terminal / just btop).
     ./btop.nix
+    # Guest /root/justfile (diagnose). Same file on every replica after switch.
+    ./operator-justfile.nix
+    # Last-line RAM defense (surmount-scram --watch). Highest priority.
+    ./scram.nix
+    # Optional swap file (path from host-local).
+    ./swapfile.nix
     # Operator host hardware probe: pkgs.inxi (SSH / just host-inxi; no sudo).
     ./inxi.nix
     # ssh-ng remote builder + MemoryMax on nix-daemon (opt-in).

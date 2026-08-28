@@ -549,7 +549,7 @@ where
     }
     if opts.staging.as_os_str().is_empty() {
         return Err(ToolError::fail(
-            "staging required: --staging DIR or SURMOUNT_SECRETS_STAGING".into(),
+            "staging required: --staging DIR or SURMOUNT_SECRETS_STAGING",
         ));
     }
     Ok(InventoryParse::Run(opts))

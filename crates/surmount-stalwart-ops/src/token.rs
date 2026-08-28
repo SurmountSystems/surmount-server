@@ -37,7 +37,11 @@ pub fn load_token(token_file: &str) -> Result<Token> {
     let mut value = String::new();
     let mut source = "";
     if path.exists() || path.symlink_metadata().is_ok() {
-        if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        if path
+            .symlink_metadata()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
             return Err(ToolError::fail(format!(
                 "token file must be a regular file (symlink refused): {token_file}"
             )));
@@ -53,7 +57,11 @@ pub fn load_token(token_file: &str) -> Result<Token> {
                 source = "file";
                 break;
             }
-            if value.is_empty() && std::env::var("STALWART_TOKEN").ok().filter(|s| !s.is_empty()).is_none()
+            if value.is_empty()
+                && std::env::var("STALWART_TOKEN")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .is_none()
             {
                 return Err(ToolError::blocked(format!(
                     "token file present but empty/comments-only ({token_file}). Populate kind stalwart-token Domain B material, or set STALWART_TOKEN. Secret values not logged."

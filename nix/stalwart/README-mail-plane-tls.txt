@@ -6,24 +6,30 @@ Product truth (Stalwart 0.16+):
   - First boot with an empty store inserts an engine self-signed leaf
     (rcgen identity). Evolution will warn until a Certificate object
     points at real files.
-  - Surmount points Stalwart at the same durable Let's Encrypt PEMs Axum
-    uses on public :443. Host in-process ACME stays off. Laptop DNS-01
-    issues the leaf (Namecheap; ClientIp = laptop egress).
+  - Surmount points Stalwart at copies of the durable Let's Encrypt PEMs
+    under secrets/mail/tls. Axum keeps secrets/tls with key mode 0600.
+    Host in-process ACME stays off. Laptop DNS-01 issues the leaf
+    (Namecheap; ClientIp = laptop egress).
   - The leaf must name mail.<apex> on the certificate hostname list
     (private host-profile acme_domains + just laptop-renew-cert
     -- --directory production). Adding a File object without that name
     still fails Evolution hostname checks.
 
-Durable Domain B paths (same as Axum rustls):
-  Certificate: /var/lib/surmount/secrets/tls/cert.pem
-  Private key: /var/lib/surmount/secrets/tls/key.pem
-  Mode:        0640  owner surmount-ui  group surmount-tls
-  Dir:         0750  surmount-ui:surmount-tls
+Durable Domain B paths:
+  Axum cert:     /var/lib/surmount/secrets/tls/cert.pem
+                 0640  owner surmount-ui  group surmount-tls
+  Axum key:      /var/lib/surmount/secrets/tls/key.pem
+                 0600  owner surmount-ui (owner-only)
+  Mail cert:     /var/lib/surmount/secrets/mail/tls/cert.pem
+                 0640  owner stalwart-mail
+  Mail key:      /var/lib/surmount/secrets/mail/tls/key.pem
+                 0600  owner stalwart-mail (owner-only)
+  Dir (mail):    0750  stalwart-mail:stalwart-mail
   Do not chmod world-readable. Do not put PEM bodies in Nix.
 
 Sandbox:
   ProtectSystem=strict. modules/mail.nix grants ReadOnlyPaths
-  /var/lib/surmount/secrets/tls and SupplementaryGroups=surmount-tls.
+  /var/lib/surmount/secrets/mail/tls (and still grants secrets/tls).
 
 Apply (requires engine-accepted admin token; loopback :8080 only):
 
@@ -33,8 +39,8 @@ Apply (requires engine-accepted admin token; loopback :8080 only):
   # Manual equivalent after query:
   #   stalwart-cli query Certificate --json
   #   stalwart-cli create Certificate \
-  #     --field 'certificate={"@type":"File","filePath":"/var/lib/surmount/secrets/tls/cert.pem"}' \
-  #     --field 'privateKey={"@type":"File","filePath":"/var/lib/surmount/secrets/tls/key.pem"}'
+  #     --field 'certificate={"@type":"File","filePath":"/var/lib/surmount/secrets/mail/tls/cert.pem"}' \
+  #     --field 'privateKey={"@type":"File","filePath":"/var/lib/surmount/secrets/mail/tls/key.pem"}'
   #   Stalwart 0.16.15 query JSON is certificate hostnames plus id, not
   #   filePath. Use the Let's Encrypt File object id (not first-boot rcgen).
   #   stalwart-cli update SystemSettings --field defaultCertificateId=<file-id>

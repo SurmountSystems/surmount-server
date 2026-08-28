@@ -19,9 +19,9 @@ PEMs without a destination). Then on the laptop:
 The timer runs --live --directory production --target ... (and
 --host-profile when you passed one). --live issues only when
 the staged leaf is missing or inside the early-renew window (default 30
-days). Otherwise it restages the matching pair, installs tls-cert and
-tls-key (0640 surmount-ui:surmount-tls), restarts the UI, and proves
-health plus IMAP/SMTPS.
+days). Otherwise it restages the matching pair, installs tls-cert (0640)
+and tls-key (0600 owner-only; also copies mail/tls for Stalwart),
+restarts the UI, and proves health plus IMAP/SMTPS.
 
 Safe anytime:
 

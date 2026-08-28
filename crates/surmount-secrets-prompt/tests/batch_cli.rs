@@ -28,7 +28,7 @@ fn path_with_wipe_stubs(dir: &std::path::Path) -> String {
     use std::os::unix::fs::PermissionsExt;
     let bin_dir = dir.join("wipe-stubs");
     fs::create_dir_all(&bin_dir).unwrap();
-    let stub = "#!/usr/bin/env bash\nset -euo pipefail\ncat >/dev/null || true\nexit 0\n";
+    let stub = "#!/bin/sh\nset -eu\ncat >/dev/null || true\nexit 0\n";
     for name in ["xclip", "pbcopy", "wl-copy"] {
         let p = bin_dir.join(name);
         fs::write(&p, stub).unwrap();
@@ -472,18 +472,15 @@ fn batch_synology_afp_stores_gnome_network_password() {
     fs::write(
         &st,
         format!(
-            "#!/usr/bin/env bash\n\
-             set -euo pipefail\n\
+            "#!/bin/sh\n\
+             set -eu\n\
              printf '%s\\n' \"$*\" >>{log}\n\
-             if [[ \" $* \" == *\" {synth} \"* ]]; then\n\
-               echo 'secret-tool mock: password must never appear on argv' >&2\n\
-               exit 3\n\
-             fi\n\
-             if [[ \"${{1:-}}\" == store ]]; then\n\
+             case \" $* \" in *\" {synth} \"*) echo 'secret-tool mock: password must never appear on argv' >&2; exit 3 ;; esac\n\
+             case \"${{1:-}}\" in store)\n\
                cat >>{stdin} || true\n\
                printf '\\n' >>{stdin}\n\
                exit 0\n\
-             fi\n\
+             ;; esac\n\
              echo \"secret-tool mock: unexpected $*\" >&2\n\
              exit 2\n",
             log = st_log.display(),
@@ -587,11 +584,11 @@ fn batch_synology_afp_host_only_stores_mdns_network_password() {
     fs::write(
         &st,
         format!(
-            "#!/usr/bin/env bash\n\
-             set -euo pipefail\n\
+            "#!/bin/sh\n\
+             set -eu\n\
              printf '%s\\n' \"$*\" >>{log}\n\
-             if [[ \" $* \" == *\" {synth} \"* ]]; then exit 3; fi\n\
-             if [[ \"${{1:-}}\" == store ]]; then cat >/dev/null; exit 0; fi\n\
+             case \" $* \" in *\" {synth} \"*) exit 3 ;; esac\n\
+             case \"${{1:-}}\" in store) cat >/dev/null; exit 0 ;; esac\n\
              exit 2\n",
             log = st_log.display(),
             synth = synth,
@@ -685,11 +682,11 @@ fn batch_store_wipes_paste_buffers() {
     fs::write(
         &st,
         format!(
-            "#!/usr/bin/env bash\n\
-             set -euo pipefail\n\
+            "#!/bin/sh\n\
+             set -eu\n\
              printf '%s\\n' \"$*\" >>{log}\n\
-             if [[ \" $* \" == *\" {synth} \"* ]]; then exit 3; fi\n\
-             if [[ \"${{1:-}}\" == store ]]; then cat >/dev/null; exit 0; fi\n\
+             case \" $* \" in *\" {synth} \"*) exit 3 ;; esac\n\
+             case \"${{1:-}}\" in store) cat >/dev/null; exit 0 ;; esac\n\
              exit 2\n",
             log = st_log.display(),
             synth = synth,
@@ -712,10 +709,10 @@ fn batch_store_wipes_paste_buffers() {
     fs::write(
         &xclip,
         format!(
-            "#!/usr/bin/env bash\n\
-             set -euo pipefail\n\
+            "#!/bin/sh\n\
+             set -eu\n\
              printf 'argv=%s\\n' \"$*\" >>{log}\n\
-             if [[ -p /dev/stdin ]] || [[ ! -t 0 ]]; then\n\
+             if [ ! -t 0 ]; then\n\
                cat >>{stdin} || true\n\
              fi\n\
              exit 0\n",
@@ -730,10 +727,10 @@ fn batch_store_wipes_paste_buffers() {
     fs::write(
         &pbcopy,
         format!(
-            "#!/usr/bin/env bash\n\
-             set -euo pipefail\n\
+            "#!/bin/sh\n\
+             set -eu\n\
              printf 'argv=%s\\n' \"$*\" >>{log}\n\
-             if [[ -p /dev/stdin ]] || [[ ! -t 0 ]]; then\n\
+             if [ ! -t 0 ]; then\n\
                cat >>{stdin} || true\n\
              fi\n\
              exit 0\n",
@@ -748,8 +745,8 @@ fn batch_store_wipes_paste_buffers() {
     fs::write(
         &wl,
         format!(
-            "#!/usr/bin/env bash\n\
-             set -euo pipefail\n\
+            "#!/bin/sh\n\
+             set -eu\n\
              printf 'argv=%s\\n' \"$*\" >>{log}\n\
              exit 0\n",
             log = wl_log.display(),

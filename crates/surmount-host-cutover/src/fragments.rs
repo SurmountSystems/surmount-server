@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use surmount_deploy_host::{
@@ -84,7 +85,7 @@ pub fn emit_fragments(
 ) -> Result<(), ToolError> {
     if dest.as_os_str().is_empty() {
         return Err(ToolError::fail(
-            "emit-fragments requires a destination directory".into(),
+            "emit-fragments requires a destination directory",
         ));
     }
     if is_path_under_root(repo_root, &realpath_m(dest)) {
@@ -122,13 +123,13 @@ pub fn emit_fragments(
     if with_vw {
         let Some(inv) = inv else {
             return Err(ToolError::fail(
-                "VW enable fragment requires --staging (material gate)".into(),
+                "VW enable fragment requires --staging (material gate)",
             ));
         };
         if run_inventory(inv, repo_root).is_err() {
             let _ = fs::remove_file(&vw_out);
             return Err(ToolError::fail(
-                "refuse: VW enable fragment requires complete inventory under --with-vaultwarden (vaultwarden-admin material). No enable file written.".into(),
+                "refuse: VW enable fragment requires complete inventory under --with-vaultwarden (vaultwarden-admin material). No enable file written.",
             ));
         }
         fs::write(&vw_out, VW_FRAG)?;

@@ -49,15 +49,15 @@ pub fn resolve_cred_path(cli: Option<&Path>) -> PathBuf {
     if let Some(p) = cli {
         return p.to_path_buf();
     }
-    if let Ok(p) = std::env::var("SURMOUNT_DNS_ZONE_NAMECHEAP_ENV") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+    if let Ok(p) = std::env::var("SURMOUNT_DNS_ZONE_NAMECHEAP_ENV")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("SURMOUNT_ACME_DNS_NAMECHEAP_ENV") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+    if let Ok(p) = std::env::var("SURMOUNT_ACME_DNS_NAMECHEAP_ENV")
+        && !p.is_empty()
+    {
+        return PathBuf::from(p);
     }
     PathBuf::from(DEFAULT_CRED_PATH)
 }
@@ -66,9 +66,8 @@ pub fn load_credentials(path: &Path) -> Result<Credentials> {
     if path.as_os_str().is_empty() {
         return Err(die("credentials path empty"));
     }
-    let meta = fs::symlink_metadata(path).map_err(|_| {
-        die(format!("credentials file missing: {}", path.display()))
-    })?;
+    let meta = fs::symlink_metadata(path)
+        .map_err(|_| die(format!("credentials file missing: {}", path.display())))?;
     if meta.file_type().is_symlink() {
         return Err(die(format!(
             "credentials path must be a regular file (symlink refused): {}",
@@ -115,8 +114,9 @@ pub fn load_credentials(path: &Path) -> Result<Credentials> {
         };
         let key = key.trim();
         let mut val = val.to_string();
-        if val.len() >= 2 && ((val.starts_with('"') && val.ends_with('"'))
-            || (val.starts_with('\'') && val.ends_with('\'')))
+        if val.len() >= 2
+            && ((val.starts_with('"') && val.ends_with('"'))
+                || (val.starts_with('\'') && val.ends_with('\'')))
         {
             val = val[1..val.len() - 1].to_string();
         }

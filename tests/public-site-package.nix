@@ -5,7 +5,7 @@
 #   import ./tests/public-site-package.nix { inherit pkgs lib src; }
 #
 # Named contract: store package contains current public site copy
-# (title Surmount Systems, Bitcoin-focused Deep Tech, grok-oss harness),
+# (title Surmount Systems, high-assurance tagline, grok-oss harness),
 # not UNDER CONSTRUCTION.
 
 {
@@ -38,7 +38,7 @@ let
 
   t2 =
     assert lib.hasInfix "<title>Surmount Systems</title>" index;
-    assert lib.hasInfix "Bitcoin-focused Deep Tech" index;
+    assert lib.hasInfix "High-assurance compute infrastructure" index;
     assert lib.hasInfix "grok-oss" index;
     assert lib.hasInfix "Unlicense" index;
     assert !(lib.hasInfix "UNDER CONSTRUCTION" index);

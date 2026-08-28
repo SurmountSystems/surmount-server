@@ -78,15 +78,18 @@ in
 
       # ProtectSystem=strict only grants dataDir write. Dual-sign File PEMs
       # live under Domain B /var/lib/surmount/secrets/mail/dkim/. Mail-plane
-      # TLS File PEMs are the same durable Let's Encrypt files Axum uses.
-      # Missing path is ignored by systemd ReadOnlyPaths.
+      # TLS File PEMs are copies under secrets/mail/tls (Axum keeps
+      # secrets/tls, key 0600). Missing path is ignored by systemd
+      # ReadOnlyPaths.
       systemd.services.stalwart-mail.serviceConfig.ReadOnlyPaths = [
         "/var/lib/surmount/secrets/mail/dkim"
+        "/var/lib/surmount/secrets/mail/tls"
         "/var/lib/surmount/secrets/tls"
       ];
 
-      # Key is 0640 surmount-ui:surmount-tls (not world-readable). Stalwart
-      # needs the group; Axum stays owner-read. Do not put PEM bodies in Nix.
+      # Axum TLS key is 0600 surmount-ui (owner-only). Stalwart reads copies
+      # under secrets/mail/tls (0600 stalwart-mail). Group surmount-tls remains
+      # for the public cert leaf (0640). Do not put PEM bodies in Nix.
       users.groups.surmount-tls = { };
       users.users.stalwart-mail.extraGroups = [ "surmount-tls" ];
       systemd.services.stalwart-mail.serviceConfig.SupplementaryGroups = [ "surmount-tls" ];
@@ -193,16 +196,38 @@ in
       ];
 
       # Staging area for operator-copied Maildir trees (not auto-imported).
-      # z heals existing durable TLS leaves after deploy even if install ran
-      # before group surmount-tls existed (0640, not world-readable).
+      # z heals durable Axum TLS leaves (cert 0640, key 0600 owner-only) and
+      # Stalwart copies under mail/tls.
       systemd.tmpfiles.rules = [
         "d ${cfg.stateDir} 0750 root root - -"
         "d ${cfg.stateDir}/import 0750 root root - -"
         "d ${cfg.stateDir}/import/maildir 0700 root root - -"
         "d ${cfg.stateDir}/import/vandelay 0700 root root - -"
+        "d ${cfg.secrets.durableMaterialDir}/mail/tls 0750 stalwart-mail stalwart-mail -"
         "z ${cfg.secrets.durableMaterialDir}/tls/cert.pem 0640 surmount-ui surmount-tls -"
-        "z ${cfg.secrets.durableMaterialDir}/tls/key.pem 0640 surmount-ui surmount-tls -"
+        "z ${cfg.secrets.durableMaterialDir}/tls/key.pem 0600 surmount-ui surmount-tls -"
+        "z ${cfg.secrets.durableMaterialDir}/mail/tls/cert.pem 0640 stalwart-mail stalwart-mail -"
+        "z ${cfg.secrets.durableMaterialDir}/mail/tls/key.pem 0600 stalwart-mail stalwart-mail -"
       ];
+
+      system.activationScripts.surmount-mail-tls-copy = {
+        deps = [
+          "users"
+          "groups"
+        ];
+        text = ''
+          srcCert="${cfg.secrets.durableMaterialDir}/tls/cert.pem"
+          srcKey="${cfg.secrets.durableMaterialDir}/tls/key.pem"
+          dst="${cfg.secrets.durableMaterialDir}/mail/tls"
+          if [ -f "$srcCert" ] && [ -f "$srcKey" ]; then
+            mkdir -p "$dst"
+            chmod 0750 "$dst"
+            chown stalwart-mail:stalwart-mail "$dst" || true
+            install -o stalwart-mail -g stalwart-mail -m 0640 "$srcCert" "$dst/cert.pem"
+            install -o stalwart-mail -g stalwart-mail -m 0600 "$srcKey" "$dst/key.pem"
+          fi
+        '';
+      };
     }
 
     {

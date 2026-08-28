@@ -51,10 +51,8 @@ leaf (IMAP :993 / SMTPS :465 YE2). Live IMAP is the production Let's
 Encrypt leaf.)
 **Design notes:** [open-choices.md](open-choices.md) (self-ops)
 **Host-local + deploy driver:** [deploy-host-local.md](deploy-host-local.md)
-**Host process view:** `just btop` opens interactive `btop` on the deploy-host
-SSH target (`SURMOUNT_DEPLOY_TARGET` or `~/.local/share/surmount/agent-target.env`).
-Needs a TTY. Host package is `pkgs.btop` (`modules/btop.nix`); a
-`deploy-host` switch is required before the binary exists on the box.
+**Host process view:** `just btop` opens interactive `btop` over Eternal
+Terminal (`just et` stack). Needs `etserver` after `just deploy-host`.
 **Host hardware probe:** `just host-inxi` runs `inxi` on that same SSH target
 (no sudo, no TTY). Measure the mail host on the mail host. Laptop `inxi` is a
 different machine. `--userland` uses `nix shell nixpkgs#inxi` until
@@ -541,8 +539,9 @@ This is the production renew path. Do not put a calendar reminder in place
 of it. Host in-process ACME stays **off** (`SURMOUNT_ACME_ENABLE=0`).
 Namecheap DNS-01 stays on the **laptop** (`ClientIp` = laptop egress).
 The same Let's Encrypt production leaf covers **services, apex, www,
-mta-sts, and mail**. TLS key on the host stays **0640**
-`surmount-ui:surmount-tls` (do not chmod 0600).
+mta-sts, and mail**. TLS key on the host is **0600**
+`surmount-ui` (owner-only). Stalwart uses copies under
+`/var/lib/surmount/secrets/mail/tls/` (key 0600 `stalwart-mail`).
 
 `--directory` is required (never silent staging or production). Namecheap
 env is required and must be a regular file mode 0600 (symlink refused).
@@ -773,12 +772,20 @@ reliability in [deploy-host-local.md](deploy-host-local.md) section 5
 
 ### Host process view (`just btop`)
 
-`just btop` (`nix run .#surmount-btop-host`) SSHes to the same target as
-`just deploy-host` and runs interactive `btop`. Key-only (`BatchMode`,
-publickey). Requests a TTY (`ssh -t`). Target comes from `--target`,
-`SURMOUNT_DEPLOY_TARGET`, or `~/.local/share/surmount/agent-target.env`
-(override path: `SURMOUNT_AGENT_TARGET_ENV`). Fails loud if those are
-missing or if `ssh` is not on PATH. Hermetic: crate `surmount-host-probe`.
+`just btop` (`nix run .#surmount-btop-host`) uses Eternal Terminal to the same
+target as `just deploy-host` and `just et`, then runs interactive `btop`
+(`et -c btop`). It does not use a raw SSH that can freeze-paint a last frame.
+After btop exits, the Eternal Terminal session exits (not `et --noexit`).
+Needs `etserver` on the guest (after `just deploy-host`). Target comes from
+`--target`, `SURMOUNT_DEPLOY_TARGET`, or
+`~/.local/share/surmount/agent-target.env`. Fails loud if those are missing,
+if `et` is not on PATH, or if stdin and stdout are not a live tty (a frozen
+last-paint pane is not live). If you are already on the mail guest (Eternal
+Terminal, guest hostname, or `/etc/surmount/root-justfile`), the wrapper runs
+local `btop` and refuses nested `et`. Guest `/root/justfile` `just btop` is
+local `btop`. If the clock in that pane stops, the pane is dead: press q,
+exit the remote shell, then run `just btop` from the laptop.
+Hermetic: crate `surmount-host-probe`.
 Host journal follow is `just host-logs` (same target; no sudo).
 Do not put provisioned host addresses in the public tree.
 Host btop uses the operator local theme and settings (flat-remix, no theme
@@ -882,7 +889,13 @@ The niced wrapper turns `auto` into 95 percent times **guest** `nproc`
 laptop `inxi` here). Guest `inxi` must **not** need sudo (`just host-inxi`
 or `--userland` `nix shell nixpkgs#inxi`).
 The operator laptop is **local**. **surmount-1** is the remote builder.
-Never call the laptop remote. `maxJobs` (scaffold default is a
+Never call the laptop remote. If the guest is down (snapshot, power
+off, network), prefix any `just` recipe with `BUILD_LOCAL=true` so Nix
+does not wait on ssh-ng. Example: `BUILD_LOCAL=true just rekey`. That
+sets `NIX_CONFIG` `builders =` and `max-jobs = auto` for that command
+only. Do not copy guest core counts onto the laptop. Pre-commit honors
+the same variable. When the guest is up, omit it so rustc still goes
+to the niced remote builder. `maxJobs` (scaffold default is a
 memory-safe slot count, **not** laptop cores and **not** a published
 guest core count) sets host `nix.settings.max-jobs`. That slot count
 must stay under `memoryMax` so Nix does not spawn more parallel rustc
@@ -905,7 +918,17 @@ builder **nix-daemon** accepts rustc jobs that require that feature
 machines-file `features` column must match the builder daemon
 `system-features` (including `surmount-remote`). grok-build
 `just check-remote` (`require_remote_builder`) gates on the remote
-daemon listing `surmount-remote` in `system-features`. A client advert
+daemon listing `surmount-remote` in `system-features`. This repo's
+`just check-remote` is thinner: `nix build .#checks.<system>.ci` with
+`--option max-jobs 0` (laptop must not rustc). It prints that it is
+running `nix build`, then `-L` plus `--print-out-paths` so a cache hit
+still prints a store path instead of a blank prompt. No `--log-format
+raw` (that hid derivation lines). No 20s heartbeat.
+It does not pass `-v` (that prints every nixpkgs file) and does not pass
+`--store ssh-ng`; the machines file plus max-jobs 0 is the force-remote
+path. `just audit-remote` is the same for
+cargo-audit. `BUILD_LOCAL=true` is the opposite (laptop build) and is
+refused. A client advert
 without the daemon feature schedules rustc, then the daemon refuses:
 missing system features. `extra-` keeps NixOS auto-detected
 `big-parallel`. Do not replace `system-features` with only
@@ -1067,8 +1090,9 @@ just laptop-renew-cert -- --live --directory production --host-profile PATH --ta
 
 Host in-process ACME stays **off**. Namecheap `ClientIp` is **laptop
 egress**. **Deploy this tree first** so group `surmount-tls` exists, then
-install PEMs (`0640` `surmount-ui:surmount-tls`). If install ran on an
-older generation, switch still heals owner/group via tmpfiles `z`. The
+install PEMs (cert `0640` `surmount-ui:surmount-tls`; key `0600`
+`surmount-ui`). Switch copies mail-plane PEMs under `secrets/mail/tls`
+(key `0600` `stalwart-mail`) and heals modes via tmpfiles `z`. The
 apply driver sets `defaultCertificateId` to the **File** / Let's Encrypt
 certificate (not the first-boot rcgen object). Stalwart **0.16.15**
 `query Certificate --json` returns certificate hostnames plus `id` (not
@@ -1245,8 +1269,8 @@ public tree samples.
 1. **Ensure Domain B parents** (no CA PEMs to paste). **Durable default
    (H-PEM; survives reboot):**
    - `/var/lib/surmount/secrets/tls/` (writable by `surmount-ui` for issued
-     `cert.pem` / `key.pem`; key mode 0640 `surmount-ui:surmount-tls`,
-     do not chmod 0600)
+     `cert.pem` / `key.pem`; cert 0640 `surmount-ui:surmount-tls`, key
+     0600 `surmount-ui` owner-only)
    - `/var/lib/surmount/secrets/acme/` (parent of `accountCredentialsPath`)
    - product state prefix `/var/lib/surmount` mode **0755** so `surmount-ui`
      can traverse to Domain B leaves (H2b)
@@ -1562,6 +1586,30 @@ stay at normal priority (not niced). No public log dump on the apex site.
 - Mail content does not belong in application info logs.
 - Do not write product access logs under `/var/log` or `/var/lib/surmount`.
 
+### Laptop-home justfile (second window, no guest-only scripts)
+
+Laptop: copy [contrib/home-justfile](../contrib/home-justfile) to
+`~/justfile` (wrapper into this clone). Guest: after `just deploy-host`,
+`/root/justfile` is a symlink to `/etc/surmount/root-justfile` (same
+recipes as [contrib/guest-root-justfile](../contrib/guest-root-justfile):
+`just status`, `just logs`, `just btop`, `just scram`). Do **not** hand-place a justfile
+only on one host. Laptop `just btop` uses Eternal Terminal. Guest `just btop`
+is local. Laptop `just scram` SSHes `surmount-scram --now` (default
+`root@surmount-1`). Guest `just scram` is local. Watchdog:
+`surmount-scram.service` (`--watch`, Nice=-20). Swap file is host-local
+path only (`surmount.swapFile`).
+
+Second Alacritty before `just deploy-host`: `just et` from home (or the
+repo) and leave it logged in. Activation can drop the SSH that started
+the switch. Recovery: `just status` (units + nixbuilder slice MemoryMax).
+
+```bash
+just et
+just status
+just logs
+just deploy-host -- --target root@surmount-1 --host-local "$HOME/.local/share/surmount/host-local"
+```
+
 ### Reading logs (operator)
 
 `just host-logs` (`nix run .#surmount-host-logs`) follows journalctl on
@@ -1614,7 +1662,7 @@ surmount-management-ui -g tls_handshake_failed`.
 | HS identity dir | `surmount.artiHiddenService.onionServiceStateDir` default `/run/surmount-secrets/arti/onion-service` (**ephemeral**; prefer durable Domain B). Live host uses `/var/lib/surmount/secrets/arti/onion-service`. |
 | Ownership | **Must** be owned/writable by `surmount-arti:surmount-arti` (e.g. mode **0750**). Module does **not** auto-create this dir (`ConditionPathIsDirectory` gates the daemon; missing dir => inactive, not a restart loop). Root-owned 0700 can pass the path check then fail at keystore open. Keystore stays **0700**. Live: `surmount-ui` is in group `surmount-arti` so the UI can read the hostname file (0750 dir). |
 | Process cache | `/var/lib/surmount/arti` (+ `cache/`) via tmpfiles 0750 surmount-arti. Live host-local sets unit `HOME=/var/lib/surmount/arti` so Arti can write `port_info.json` (public module does not set HOME). |
-| Hostname file | Arti 2.5.0 does **not** write `hostname`. Live host wrote it from `arti hss --nickname surmount-management onion-address`. Address is not a secret; HS keys are. Same v3 for apex, www, services. |
+| Hostname file | Arti 2.5.1 does **not** write `hostname`. Live host wrote it from `arti hss --nickname surmount-management onion-address`. Address is not a secret; HS keys are. Same v3 for apex, www, services. |
 | Discovery headers | Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`, `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`, `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`. Restart `surmount-management-ui` after hostname/env/map change. Dump: `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on). |
 | Secrets | HS private keys **never in git**. Identity may be generated on first start in an empty writable dir; operator **offline backup** is still residual. |
 | Honesty | `systemctl is-active surmount-arti-hidden-service` does **not** prove an onion is published on the Tor network. Live (2026-08-17): unit **active**; hostname file present (v3 onion; do not paste the address in this public tree); headers proven on HTTPS 307/200. Tor Browser purple pill **BLOCKED**. Do **not** claim B3 fully closed. |
@@ -1760,6 +1808,7 @@ exceptions*.
 | `nix run .#surmount-private-data` / `just check-private-data` | Private-data pattern scan (`--staged` / `--tree` / `--paths`). |
 | `nix run .#surmount-host-logs` / `just host-logs` | Host journal follow and `--status`. |
 | `nix run .#surmount-et` / `just et` | Eternal Terminal client. Reconnects after sleep and network change. Does not replace Mullvad. After the host switch, `etserver` listens on TCP 2022. Long commands still belong in tmux on the guest. |
+| `nix run .#surmount-rekey` / `just rekey` | SHC Backups PGP paste: mint age identity (age/rage crate), wrap with gpg, print `age1...` for type PGP. Identity stays 0600 on disk. |
 | `nix run .#surmount-shc` / `just rdns-shc` | SHC customer user-api (rDNS PTR + tickets). No python3 in the crate. |
 | `nix run .#surmount-tls-hybrid` / `just check-tls-hybrid` | **D1** host hybrid TLS negotiation probe after B1. Requires `SURMOUNT_E2E_BASE_URL=https://...` or exit **2** BLOCKED. Never a flake check. |
 | `nix run .#surmount-domain-audit` / `just domain-audit` | Read-only DNS/web/TLS/mail posture (SPF/DKIM/DMARC, dual-sign selectors `stalwart`/`stalwart-rsa`, HTTPS, optional `--smtp` STARTTLS). |

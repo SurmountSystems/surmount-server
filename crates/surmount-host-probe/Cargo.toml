@@ -25,3 +25,6 @@ path = "src/bin/surmount-et.rs"
 [lib]
 name = "surmount_host_probe"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

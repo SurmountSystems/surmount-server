@@ -398,10 +398,42 @@ fn https_edge_pems_and_listen_green_no_pem_body() {
     assert!(s.contains("PASS: acme enable noted (disabled"), "{s}");
     assert!(s.contains("PASS: listen :443 present"), "{s}");
     assert!(s.contains("PASS: listen :80 present"), "{s}");
+    assert!(s.contains("PASS: tls key mode 600 owner-only"), "{s}");
     assert!(
-        !s.contains("BEGIN CERTIFICATE")
-            && !s.contains("BEGIN PRIVATE KEY")
-            && !s.contains("LAB"),
+        !s.contains("BEGIN CERTIFICATE") && !s.contains("BEGIN PRIVATE KEY") && !s.contains("LAB"),
+        "{s}"
+    );
+}
+
+#[test]
+fn https_edge_tls_key_0640_fails_not_note() {
+    let f = Fakes::new();
+    f.reset_day1();
+    fs::write(f.bin.join("listen_mode"), "https\n").unwrap();
+    fs::write(f.bin.join("listen"), "0.0.0.0:443\n").unwrap();
+    fs::write(
+        f.bin.join("tls_cert"),
+        format!("{}\n", f.tls.join("cert.pem").display()),
+    )
+    .unwrap();
+    fs::write(
+        f.bin.join("tls_key"),
+        format!("{}\n", f.tls.join("key.pem").display()),
+    )
+    .unwrap();
+    fs::write(f.bin.join("ss_out"), https_edge_green_ss()).unwrap();
+    let mut perm = fs::metadata(f.tls.join("key.pem")).unwrap().permissions();
+    perm.set_mode(0o640);
+    fs::set_permissions(f.tls.join("key.pem"), perm).unwrap();
+    let out = f.run(&[]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "{s}");
+    assert!(
+        s.contains("FAIL: tls key mode 640 is not owner-only"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("NOTE: tls key mode 640 is not owner-only"),
         "{s}"
     );
 }

@@ -10,8 +10,8 @@ Usage:
   surmount-host-logs [-- JOURNALCTL_ARGS...]
 
 Read the systemd journal on this host. Journald is the source of truth.
-This binary only reads (follow or a --status snapshot). It does not use
-sudo. nixbuilder can read when it is in group systemd-journal.
+This binary only reads (follow or a --status snapshot). It does not use sudo.
+nixbuilder can read when it is in group systemd-journal.
 
 Default follow: journalctl --no-pager -f -n 80 for stalwart-mail,
 surmount-management-ui, sshd, ssh, surmount-arti-hidden-service, fail2ban,
@@ -124,7 +124,7 @@ where
     let mut journal_args: Vec<String> = Vec::new();
     let mut rest = false;
 
-    while let Some(raw) = iter.next() {
+    for raw in iter {
         let arg = raw.as_ref();
         if rest {
             journal_args.push(arg.to_string());
