@@ -4,7 +4,10 @@
 Read this first, then follow links into child docs. Do not invent product
 scope from memory alone.
 
-**Last updated:** 2026-08-27 (Axum TLS key is **0600** owner-only `surmount-ui`;
+**Last updated:** 2026-09-02 (before asking the operator to deploy or
+switch, agents run local Nix eval that does not rustc on this laptop,
+then `just deploy-host -- --dry-run`, and report those results; the
+real switch stays operator-owned unless they override). Prior 2026-08-27 (Axum TLS key is **0600** owner-only `surmount-ui`;
 Stalwart mail-plane TLS uses copies under `secrets/mail/tls`. Living mailbox
 map stays in operator-facts; operator bins are `nix run .#...`.) Prior 2026-08-25 (living mailbox map stays in operator-facts; operator bins are `nix run .#...`.) Prior 2026-08-22 (living mailbox map:
 `~/.agents/surmount-server/operator-facts.md`. Prior 2026-08-20 (mail domains get primary-class DNSSEC, not
@@ -93,9 +96,12 @@ Ladder detail: [fix-and-fixos.md](fix-and-fixos.md).
 | **Stack language** | **NixOS + Nix + Rust**. **No Python** product/ops (fail2ban transitional-at-most). **No NPM**. Gaps filled in-house. [principles.md](principles.md) section 5b. |
 | **No nginx product edge** | In-tree nginx is **transitional-to-delete**. Target **first-party Axum** HTTPS edge. [EDGE_AND_TLS.md](EDGE_AND_TLS.md). |
 | **No Cloudflare products** | Direct-to-VPS path required. CF Research blog posts may be **cited for learning** only. No orange-cloud, Workers, Tunnel, CF WAF, CF Access as critical path. |
-| **Agents never touch Git's index** | The index is how the operator tracks agent work. No `git add`, `git commit`, `git push`, stage, `git restore --staged`, `git reset`, `git rm --cached`. Do not "clean up" the index. Operator 2026-08-28: stop touching Git. |
+| **Agents never touch Git's index** | The index is how the operator tracks agent work. No `git add`, `git commit`, `git push`, stage, `git restore --staged`, `git reset`, `git rm --cached`. Do not "clean up" the index. Operator 2026-08-28: stop touching Git. Dual-pin host `~/.grok/AGENTS.md`. |
+| **Leftovers: complete sentences, none already done** | Operator 2026-08-28: every numbered leftover is a complete sentence. Do not re-list work the screenshot or live host already shows is done. Dual-pin host `~/.grok/AGENTS.md`. |
+| **Prove the operator gate** | Operator 2026-09-02: do not list a step as operator residual without evidence the agent cannot do it (secrets, standing forbid of the real `just deploy-host` switch and of `just check-remote`, hypervisor, Namecheap click). Host-local enable is agent work. Using the TUI is the product, not leftover. Dual-pin `AGENTS.md`. |
+| **Eval then deploy dry-run before asking to switch** | Operator 2026-09-02: before any sentence that asks the operator to deploy or switch, agents must have run (a) local Nix eval that does **not** rustc on this laptop (`tests/module-eval.nix` / named flake eval) and (b) `just deploy-host -- --dry-run`, and must report those results. Narrows 2026-08-25: dry-run is required agent work; the real switch stays operator-owned unless they override. Laptop cargo and `BUILD_LOCAL` stay forbidden. Dual-pin `AGENTS.md`. |
 | **"Always remember" = dual pin** | Operator 2026-08-27: when they say **always remember**, write it in **AGENTS.md and this table in the same turn**. Chat-only does not survive compaction. One file does not survive attention dilution. |
-| **Finish check-remote then dry-run then switch** | Operator 2026-08-27: after a guest reboot or RAM scare, do **not** tell the operator to wait. Leftover stays `just check-remote`, then `just deploy-host -- --dry-run`, then the real switch unless they said stop. Agents never reboot. |
+| **Finish check-remote then dry-run then switch** | Operator 2026-08-27: after a guest reboot or RAM scare, do **not** tell the operator to wait. Leftover stays `just check-remote`, then `just deploy-host -- --dry-run`, then the real switch unless they said stop. Agents never reboot. Agents run eval plus dry-run (2026-09-02). The real switch and `just check-remote` stay operator-owned unless they override. |
 | **Forks** | Agents never touch `SurmountSystems/*` fork git unless the operator **explicitly** orders that work. Stalwart fork consume: flake input. PQConnect Nix work on sibling repo stays **unstaged for human** commit. |
 | **Always validate versions** | Re-check upstream latest when touching pins. Docs lag. [research/version-audit.md](research/version-audit.md). |
 | **Prove assumptions** | No "unsafe" / scare copy without evidence (failed build, broken import, measured issue). |

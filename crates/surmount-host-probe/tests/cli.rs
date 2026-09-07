@@ -15,6 +15,12 @@ fn btop() -> &'static str {
 fn tls() -> &'static str {
     env!("CARGO_BIN_EXE_surmount-tls-hybrid")
 }
+fn et() -> &'static str {
+    env!("CARGO_BIN_EXE_surmount-et")
+}
+fn grok_oss() -> &'static str {
+    env!("CARGO_BIN_EXE_surmount-grok-oss")
+}
 
 fn temp_dir(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -495,4 +501,366 @@ fn tls_mlkem_mock() {
     let t = String::from_utf8_lossy(&out.stdout);
     assert!(t.contains("result=HYBRID"));
     assert!(t.contains("X25519MLKEM768"));
+}
+
+fn grok_oss_remote_env(cmd: &mut Command) -> &mut Command {
+    cmd.env("SURMOUNT_BTOP_SESSION", "remote")
+        .env_remove("SSH_CONNECTION")
+        .env_remove("SSH_CLIENT")
+        .env_remove("SSH_TTY")
+        .env("SURMOUNT_GUEST_MARKER", "0")
+}
+
+#[test]
+fn grok_oss_help() {
+    let out = Command::new(grok_oss()).arg("--help").output().unwrap();
+    assert!(out.status.success());
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(t.contains("grok-oss"));
+    assert!(t.contains("tmux"));
+    assert!(t.contains("runuser") || t.contains("user grok"));
+    assert!(t.contains("--running"));
+    assert!(t.contains("SURMOUNT_DEPLOY_TARGET"));
+    assert!(t.to_ascii_lowercase().contains("nested") || t.contains("this box"));
+}
+
+#[test]
+fn grok_oss_dry_run_is_ssh_tmux_not_et() {
+    let out = grok_oss_remote_env(&mut Command::new(grok_oss()))
+        .args(["--dry-run", "--target", "root@example.test"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        t.split_whitespace().any(|w| w == "-t"),
+        "ssh -t required: {t}"
+    );
+    assert!(
+        t.contains("tmux attach") && t.contains("-t grok-oss"),
+        "attach argv must include tmux attach -t grok-oss: {t}"
+    );
+    assert!(
+        t.contains("tmux new") && t.contains("-s grok-oss") && t.contains("grok-oss"),
+        "or tmux new -s grok-oss grok-oss: {t}"
+    );
+    assert!(
+        t.split_whitespace()
+            .any(|w| w.ends_with("ssh") || w == "ssh"),
+        "remote attach is ssh, not et: {t}"
+    );
+    assert!(
+        !t.split_whitespace().any(|w| w == "et"),
+        "must not use Eternal Terminal: {t}"
+    );
+    assert!(!t.contains("-p 2022"), "must not use et -p 2022: {t}");
+    assert!(t.contains("example.test"), "{t}");
+    assert!(
+        t.contains("runuser") && t.contains("-u grok"),
+        "attach is as user grok, not root: {t}"
+    );
+}
+
+#[test]
+fn grok_oss_dry_run_attach_is_as_user_grok_not_root() {
+    let out = grok_oss_remote_env(&mut Command::new(grok_oss()))
+        .args(["--dry-run", "--target", "root@example.test"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        t.contains("runuser -u grok"),
+        "attach must runuser as grok so user-1988.slice MemoryMax applies: {t}"
+    );
+    assert!(
+        t.contains("HOME=/home/grok"),
+        "grok-oss must not use root HOME: {t}"
+    );
+    assert!(!t.contains("runuser -u root"), "root tmux is a miss: {t}");
+}
+
+#[test]
+fn grok_oss_nested_guest_dry_run_runs_local_tmux() {
+    let out = Command::new(grok_oss())
+        .arg("--dry-run")
+        .env("SURMOUNT_BTOP_SESSION", "local")
+        .env_remove("SURMOUNT_DEPLOY_TARGET")
+        .env_remove("SURMOUNT_AGENT_TARGET_ENV")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "nested guest must not require a deploy target: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    let err = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
+    assert!(
+        t.contains("tmux attach") && t.contains("-t grok-oss"),
+        "{t}"
+    );
+    assert!(t.contains("tmux new") && t.contains("-s grok-oss"), "{t}");
+    assert!(
+        !t.split_whitespace().any(|w| w == "ssh"),
+        "nested guest must not ssh to itself: {t}"
+    );
+    assert!(!t.contains("example.test"), "{t}");
+    assert!(
+        err.contains("already") || err.contains("nested") || err.contains("this box"),
+        "{err}"
+    );
+    assert!(
+        t.contains("runuser -u grok"),
+        "nested guest still local tmux as user grok: {t}"
+    );
+}
+
+#[test]
+fn grok_oss_nested_marker_runs_local() {
+    let dir = temp_dir("grok-oss-marker");
+    let marker = dir.join("root-justfile");
+    fs::write(&marker, "# guest marker\n").unwrap();
+    let out = Command::new(grok_oss())
+        .arg("--dry-run")
+        .env_remove("SURMOUNT_BTOP_SESSION")
+        .env("SURMOUNT_GUEST_MARKER", &marker)
+        .env_remove("SURMOUNT_DEPLOY_TARGET")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(t.contains("tmux attach"), "{t}");
+    assert!(!t.split_whitespace().any(|w| w == "ssh"), "{t}");
+}
+
+#[test]
+fn grok_oss_nested_hostname_runs_local() {
+    let out = Command::new(grok_oss())
+        .arg("--dry-run")
+        .env_remove("SURMOUNT_BTOP_SESSION")
+        .env("SURMOUNT_GUEST_MARKER", "0")
+        .env("SURMOUNT_TEST_HOSTNAME", "surmount-1")
+        .env_remove("SURMOUNT_DEPLOY_TARGET")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(t.contains("tmux attach"), "{t}");
+    assert!(!t.split_whitespace().any(|w| w == "ssh"), "{t}");
+}
+
+#[test]
+fn grok_oss_fake_ssh_argv() {
+    let dir = temp_dir("grok-oss-ssh");
+    let (ssh, log) = fake_ssh(&dir);
+    let out = grok_oss_remote_env(&mut Command::new(grok_oss()))
+        .env("SURMOUNT_DEPLOY_TARGET", "root@example.test")
+        .env("SURMOUNT_GROK_OSS_SSH", &ssh)
+        .env("SURMOUNT_GROK_OSS_REQUIRE_TTY", "0")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let args = fs::read_to_string(log).unwrap_or_default();
+    assert!(args.split_whitespace().any(|w| w == "-t"), "{args}");
+    assert!(
+        args.contains("tmux attach") && args.contains("-t grok-oss"),
+        "{args}"
+    );
+    assert!(
+        args.contains("tmux new") && args.contains("-s grok-oss"),
+        "{args}"
+    );
+    assert!(!args.contains("-p 2022"), "{args}");
+    assert!(
+        args.contains("runuser") && args.contains("-u grok"),
+        "fake ssh remote command must be as user grok: {args}"
+    );
+}
+
+#[test]
+fn grok_oss_refuses_non_tty() {
+    let dir = temp_dir("grok-oss-notty");
+    let (ssh, log) = fake_ssh(&dir);
+    let out = grok_oss_remote_env(&mut Command::new(grok_oss()))
+        .env("SURMOUNT_DEPLOY_TARGET", "root@example.test")
+        .env("SURMOUNT_GROK_OSS_SSH", &ssh)
+        .env_remove("SURMOUNT_GROK_OSS_REQUIRE_TTY")
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "piped stdin/stdout is not a live tty; must fail loud, not attach"
+    );
+    let err = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
+    assert!(
+        err.contains("live tty") || err.contains("not a tty") || err.contains("terminal"),
+        "{err}"
+    );
+    assert!(
+        !log.is_file() || fs::read_to_string(log).unwrap_or_default().is_empty(),
+        "must not spawn ssh without a live tty"
+    );
+}
+
+#[test]
+fn grok_oss_running_json_is_ssh_as_grok_without_tty_or_bind() {
+    let out = grok_oss_remote_env(&mut Command::new(grok_oss()))
+        .args(["--running", "--dry-run", "--target", "root@example.test"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        t.split_whitespace()
+            .any(|w| w.ends_with("ssh") || w == "ssh"),
+        "running JSON is ssh, not et: {t}"
+    );
+    assert!(
+        !t.split_whitespace().any(|w| w == "-t"),
+        "running --json must not allocate a tty: {t}"
+    );
+    assert!(t.contains("runuser -u grok"), "JSON as user grok: {t}");
+    assert!(t.contains("grok-oss running --json"), "{t}");
+    assert!(!t.contains("tmux"), "running is not attach: {t}");
+    assert!(!t.contains("0.0.0.0"), "{t}");
+    assert!(!t.contains("listen"), "{t}");
+    assert!(!t.contains("bind"), "{t}");
+    assert!(!t.contains(":443"), "{t}");
+    assert!(!t.contains("dashboard"), "{t}");
+}
+
+#[test]
+fn grok_oss_running_nested_guest_is_local() {
+    let out = Command::new(grok_oss())
+        .args(["--running", "--dry-run"])
+        .env("SURMOUNT_BTOP_SESSION", "local")
+        .env_remove("SURMOUNT_DEPLOY_TARGET")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(!t.split_whitespace().any(|w| w == "ssh"), "{t}");
+    assert!(t.contains("runuser -u grok"), "{t}");
+    assert!(t.contains("grok-oss running --json"), "{t}");
+}
+
+#[test]
+fn grok_oss_running_fake_ssh_no_tty_required() {
+    let dir = temp_dir("grok-oss-running-ssh");
+    let (ssh, log) = fake_ssh(&dir);
+    let out = grok_oss_remote_env(&mut Command::new(grok_oss()))
+        .arg("--running")
+        .env("SURMOUNT_DEPLOY_TARGET", "root@example.test")
+        .env("SURMOUNT_GROK_OSS_SSH", &ssh)
+        .env_remove("SURMOUNT_GROK_OSS_REQUIRE_TTY")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "running --json must not require a tty; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let args = fs::read_to_string(log).unwrap_or_default();
+    assert!(!args.split_whitespace().any(|w| w == "-t"), "{args}");
+    assert!(
+        args.contains("runuser") && args.contains("-u grok"),
+        "{args}"
+    );
+    assert!(args.contains("grok-oss running --json"), "{args}");
+}
+
+#[test]
+fn et_status_help_mentions_ports() {
+    let out = Command::new(et()).arg("--help").output().unwrap();
+    assert!(out.status.success());
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(t.contains("--status"));
+    assert!(t.contains("2022") || t.contains("TCP"));
+}
+
+#[test]
+fn et_status_prints_ports_without_address_when_2022_down() {
+    let out = Command::new(et())
+        .args(["--status", "--target", "root@192.0.2.10"])
+        .env("SURMOUNT_ET_STATUS_TCP22", "1")
+        .env("SURMOUNT_ET_STATUS_TCP2022", "0")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(t.contains("TCP 22"), "{t}");
+    assert!(t.contains("TCP 2022"), "{t}");
+    assert!(
+        t.contains("answers") && t.contains("does not answer"),
+        "{t}"
+    );
+    assert!(
+        t.contains("just grok-oss") || t.contains("SSH/tmux"),
+        "2022 down must point at SSH/tmux just grok-oss: {t}"
+    );
+    assert!(
+        !t.contains("192.0.2.10"),
+        "must not print the host address: {t}"
+    );
+    assert!(!t.contains("root@"), "{t}");
+}
+
+#[test]
+fn et_status_after_double_dash() {
+    let out = Command::new(et())
+        .args(["--target", "root@example.test", "--", "--status"])
+        .env("SURMOUNT_ET_STATUS_TCP22", "1")
+        .env("SURMOUNT_ET_STATUS_TCP2022", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let t = String::from_utf8_lossy(&out.stdout);
+    assert!(t.contains("TCP 22") && t.contains("TCP 2022"), "{t}");
+    assert!(t.contains("answers"), "{t}");
+    assert!(
+        !t.contains("just grok-oss"),
+        "2022 up should not push grok-oss: {t}"
+    );
+    assert!(!t.contains("example.test"), "{t}");
 }

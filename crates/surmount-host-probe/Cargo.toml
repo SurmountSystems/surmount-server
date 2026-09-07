@@ -22,6 +22,10 @@ path = "src/bin/surmount-tls-hybrid.rs"
 name = "surmount-et"
 path = "src/bin/surmount-et.rs"
 
+[[bin]]
+name = "surmount-grok-oss"
+path = "src/bin/surmount-grok-oss.rs"
+
 [lib]
 name = "surmount_host_probe"
 path = "src/lib.rs"

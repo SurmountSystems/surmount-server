@@ -4,7 +4,7 @@ Plain English. No assumption that the reader already knows Fix ladder codes.
 Ladder detail still lives in [fix-and-fixos.md](fix-and-fixos.md) if you
 want depth.
 
-**Last updated:** 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
+**Last updated:** 2026-09-02 (`surmount.sploraIndexer` is the host-local single-knob wrap over imported `nixosModules.splora`; flake input `splora` on the `surmount` branch, locked rev `9481e4cb87273aa99b0357be48503765beadb919`; instance options already include cookieFile, daemonRpcAddr, jsonrpcImport, daemonDir = null, publicHealth, db cache 24, httpSocketFile default `/run/splora/${name}.http.sock`; this repo does not wrap crane src). Prior 2026-09-01 (this tree briefly wrapped crane src; that wrap is deleted). Prior 2026-09-01 (flake input `splora` from `github:SurmountSystems/splora` on the `surmount` branch; not in-tree). Prior 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
 ---
@@ -69,6 +69,42 @@ package bumps in this repo.
 | `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
+
+**Flake input, not in-tree:** `splora` is `github:SurmountSystems/splora` on
+the `surmount` branch (locked rev `9481e4cb87273aa99b0357be48503765beadb919`).
+This repo imports `nixosModules.splora` and overlays `pkgs.splora` /
+`pkgs.splora-liquid` from the input packages. Operator bumps with
+`nix flake update splora`. Do not copy the splora tree into this repo.
+Mempool REST needs a reachable Bitcoin JSON-RPC, a cookie file path, and
+one indexer instance. A local bitcoind datadir on this guest is not
+required for REST. This tree keeps `surmount.sploraIndexer` as the
+host-local single knob (default off): one imported instance, cookie path
+charset, `daemonDir = null`, first-class `jsonrpcImport` / `publicHealth`
+/ 24 MiB db cache. The wrap does not fight the imported module; it does
+not mkForce ReadOnlyPaths or inject those flags via extraArgs. HTTP/2 and
+HTTP/3 stay on this-tree Axum. Do not start five indexers. Do not set
+`services.splora.enable` or `surmount.sploraIndexer.enable` on the public
+sample host.
+
+### Upstream crane omits Menhera config from Nix src (Splora)
+
+The committed splora `.cargo/config.toml` still has
+`[source.crates-io] replace-with = "menhera-cooldown"` for laptop
+`cargo`. Laptop cargo in the splora git tree still uses Menhera.
+
+The pin's crane `src` omits that file and keeps `Cargo.lock`. After
+vendor, `buildDepsOnly`, `buildPackage`, and nextest pass
+`--offline --locked`, so Nix does not query
+`index.crates.menhera.org`. That strip lives in the splora flake, not
+in this overlay. Do not add a second wrap here that copies src and
+rewrites `.cargo/config.toml`.
+
+Eval proof (no rocksdb compile, no guest OOM):
+`nix eval --max-jobs 0 path:$PWD#checks.x86_64-linux.splora-package-contract`.
+That check reads the input config (still Menhera for laptop cargo) and
+asserts this tree does not set a wrap passthru. It does not build
+`splora-deps`. Do not `nix build .#splora` on the mail guest from an
+agent. Do not set `outputHash` on `splora-deps` to give it network.
 
 ### Reasonable leftover exceptions (not product bash)
 

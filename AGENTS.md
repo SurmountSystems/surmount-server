@@ -60,14 +60,31 @@ Product detail lives under `docs/`. This file is standing law only.
   (the host API token), not a mailbox account. Say **API token principal**
   vs **mailbox account**. Never "you are not the admin." Mailbox password
   setup belongs in the services console, not an SSH ritual.
-- **Enumerate operator residual every status (operator 2026-08-22).** When
-  you report what is done, also list leftover operator work in numbered
-  complete sentences (password still owed, client still empty, parked
-  Monday work). Do not hide leftovers in prose. Living mailbox maps stay
-  in `~/.agents/surmount-server/operator-facts.md`, not this file.
+- **Enumerate operator residual every status (operator 2026-08-22;
+  stale leftovers 2026-08-28; prove the gate 2026-09-02).** When you
+  report what is done, also list leftover operator work that is **still
+  owed**, in numbered **complete American English sentences** (subject
+  and finite verb in every number). Do not hide leftovers in prose. Do
+  **not** re-list work the current screenshot, live host, or facts file
+  already shows is done. Example miss: telling the operator to set the
+  hunter@cryptoquick.com password after Evolution already shows that
+  account. If a facts-file leftover is closed, update the facts file
+  the same turn. Living mailbox maps stay in
+  `~/.agents/surmount-server/operator-facts.md`, not this file.
   One-time "remind me next time we talk" leftovers go in that facts file
   and the remaining-work pointer. Do **not** start a recurring scheduler
   loop for that.
+  **Prove the operator gate (operator 2026-09-02).** Do not list a step
+  as operator residual unless you have evidence the agent cannot do it:
+  secrets custody, standing forbid of the real `just deploy-host`
+  switch and of `just check-remote` (2026-08-25; narrowed 2026-09-02:
+  `just deploy-host -- --dry-run` is required agent work), hypervisor,
+  Namecheap click, or the operator using a TUI they asked to sit in.
+  Host-local enable is agent work when this machine already has
+  host-local. Using `just grok-oss` after the guest has the package is
+  the product, not a leftover click. Each leftover sentence names
+  **why** the agent cannot do that step. Dumping a six-step ritual
+  without that proof is a broken tool.
 - **Recommendations need reasons and sources (operator 2026-08-24).** When
   you tell the operator to tap, type, or change a setting, say **why** in
   complete sentences and cite a public page or a live measurement from
@@ -86,13 +103,17 @@ Product detail lives under `docs/`. This file is standing law only.
   **not** an alias of an existing mailbox. Distinct MailPlus accounts are
   separate User mailboxes until the operator says otherwise. IMAP username
   is that mailbox's own address.
-- **Complete sentences for leftover clicks (operator 2026-08-20).** When you
-  ask the operator to do something in Namecheap, write full American English
-  sentences. One leftover click is one paragraph. Say which domain, which
-  page, which control, what the click does, what they must not do, and how
-  we will know it worked. Do **not** stack a key tag, a TTL, SERVFAIL, and
-  a UI toggle into one numbered fragment. The operator knows DNS. Unclear
-  shorthand is the failure, not their knowledge.
+- **Complete sentences for leftover clicks (operator 2026-08-20;
+  every leftover 2026-08-28).** When you ask the operator to do something
+  in Namecheap, write full American English sentences. One leftover click
+  is one paragraph. Say which domain, which page, which control, what the
+  click does, what they must not do, and how we will know it worked. Do
+  **not** stack a key tag, a TTL, SERVFAIL, and a UI toggle into one
+  numbered fragment. The same complete-sentence rule applies to **every**
+  numbered leftover, not only Namecheap: no fragments such as "cryptoquick
+  IMAP password is still set on services /mail if that account is empty."
+  The operator knows DNS. Unclear shorthand is the failure, not their
+  knowledge.
 - **Do not invent leftover clicks this turn.** Operator 2026-08-20: they
   did not ask about `baxterartworks.com` in the DNSSEC leftover. Do **not**
   add Baxter Custom MX, Baxter `_dmarc`, or any other domain they did not
@@ -291,18 +312,35 @@ in the same turn (standing rule + compaction reload table). One file is
 attention dilution. Chat-only is compaction loss. Nix needing an untracked
 file is still not a reason to stage.
 
+## Deploy dry-run is agent work (operator 2026-09-02)
+
+Before any sentence that asks the operator to deploy or switch, agents
+must have already run both of these and must report the results:
+
+1. Local Nix eval contracts that do **not** rustc on this laptop
+   (`tests/module-eval.nix` / named flake eval).
+2. `just deploy-host -- --dry-run`.
+
+This **narrows** 2026-08-25: dry-run is required agent work. The **real
+switch** stays operator-owned unless they override. Laptop cargo and
+`BUILD_LOCAL` stay forbidden. `just check-remote` stays operator-owned.
+Prove-the-gate leftover law stays: do not list a leftover unless the
+agent cannot do it.
+
 ## Mention is in scope; remote builder and niceness (operator 2026-08-17)
 
 If the operator mentioned work, that work is in scope. Implement it. Do **not**
 park mentioned residual as "need hostname" or "operator-gated" when access
 already exists.
 
-**After a guest incident, finish the named process (operator 2026-08-27).**
-Do not tell the operator they need do nothing, or to wait, when leftover is
-`just check-remote`, then `just deploy-host -- --dry-run`, then the real
-switch. A reboot does not cancel that slice. Agents never reboot. Keep the
-Eternal Terminal window. Continue test, dry-run, and switch unless they said
-stop.
+**After a guest incident, finish the named process (operator 2026-08-27;
+dry-run agent work 2026-09-02).** Do not tell the operator they need do
+nothing, or to wait, when leftover is `just check-remote`, then
+`just deploy-host -- --dry-run`, then the real switch. A reboot does
+not cancel that slice. Agents never reboot. Keep the Eternal Terminal
+window. Agents run named eval and `just deploy-host -- --dry-run` and
+report those results. The real switch stays operator-owned unless they
+override. `just check-remote` stays operator-owned.
 
 Comprehensive residual means finish the **named leftover slices**. Do **not**
 invent unlocked tracks. Do not start an MX flip, a DMARC `p=reject`

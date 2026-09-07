@@ -66,6 +66,17 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
+
+    # Grok OSS TUI (bin/grok-oss). Product tip is still branch remote-1
+    # (open PR 51; default branch main is #50 and is not this tip).
+    # Operator bumps: nix flake update grok-oss.
+    # Default-off NixOS module; package is fail-closed when enable=true.
+    grok-oss.url = "github:SurmountSystems/grok-oss/remote-1";
+
+    # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
+    # NixOS module is nixosModules.splora. REST is one indexer instance plus
+    # JSON-RPC and a cookie; a local bitcoind datadir is not required.
+    splora.url = "github:SurmountSystems/splora/surmount";
   };
 
   outputs =
@@ -77,10 +88,14 @@
       sops-nix,
       surmount-site,
       advisory-db,
+      grok-oss,
+      splora,
       ...
     }:
     let
       inherit (nixpkgs) lib;
+      # Overlay attrs are also named splora / splora-liquid; keep the flake input.
+      sploraInput = splora;
 
       systems = [
         "x86_64-linux"
@@ -146,6 +161,11 @@
         surmount-secrets-install = self.packages.${system}.surmount-secrets-install;
         surmount-secrets-prompt = self.packages.${system}.surmount-secrets-prompt;
         surmount-rekey = self.packages.${system}.surmount-rekey;
+        grok-oss = self.packages.${system}.grok-oss;
+        # Flake-input packages. Upstream crane src omits .cargo/config.toml
+        # (laptop cargo still uses Menhera). Do not wrap src again here.
+        splora = self.packages.${system}.splora;
+        splora-liquid = self.packages.${system}.splora-liquid;
       };
 
       mkPkgs =
@@ -251,6 +271,7 @@
           imports = [
             ./modules
             sops-nix.nixosModules.sops
+            sploraInput.nixosModules.splora
           ];
         };
         surmount = self.nixosModules.default;
@@ -267,6 +288,7 @@
           modules = [
             sops-nix.nixosModules.sops
             ./modules
+            sploraInput.nixosModules.splora
             ./hosts/mail-vps/configuration.nix
             (
               { ... }:
@@ -379,6 +401,21 @@
           surmount-rekey = pkgs.callPackage ./nix/packages/surmount-rekey.nix {
             inherit craneLib pkgsRust;
           };
+          # Grok OSS from locked github:SurmountSystems/grok-oss (operator-bump).
+          # Not in checks.ci (heavy crane). Module stays default-off.
+          grok-oss = pkgs.callPackage ./nix/packages/grok-oss.nix {
+            grokOssFlake = grok-oss;
+            inherit system;
+          };
+          # Flake-input splora packages. Upstream crane omits
+          # .cargo/config.toml from src and builds --offline --locked.
+          # Not in checks.ci: the real package is a rocksdb crane build.
+          splora =
+            sploraInput.packages.${system}.splora
+              or (throw "splora flake input has no packages.${system}.splora (fail-closed)");
+          splora-liquid =
+            sploraInput.packages.${system}.splora-liquid
+              or (throw "splora flake input has no packages.${system}.splora-liquid (fail-closed)");
           # RFC-style nixfmt (same as formatter / checks.ci / devShell).
           # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt …
           # nixos-26.05: nixfmt-rfc-style is an alias of pkgs.nixfmt (prefer the latter).
@@ -438,6 +475,10 @@
         surmount-et = {
           type = "app";
           program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-et";
+        };
+        surmount-grok-oss = {
+          type = "app";
+          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-grok-oss";
         };
         surmount-deploy-static-sites = {
           type = "app";
@@ -762,9 +803,20 @@
               r = import ./tests/module-eval.nix {
                 inherit pkgs lib;
                 inherit sops-nix;
+                sploraNixosModule = sploraInput.nixosModules.splora;
               };
             in
             pkgs.writeText "module-eval-contract" (builtins.toJSON r.ok);
+
+          # Eval-only: flake-input packages pass through (no crane build).
+          splora-package-contract =
+            let
+              r = import ./tests/splora-package.nix {
+                inherit lib system;
+                sploraFlake = sploraInput;
+              };
+            in
+            pkgs.writeText "splora-package-contract" (builtins.toJSON r.ok);
 
           # Pure host-path charset only (no nixosSystem).
           deploy-secrets-contract =
@@ -876,6 +928,7 @@
               arti-module-contract
               arti-onion-package-contract
               public-site-package-contract
+              splora-package-contract
               nix-fmt-check
               cargo-deny-bans
               cargo-audit
@@ -895,6 +948,7 @@
             arti-module-contract
             arti-onion-package-contract
             public-site-package-contract
+            splora-package-contract
             nix-fmt-check
             cargo-audit
             cargo-deny-bans

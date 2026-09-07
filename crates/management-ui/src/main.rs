@@ -330,7 +330,7 @@ async fn dispatch_listen_with_extras(
         None
     };
 
-    let primary = dispatch_listen(decision, listen, app, tls_paths);
+    let primary = dispatch_listen(decision, listen, app, tls_paths, state);
 
     match (redirect_bound, local_cleartext_bound) {
         (None, None) => primary.await,
@@ -382,12 +382,13 @@ async fn dispatch_listen(
     listen: SocketAddr,
     app: Router,
     tls_paths: Option<&crate::tls::TlsPaths>,
+    state: Arc<AppState>,
 ) -> anyhow::Result<()> {
     match decision {
         HttpsStartupDecision::ServeHttps => {
             let paths = tls_paths.context("HTTPS mode missing TLS paths after config parse")?;
             let tls = rustls_config_from_paths(paths)?;
-            serve_https(listen, app, tls).await?;
+            serve_https(listen, app, tls, paths, state).await?;
         }
         HttpsStartupDecision::ServePlainHttp | HttpsStartupDecision::DangerousCleartextEscape => {
             let mode_label = match decision {
@@ -465,7 +466,13 @@ async fn serve_https_on_listener(
     Ok(())
 }
 
-async fn serve_https(listen: SocketAddr, app: Router, tls: RustlsConfig) -> anyhow::Result<()> {
+async fn serve_https(
+    listen: SocketAddr,
+    app: Router,
+    tls: RustlsConfig,
+    tls_paths: &crate::tls::TlsPaths,
+    state: Arc<AppState>,
+) -> anyhow::Result<()> {
     let (std_listener, bound) = bind_https_listener(listen)?;
     info!(%bound, mode = "https", "surmount-management-ui listening");
 
@@ -476,7 +483,29 @@ async fn serve_https(listen: SocketAddr, app: Router, tls: RustlsConfig) -> anyh
         shutdown_handle.graceful_shutdown(Some(Duration::from_secs(10)));
     });
 
-    serve_https_on_listener(std_listener, app, tls, handle).await
+    let http3_enable = state.config.http3.enable;
+    if http3_enable {
+        crate::tls::http3::require_http3_bind(true, true).map_err(anyhow::Error::msg)?;
+        let quic_addr = SocketAddr::new(bound.ip(), bound.port());
+        let h3_app = app.clone();
+        let h3_cfg = state.config.http3.clone();
+        let h3_paths = tls_paths.clone();
+        let https = serve_https_on_listener(std_listener, app, tls, handle);
+        let h3 = crate::tls::http3::serve_http3(
+            quic_addr,
+            h3_app,
+            &h3_paths,
+            &h3_cfg,
+            shutdown_signal(),
+        );
+        tokio::select! {
+            r = https => r.context("https")?,
+            r = h3 => r.context("http3")?,
+        }
+        Ok(())
+    } else {
+        serve_https_on_listener(std_listener, app, tls, handle).await
+    }
 }
 
 fn build_router(state: Arc<AppState>) -> Router {
@@ -525,6 +554,12 @@ fn build_router(state: Arc<AppState>) -> Router {
         // CSP / nosniff / frame denial. No tower TraceLayer (avoids dumping
         // headers/URIs that may embed onion or secret-shaped paths).
         // Apex/www public surface before auth so unauth GET works without console.
+        // Splora Host/queue proxy is inside auth so NIP-98 stays in splora
+        // (auth middleware skips matching Hosts).
+        .layer(from_fn_with_state(
+            state.clone(),
+            crate::proxy_vaultwarden::splora::splora_proxy_middleware,
+        ))
         .layer(from_fn_with_state(state.clone(), auth_middleware))
         .layer(from_fn_with_state(state.clone(), rate_limit_middleware))
         .layer(from_fn_with_state(
@@ -718,6 +753,14 @@ async fn security_headers_middleware(
         apply_security_headers(response.headers_mut(), &nonce);
     }
     let status = response.status();
+    crate::tls::http3::apply_h3_alt_svc(
+        response.headers_mut(),
+        &state.config.http3,
+        state.config.listen_mode.is_https(),
+        cleartext_socket,
+        &host,
+        status,
+    );
     crate::onion_discovery::apply_onion_discovery_headers(
         response.headers_mut(),
         &state.config.onion_discovery,
@@ -828,9 +871,34 @@ async fn auth_challenge(
     })
 }
 
+/// Peer for bans/logs. HTTP/3 (axum-h3) does not insert [`ConnectInfo`]; missing
+/// is unspecified, never a 500 extractor rejection.
+fn peer_socket_addr_from_extensions(ext: &axum::http::Extensions) -> SocketAddr {
+    ext.get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(a)| *a)
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)))
+}
+
+/// Infallible peer extractor so NIP-07 session POST works on HTTP/3.
+struct PeerAddr(SocketAddr);
+
+impl<S> axum::extract::FromRequestParts<S> for PeerAddr
+where
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(peer_socket_addr_from_extensions(&parts.extensions)))
+    }
+}
+
 async fn auth_session_create(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    PeerAddr(addr): PeerAddr,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -865,7 +933,7 @@ async fn auth_session_create(
         Err(e) => {
             // Session exchange fail (missing/malformed event) -> ban candidate once.
             log_auth_failure("session_exchange_parse", &e);
-            let _ = signal_unauthorized(&state, addr, &headers);
+            signal_unauthorized_known_peer(&state, addr, &headers);
             return auth_fail_json(e);
         }
     };
@@ -889,14 +957,14 @@ async fn auth_session_create(
             } else {
                 let e = AuthError::NotAllowlisted;
                 log_auth_failure("session_exchange_verify", &e);
-                let _ = signal_unauthorized(&state, addr, &headers);
+                signal_unauthorized_known_peer(&state, addr, &headers);
                 return auth_fail_json(e);
             }
         }
         Err(e) => {
             // Invalid credentials (sig / allowlist / skew) -> ban candidate once.
             log_auth_failure("session_exchange_verify", &e);
-            let _ = signal_unauthorized(&state, addr, &headers);
+            signal_unauthorized_known_peer(&state, addr, &headers);
             return auth_fail_json(e);
         }
     };
@@ -1383,10 +1451,14 @@ fn identity_from_request(
 
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
+    let addr = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(a)| *a)
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
     if !state.config.auth.mode.is_nostr() {
         return next.run(request).await;
     }
@@ -1397,6 +1469,16 @@ async fn auth_middleware(
     }
     // Vaultwarden path proxy: VW login is SoT day-one (no Nostr gate on prefix).
     if state.config.vaultwarden_proxy.enable && state.config.vaultwarden_proxy.matches_path(&path) {
+        return next.run(request).await;
+    }
+    // Splora: NIP-98 stays in the indexer. No edge API keys.
+    let splora_host =
+        request_authority_host(header_str(request.headers(), "host"), request.uri().host());
+    if state
+        .config
+        .splora_proxy
+        .should_bypass_auth(&splora_host, &path)
+    {
         return next.run(request).await;
     }
 
@@ -1665,10 +1747,14 @@ async fn mta_sts_policy_handler(State(state): State<Arc<AppState>>, request: Req
 
 async fn rate_limit_middleware(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
+    let addr = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(a)| *a)
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0)));
     let headers = request.headers();
     let key = rate_limit_key(addr, headers);
     let client_ip: std::net::IpAddr = key.parse().unwrap_or_else(|_| addr.ip());
@@ -1738,6 +1824,15 @@ fn rate_limit_key(addr: SocketAddr, headers: &HeaderMap) -> String {
 /// request-context entry for auth failures (bad NIP-98 / session exchange).
 /// Missing cookie does not call this. Q-ACL-1 still open for full surface list.
 /// Hermetic tests call it directly.
+/// HTTP/3 has no ConnectInfo. Do not ban 0.0.0.0 / :: (that would share one key
+/// for every QUIC client). TCP session fails still signal.
+fn signal_unauthorized_known_peer(state: &AppState, addr: SocketAddr, headers: &HeaderMap) {
+    if addr.ip().is_unspecified() {
+        return;
+    }
+    let _ = signal_unauthorized(state, addr, headers);
+}
+
 fn signal_unauthorized(
     state: &AppState,
     addr: SocketAddr,
@@ -1987,6 +2082,8 @@ mod edge_wire_tests {
             onion_discovery: crate::onion_discovery::OnionDiscoveryConfig::empty(),
             vaultwarden_url: None,
             vaultwarden_proxy: crate::proxy_vaultwarden::VaultwardenProxyConfig::default(),
+            splora_proxy: crate::proxy_vaultwarden::splora::SploraProxyConfig::default(),
+            http3: crate::tls::http3::Http3Config::default(),
             apex_public_root: None,
             static_vhosts: Default::default(),
             rate_limit_max_requests: max,
@@ -2047,6 +2144,8 @@ mod edge_wire_tests {
             onion_discovery: crate::onion_discovery::OnionDiscoveryConfig::empty(),
             vaultwarden_url: None,
             vaultwarden_proxy: crate::proxy_vaultwarden::VaultwardenProxyConfig::default(),
+            splora_proxy: crate::proxy_vaultwarden::splora::SploraProxyConfig::default(),
+            http3: crate::tls::http3::Http3Config::default(),
             apex_public_root: None,
             static_vhosts: Default::default(),
             rate_limit_max_requests: max,
@@ -2661,6 +2760,134 @@ mod edge_wire_tests {
         let _ = serve.await;
     }
 
+    /// Named contract: HTTP/3 (axum-h3) does not insert ConnectInfo. Session
+    /// exchange must return JSON 401, not Axum 500 missing extension (live
+    /// NIP-07 "Login failed: 500" on services login).
+    #[tokio::test]
+    async fn auth_session_without_connect_info_is_json_401_not_500() {
+        let secret = b"test-session-secret-for-h3-sess!!";
+        let keys = nostr::Keys::generate();
+        let hex = keys.public_key().to_hex();
+        let state = test_state_nostr(&hex, secret);
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service()).await.ok();
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let sess = client
+            .post(format!("http://{addr}/api/v1/auth/session"))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(
+            sess.status(),
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "ConnectInfo-less session exchange must not 500"
+        );
+        assert_eq!(sess.status(), reqwest::StatusCode::UNAUTHORIZED);
+        let body: serde_json::Value = sess.json().await.expect("JSON error body, not Axum text");
+        assert_eq!(body["ok"], false);
+        assert!(
+            body["error"].as_str().is_some_and(|e| !e.is_empty()),
+            "login chrome needs body.error, got {body}"
+        );
+        serve.abort();
+        let _ = serve.await;
+    }
+
+    /// Named contract: valid NIP-98 still sets a session when ConnectInfo is absent.
+    #[tokio::test]
+    async fn auth_session_nip98_ok_without_connect_info() {
+        use surmount_management_ui::auth::{
+            HttpMethod, event_to_nostr_authorization, sign_nip98_event,
+        };
+
+        let secret = b"test-session-secret-for-h3-ok!!!!";
+        let keys = nostr::Keys::generate();
+        let hex = keys.public_key().to_hex();
+        let state = test_state_nostr(&hex, secret);
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service()).await.ok();
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let session_url = format!("http://{addr}/api/v1/auth/session");
+        let event = sign_nip98_event(
+            &keys,
+            &session_url,
+            HttpMethod::POST,
+            Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
+        )
+        .unwrap();
+        let sess = client
+            .post(&session_url)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                event_to_nostr_authorization(&event),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sess.status(), reqwest::StatusCode::OK);
+        let body: serde_json::Value = sess.json().await.unwrap();
+        assert_eq!(body["ok"], true);
+        serve.abort();
+        let _ = serve.await;
+    }
+
+    /// Named contract: missing ConnectInfo must not ban 0.0.0.0 (shared H3 key).
+    #[tokio::test]
+    async fn auth_session_without_connect_info_does_not_ban_unspecified() {
+        use std::net::Ipv4Addr;
+        use surmount_management_ui::ban::MemoryBanBackend;
+
+        let backend = MemoryBanBackend::new(vec![]);
+        let ban = BanGuard::with_backend(BanEnforcement::Enforce, Box::new(backend));
+        let secret = b"test-session-secret-for-h3-ban!!";
+        let keys = nostr::Keys::generate();
+        let hex = keys.public_key().to_hex();
+        let state = test_state_nostr_with_ban(&hex, secret, ban);
+        let check = state.clone();
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(listener, app.into_make_service()).await.ok();
+        });
+        let client = reqwest::Client::new();
+        let sess = client
+            .post(format!("http://{addr}/api/v1/auth/session"))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(sess.status(), reqwest::StatusCode::UNAUTHORIZED);
+        assert!(
+            !check.ban.is_banned(IpAddr::V4(Ipv4Addr::UNSPECIFIED)),
+            "must not ban unspecified peer used as HTTP/3 ConnectInfo fallback"
+        );
+        serve.abort();
+        let _ = serve.await;
+    }
+
     #[tokio::test]
     async fn middleware_enforce_returns_403_for_banned_ip() {
         use std::net::Ipv4Addr;
@@ -3059,6 +3286,7 @@ mod edge_wire_tests {
                 SocketAddr::from(([127, 0, 0, 1], 0)),
                 app,
                 None,
+                test_state(0),
             )
             .await
             .unwrap_err()

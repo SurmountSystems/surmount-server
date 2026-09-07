@@ -1,5 +1,6 @@
 //! Last line of defense for the mail host: if RAM is almost gone, SIGKILL
-//! builder hogs (Lean/Lake/rustc/nixbld). Never mail, sshd, UI, et, or self.
+//! builder hogs (Lean/Lake/rustc/nixbld). Never mail, sshd, UI, et, grok-oss,
+//! tmux, or self.
 //!
 //! Threshold is **host** `MemAvailable`, not a process RSS target. Tests use
 //! a fake proc tree; they never signal live PIDs.
@@ -29,6 +30,9 @@ const PROTECTED_COMMS: &[&str] = &[
     "etterminal",
     "surmount-scram",
     "just",
+    "grok-oss",
+    "tmux",
+    "tmux: server",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -365,6 +365,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-h3"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4c25010faba73bf807d5012fd154ff185031e1a7e98fed1ea2438bc99c0500"
+dependencies = [
+ "axum",
+ "futures",
+ "h3",
+ "h3-util",
+ "hyper",
+ "hyper-util",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "axum-server"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1058,6 +1075,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastrand"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1367,6 +1390,51 @@ dependencies = [
  "slab",
  "tokio",
  "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "h3"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10872b55cfb02a821b69dc7cf8dc6a71d6af25eb9a79662bec4a9d016056b3be"
+dependencies = [
+ "bytes",
+ "fastrand",
+ "futures-util",
+ "http",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "h3-quinn"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b2e732c8d91a74731663ac8479ab505042fbf547b9a207213ab7fbcbfc4f8b4"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "quinn",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "h3-util"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df853a026dd43ad24c6e008109597492bf1a646c5b305ce112ec9bbf3f1355da"
+dependencies = [
+ "bytes",
+ "futures",
+ "h3",
+ "h3-quinn",
+ "hyper",
+ "hyper-util",
+ "tokio",
+ "tower",
  "tracing",
 ]
 
@@ -2659,6 +2727,7 @@ checksum = "0c1a41e437b6bbd489372cd4971de128e85c855f56c57f283d20ff016cf7c0a8"
 dependencies = [
  "bytes",
  "cfg_aliases",
+ "futures-io",
  "pin-project-lite",
  "quinn-proto",
  "quinn-udp",
@@ -2677,6 +2746,7 @@ version = "0.11.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04759210543be93709136e28212294a659ef5001836ff4eab4d663e4529bba83"
 dependencies = [
+ "aws-lc-rs",
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
@@ -3615,16 +3685,23 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "axum-h3",
  "axum-server",
  "base64",
+ "bytes",
  "getrandom 0.2.17",
+ "h3",
+ "h3-quinn",
+ "h3-util",
  "hmac",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "instant-acme",
  "leptos",
  "libc",
  "nostr",
+ "quinn",
  "rcgen 0.13.2",
  "reqwest",
  "rustls",
@@ -4005,6 +4082,7 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",

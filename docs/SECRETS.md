@@ -4,7 +4,9 @@ How Surmount handles secrets without mashing deploy crypto, human password
 managers, and disk encryption into one vague bucket. Custody also spans
 **operator workstation** vs **host at activation** (three domains below).
 
-**Last updated:** 2026-08-27 (tls-key install mode is **0600** owner-only
+**Last updated:** 2026-09-02 (guest grok-oss machine xAI console API key
+is path-only under `/home/grok/.grok`; off git; not SuperGrok meters).
+Prior 2026-08-27 (tls-key install mode is **0600** owner-only
 `surmount-ui`; Stalwart uses copies under `secrets/mail/tls`. Operator bins
 are `nix run .#...`; hermetic crate tests in `checks.*.ci`. No leftover
 product `script/*.sh` drivers.)
@@ -203,6 +205,7 @@ See section on disk below and
 | Age admin identity | yes (**workstation only**) | **never on VPS as admin**; install bridge **refuses** `kind=age-admin` unless `--allow-age-admin-install` | encrypt / recovery |
 | DiskStation AFP LAN password | yes (`kind=synology-afp`, host `DS1513` or `DS3018xs`; one item per NAS; host id is the label, not the AFP IPv4). Intake also writes GNOME NetworkPassword (`protocol=afp`, `server` = host id and `<id>.local`, never an IPv4) so Nautilus / raw gio remember | **never on VPS**; install bridge **always refuses** this kind | laptop `just diskstation-afp-mount -- --host DS1513` (optional `--afp-host` IPv4 / `--uri` for reach only); gio AFP |
 | SSH operator key / authorized_keys | SSH agent + host-local | host-local overlay (not public `hosts/`) | sshd / deploy lockout check |
+| Machine xAI console API key (grok-oss on surmount-1) | laptop L0 staging under `$GROK_HOME/l0-remote-console-key/<host>/` (never git) | `/home/grok/.grok/console.env` (`XAI_API_KEY`, mode **0600**) plus `/home/grok/.grok/machine-console-auth.toml` (`preferred_method = "api_key"` only; no key bytes) | guest grok-oss TUI. **Console API credits**, not included SuperGrok period limits, not SuperGrok dollar credits. Guest has no git and no GitHub SSH. Signed commits stay on the laptop. L0 workflow is grok-oss `remote-1`. Dual-pin [OPS.md](OPS.md) |
 | LUKS unlock | separate | initrd (not Secret Service as sole unlock without explicit design) | disk |
 | Mail user passwords | domain C (human track/share) | Stalwart engine (hashes) | not deploy bridge v1 |
 | Edge hostnames / LE email | optional note only | **host-local public config** (not Domain B secret) | `managementUi.acme.domains` / email; render via host profile (section 1.0.2) |

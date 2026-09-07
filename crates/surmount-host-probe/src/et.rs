@@ -5,7 +5,9 @@
 
 use std::env;
 use std::io::{self, IsTerminal};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::ProbeError;
 
@@ -25,7 +27,11 @@ pub fn operator_ssh_identity(target: &str) -> Option<PathBuf> {
     }
     let home = env::var("HOME").ok()?;
     let id = PathBuf::from(home).join(".ssh/id_ed25519");
-    if id.is_file() { Some(id) } else { None }
+    if id.is_file() {
+        Some(id)
+    } else {
+        None
+    }
 }
 
 /// Build `et` argv. Does not spawn. Keepalives via et -k 5 (client max).
@@ -205,6 +211,79 @@ pub fn refuse_without_live_tty() -> Result<(), ProbeError> {
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EtPortStatus {
+    pub tcp22: bool,
+    pub tcp2022: bool,
+}
+
+pub fn host_from_target(target: &str) -> &str {
+    target
+        .rsplit_once('@')
+        .map(|(_, h)| h)
+        .unwrap_or(target)
+        .trim()
+}
+
+fn env_port_override(name: &str) -> Option<bool> {
+    match env::var(name).ok().as_deref().map(str::trim) {
+        Some("1") | Some("true") | Some("TRUE") | Some("up") | Some("answers") => Some(true),
+        Some("0") | Some("false") | Some("FALSE") | Some("down") => Some(false),
+        _ => None,
+    }
+}
+
+fn probe_tcp_host_port(host: &str, port: u16) -> bool {
+    let labeled = format!("{host}:{port}");
+    let Ok(addrs) = labeled.to_socket_addrs() else {
+        return false;
+    };
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, Duration::from_secs(3)).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn tcp_port_answers(host: &str, port: u16) -> bool {
+    let env_name = match port {
+        22 => "SURMOUNT_ET_STATUS_TCP22",
+        2022 => "SURMOUNT_ET_STATUS_TCP2022",
+        _ => "",
+    };
+    if !env_name.is_empty() {
+        if let Some(v) = env_port_override(env_name) {
+            return v;
+        }
+    }
+    probe_tcp_host_port(host, port)
+}
+
+pub fn collect_et_status(target: &str) -> EtPortStatus {
+    let host = host_from_target(target);
+    EtPortStatus {
+        tcp22: tcp_port_answers(host, 22),
+        tcp2022: tcp_port_answers(host, 2022),
+    }
+}
+
+/// Status lines for TCP 22 and 2022. Never includes a host address.
+pub fn format_et_status(st: EtPortStatus) -> String {
+    fn line(port: u16, up: bool) -> String {
+        if up {
+            format!("et-status: TCP {port} answers")
+        } else {
+            format!("et-status: TCP {port} does not answer")
+        }
+    }
+    let mut out = format!("{}\n{}", line(22, st.tcp22), line(2022, st.tcp2022));
+    if !st.tcp2022 {
+        out.push_str("\net-status: use SSH/tmux (just grok-oss)");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +369,35 @@ mod tests {
             ..Default::default()
         };
         assert!(already_on_mail_guest_from(&h));
+    }
+
+    #[test]
+    fn status_omits_address_when_2022_down() {
+        let text = format_et_status(EtPortStatus {
+            tcp22: true,
+            tcp2022: false,
+        });
+        assert!(text.contains("TCP 22 answers"), "{text}");
+        assert!(text.contains("TCP 2022 does not answer"), "{text}");
+        assert!(text.contains("just grok-oss"), "{text}");
+        assert!(!text.contains("192.0.2.10"), "{text}");
+        assert!(!text.contains('@'), "{text}");
+    }
+
+    #[test]
+    fn status_both_up_does_not_push_grok_oss() {
+        let text = format_et_status(EtPortStatus {
+            tcp22: true,
+            tcp2022: true,
+        });
+        assert!(text.contains("TCP 22 answers"), "{text}");
+        assert!(text.contains("TCP 2022 answers"), "{text}");
+        assert!(!text.contains("just grok-oss"), "{text}");
+    }
+
+    #[test]
+    fn host_from_target_strips_user() {
+        assert_eq!(host_from_target("root@example.test"), "example.test");
+        assert_eq!(host_from_target("surmount-1"), "surmount-1");
     }
 }

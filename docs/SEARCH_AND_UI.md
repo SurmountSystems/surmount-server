@@ -6,7 +6,8 @@ Operator direction: [operator-direction.md](operator-direction.md).
 Stack map: [STACK.md](STACK.md). Glossary: [glossary.md](glossary.md)
 (Internal FTS).
 
-**Last updated:** 2026-08-25 (living mailbox map stays in
+**Last updated:** 2026-09-03 (HTTP/3 NIP-07 session POST must not 500 for
+missing Axum `ConnectInfo`; NWC is not that login). Prior 2026-08-25 (living mailbox map stays in
 `~/.agents/surmount-server/operator-facts.md`, not this public file.)
 Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (living mailbox map:
 `~/.agents/surmount-server/operator-facts.md`. Do not assume Thunderbird.
@@ -180,6 +181,9 @@ reach Stalwart HTTP.
 - **Routes:** `GET /api/v1/auth/challenge`, `POST /api/v1/auth/session`,
   `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`, `GET /login` (optional
   vanilla NIP-07 script; no NPM). Public always: `/health`, auth endpoints.
+  **HTTP/3 (2026-09-03):** browsers that take Alt-Svc `h3` POST session
+  without Axum `ConnectInfo`. That must be JSON 401/200, not 500 missing
+  extension. NWC is a separate `/mail` wallet store; it is not this login.
 - **Local enable mini-runbook:** export `SURMOUNT_AUTH_MODE=nostr`,
   `SURMOUNT_NOSTR_ALLOWLIST=npub1...` (or hex), and
   `SURMOUNT_SESSION_SECRET=$(openssl rand -hex 32)`, then `just dev`. Open
@@ -246,7 +250,8 @@ full Q-AUTH-1 still residual).
   authenticate; that is a wait, not by itself a bad password.
   **NWC (2026-08-20):** optional Nostr Wallet Connect (NIP-47) save/clear
   at `POST /api/v1/accounts/nwc`. Login stays NIP-07 / NIP-98. NWC is a
-  wallet, not login and not IMAP. Store is Domain B
+  wallet, not login and not IMAP. A NIP-07 **Login failed: 500** on
+  `/login` is session exchange, not the NWC store. Store is Domain B
   `/var/lib/surmount/secrets/ui/nwc.json` (`SURMOUNT_NWC_STORE`; Nix
   `nwcStoreFile`). Valid `nostr+walletconnect://` only; nsec and garbage
   refused without echo. Responses never echo the URI. No Lightning node

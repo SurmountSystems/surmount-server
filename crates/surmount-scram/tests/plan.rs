@@ -44,10 +44,35 @@ fn protected_names_are_not_hogs() {
     let ui = proc(3, 0, 99_000_000, "surmount-management-ui");
     let et = proc(4, 0, 99_000_000, "etserver");
     let selfp = proc(5, 0, 99_000_000, "surmount-scram");
-    for p in [&mail, &ssh, &ui, &et, &selfp] {
+    let grok = proc(6, 1002, 99_000_000, "grok-oss");
+    let tmux = proc(7, 1002, 99_000_000, "tmux");
+    let tmux_server = proc(8, 1002, 99_000_000, "tmux: server");
+    for p in [&mail, &ssh, &ui, &et, &selfp, &grok, &tmux, &tmux_server] {
         assert!(is_protected(p), "{}", p.comm);
         assert!(!is_hog(p, &cfg), "{}", p.comm);
     }
+}
+
+#[test]
+fn grok_oss_and_tmux_never_in_kill_list() {
+    let cfg = Cfg {
+        avail_floor_kib: AVAIL_FLOOR_KIB,
+        nixbuilder_uid: Some(1002),
+    };
+    let snap = surmount_scram::Snapshot {
+        mem_available_kib: AVAIL_FLOOR_KIB - 1,
+        procs: vec![
+            proc(21, 1002, 80_000_000, "grok-oss"),
+            proc(22, 1002, 70_000_000, "tmux"),
+            proc(23, 1002, 60_000_000, "tmux: server"),
+            proc(24, 1002, 10_000, "rustc"),
+        ],
+    };
+    let plan = plan_scram(&snap, &cfg);
+    assert_eq!(plan.pids, vec![24]);
+    assert!(!plan.pids.contains(&21));
+    assert!(!plan.pids.contains(&22));
+    assert!(!plan.pids.contains(&23));
 }
 
 #[test]

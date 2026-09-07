@@ -11,6 +11,8 @@ use serde::Serialize;
 use crate::acme::AcmeConfig;
 use crate::mta_sts::MtaStsMode;
 use crate::proxy_vaultwarden::VaultwardenProxyConfig;
+use crate::proxy_vaultwarden::splora::SploraProxyConfig;
+use crate::tls::http3::Http3Config;
 use crate::tls::{ListenMode, TlsPaths};
 use surmount_management_ui::auth::{AuthConfig, AuthMode, resolve_allowlist};
 use surmount_management_ui::ban::{BanConfig, ban_config_from_env};
@@ -84,6 +86,10 @@ pub struct AppConfig {
     pub vaultwarden_url: Option<String>,
     /// Optional Axum path reverse-proxy to loopback Vaultwarden (default off).
     pub vaultwarden_proxy: VaultwardenProxyConfig,
+    /// Optional Host -> Unix-socket reverse-proxy for splora indexers (default off).
+    pub splora_proxy: SploraProxyConfig,
+    /// HTTP/3 QUIC listener (default on when listen mode is https).
+    pub http3: Http3Config,
     /// Host directory for the public apex/www static site. None = coming soon.
     /// Env `SURMOUNT_APEX_PUBLIC_ROOT` (empty/unset = None). Served only when
     /// that directory contains `index.html`.
@@ -505,6 +511,9 @@ impl AppConfig {
         let vaultwarden_url = resolve_vaultwarden_url_from_env();
         // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
         let vaultwarden_proxy = VaultwardenProxyConfig::from_env()?;
+        let splora_proxy = SploraProxyConfig::from_env()?;
+        let http3 = Http3Config::from_env_map(|k| env::var(k).ok(), listen_mode.is_https())?;
+        let redirect_allowed_hosts = union_splora_hosts(redirect_allowed_hosts, &splora_proxy);
 
         // Public apex/www document root. Empty/unset = coming-soon fallback.
         let apex_public_root = match env::var("SURMOUNT_APEX_PUBLIC_ROOT") {
@@ -553,6 +562,8 @@ impl AppConfig {
             onion_discovery,
             vaultwarden_url,
             vaultwarden_proxy,
+            splora_proxy,
+            http3,
             apex_public_root,
             static_vhosts,
             rate_limit_max_requests,
@@ -767,6 +778,24 @@ pub fn normalize_static_vhost_hostname(raw: &str) -> Result<String, String> {
 
 /// Ensure configured extra Hosts can :80-upgrade even when the operator set
 /// `SURMOUNT_REDIRECT_ALLOWED_HOSTS` without listing them.
+/// Ensure splora public Hosts can :80-upgrade when the proxy is on.
+pub fn union_splora_hosts(mut allowed: Vec<String>, splora: &SploraProxyConfig) -> Vec<String> {
+    if !splora.enable {
+        return allowed;
+    }
+    for inst in &splora.instances {
+        for host in &inst.hosts {
+            if !allowed
+                .iter()
+                .any(|a| crate::redirect::host_is_allowlisted(host, std::slice::from_ref(a)))
+            {
+                allowed.push(host.to_string());
+            }
+        }
+    }
+    allowed
+}
+
 pub fn union_static_vhost_hosts(
     mut allowed: Vec<String>,
     vhosts: &BTreeMap<String, PathBuf>,
@@ -913,6 +942,14 @@ mod tests {
             "SURMOUNT_ONION_LOCATION_DISABLED_HOSTS",
             "SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS",
             "SURMOUNT_VAULTWARDEN_URL",
+            "SURMOUNT_VAULTWARDEN_PROXY",
+            "SURMOUNT_SPLORA_PROXY",
+            "SURMOUNT_SPLORA_INSTANCES",
+            "SURMOUNT_SPLORA_SOCKET_DIR",
+            "SURMOUNT_SPLORA_QUEUE_SOCKET",
+            "SURMOUNT_SPLORA_QUEUE_PATH",
+            "SURMOUNT_SPLORA_ELECTRUM_SOCKET",
+            "SURMOUNT_HTTP3",
             "SURMOUNT_RATE_LIMIT_MAX",
             "SURMOUNT_RATE_LIMIT_WINDOW_SECS",
             "SURMOUNT_RATE_LIMIT_MAX_KEYS",
@@ -942,6 +979,15 @@ mod tests {
             // SAFETY: EnvGuard mutex serializes process env mutation in this module's tests.
             unsafe { std::env::remove_var(k) }
         }
+    }
+
+    #[test]
+    fn splora_proxy_and_http3_default_off_on_plain_http() {
+        let _g = EnvGuard::acquire();
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(!cfg.splora_proxy.enable);
+        assert!(!cfg.http3.enable);
+        assert!(!cfg.http3.listener_bound());
     }
 
     #[test]

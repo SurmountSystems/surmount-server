@@ -26,6 +26,10 @@ _j *args:
 et *args:
     just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" et {{args}}
 
+# grok-oss on the mail host: SSH + tmux (not Eternal Terminal).
+grok-oss *args:
+    just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" grok-oss {{args}}
+
 # Guest process view via Eternal Terminal (reconnectable; not freeze-paint SSH).
 btop *args:
     just --justfile "{{repo}}/justfile" --working-directory "{{repo}}" btop {{args}}

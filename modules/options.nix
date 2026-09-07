@@ -676,6 +676,21 @@ in
         '';
       };
 
+      # HTTP/3 (QUIC) on the same bind as TCP HTTPS. Default on when
+      # listenMode is https. SURMOUNT_HTTP3=0 turns it off.
+      http3Enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          When listenMode is https, bind UDP QUIC on the same address:port as
+          TCP HTTPS (product :443) and serve the same Axum router over HTTP/3
+          (ALPN h3 only; TCP ALPN stays h2 + http/1.1). Same host PEMs.
+          SURMOUNT_HTTP3. Default true; binary still defaults HTTP/3 on only
+          for https listen. Set false to skip the QUIC listener and omit
+          clearnet h3 Alt-Svc. Onion h2 Alt-Svc is separate.
+        '';
+      };
+
       # Nostr auth scaffold (default off). Q-AUTH-1 residual: key-loss, durable
       # session store, first-operator bootstrap product UX. Session secret is a
       # host deploy secret (never in git). Empty allowlist + mode=nostr = fail-closed.
@@ -1441,6 +1456,72 @@ in
       };
     };
 
+    # Optional Grok OSS TUI on the mail host. Default off. Enable from
+    # host-local. User grok, home for ~/.grok, MemoryMax on the user
+    # slice. Binary on PATH. Do not auto-start the TUI on boot.
+    grokOss = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Install user grok, put grok-oss and tmux on PATH, and cap that
+          user's systemd slice with MemoryMax. Default false. Enable
+          only from private host-local. Does not start the TUI on boot.
+          Does not set Nice=19 (sshd class, not a niced builder). tmux
+          is installed here so attach does not depend only on Eternal
+          Terminal.
+        '';
+      };
+
+      package = mkOption {
+        type = types.nullOr types.package;
+        default = null;
+        description = ''
+          Grok OSS package whose bin/grok-oss is on PATH. Required when
+          enable is true. null while default-off so eval does not pull
+          the grok-oss flake package. Fail-closed without this package.
+        '';
+      };
+
+      user = mkOption {
+        type = types.str;
+        default = "grok";
+        description = "Unprivileged grok-oss owner. Home holds ~/.grok. Not root.";
+      };
+
+      uid = mkOption {
+        type = types.int;
+        default = 1988;
+        description = ''
+          Stable uid (>= 1000, normal user) so user-<uid>.slice can carry
+          MemoryMax. Not a published host SKU. Override from host-local if
+          this uid is already taken. Distinct from remoteBuilder.uid.
+        '';
+      };
+
+      home = mkOption {
+        type = types.str;
+        default = "/home/grok";
+        description = ''
+          Home directory for user grok. Product config lives at
+          $home/.grok. Must be absolute.
+        '';
+      };
+
+      memoryMax = mkOption {
+        type = types.str;
+        default = "4G";
+        example = "1500M";
+        description = ''
+          systemd MemoryMax for the grok user slice (tmux / grok-oss
+          login). Scaffold 4G is a grok-oss budget, not a published
+          guest RAM size. Host-local sets the real budget without
+          committing that number to the public tree. Required when
+          enable is true.
+        '';
+      };
+    };
+
     # Merciless ban / whitelist first product path (Rust edge + optional nft sets).
     # Defaults lean private: off. Q-ACL-1..6 remain open (see docs/open-choices.md).
     accessControl = {
@@ -1688,6 +1769,204 @@ in
           merge; ROCKET_ADDRESS / ROCKET_PORT are forced from rocketAddress /
           rocketPort after this merge (extraConfig cannot rebind listen).
         '';
+      };
+    };
+
+    # Splora (Esplora-compatible indexer) Unix-socket reverse proxy on the
+    # Axum edge. Default off. Host-local instance map. Not nginx.
+    sploraProxy = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          When true, management-ui reverse-proxies configured public Hosts to
+          Unix sockets /run/splora/<instance>.http.sock (HTTP/1.1). NIP-98
+          stays in splora. No edge API keys. SURMOUNT_SPLORA_PROXY=1.
+          Sample host stays off. Do not enable modules/web.nix for this.
+        '';
+      };
+
+      socketDir = mkOption {
+        type = types.str;
+        default = "/run/splora";
+        description = ''
+          Directory for indexer HTTP sockets (SURMOUNT_SPLORA_SOCKET_DIR).
+          Default /run/splora. Instance sockets default to
+          <socketDir>/<instance>.http.sock. Not the Electrum newline socket.
+        '';
+      };
+
+      queueSocket = mkOption {
+        type = types.str;
+        default = "/run/splora/queue.sock";
+        description = ''
+          Queue unit Unix socket (SURMOUNT_SPLORA_QUEUE_SOCKET). POST
+          {npub,email} only, on queuePath. Not an indexer unit.
+        '';
+      };
+
+      queuePath = mkOption {
+        type = types.str;
+        default = "/splora/queue";
+        description = ''
+          Public path for the queue POST (SURMOUNT_SPLORA_QUEUE_PATH).
+          Default /splora/queue.
+        '';
+      };
+
+      instances = mkOption {
+        type = types.attrsOf (
+          types.submodule {
+            options = {
+              hosts = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+                example = [ "esplora.surmount.systems" ];
+                description = "Public Host names for this instance (lowercased at runtime).";
+              };
+              socket = mkOption {
+                type = types.str;
+                default = "";
+                description = ''
+                  Absolute HTTP Unix socket. Empty = socketDir + /<name>.http.sock.
+                  Must not be an Electrum newline socket.
+                '';
+              };
+            };
+          }
+        );
+        default = { };
+        example = {
+          mainnet = {
+            hosts = [ "esplora.surmount.systems" ];
+            socket = "/run/splora/mainnet.http.sock";
+          };
+          testnet3.hosts = [ "testnet3.esplora.surmount.systems" ];
+          testnet4.hosts = [ "testnet4.esplora.surmount.systems" ];
+          mutinynet.hosts = [ "mutinynet.esplora.surmount.systems" ];
+          liquid.hosts = [ "liquid.esplora.surmount.systems" ];
+        };
+        description = ''
+          Instance name -> Host list and HTTP Unix socket. Allowed names:
+          mainnet, testnet3, testnet4, mutinynet, liquid. Host-local.
+          Emitted as SURMOUNT_SPLORA_INSTANCES JSON when enable.
+        '';
+      };
+
+      # The imported services.splora module does not set MemoryMax. Host-local
+      # may cap indexer/queue units from this tree without editing splora.
+      unitsMemoryMax = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "2G";
+        description = ''
+          When services.splora.enable, set systemd MemoryMax on splora
+          indexer, queue, and popular-scripts units. Null leaves the
+          imported module as-is. Host-local. Not a published guest RAM size.
+        '';
+      };
+    };
+
+    # One Splora indexer against remote Bitcoin JSON-RPC. Host-local single
+    # knob over imported services.splora. Sample host stays off.
+    sploraIndexer = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          When true, turn on imported services.splora with one indexer
+          instance. Host-local JSON-RPC address plus cookie file path.
+          A local bitcoind datadir is not required. Cookie bytes never
+          belong here. Public sample stays false. Do not start five
+          indexers. Queue-only enable is not REST.
+        '';
+      };
+
+      instanceName = mkOption {
+        type = types.str;
+        default = "mainnet";
+        description = ''
+          services.splora.instances key for the one indexer process.
+          Allowed: mainnet, testnet3, testnet4, mutinynet, liquid.
+        '';
+      };
+
+      network = mkOption {
+        type = types.enum [
+          "mainnet"
+          "testnet3"
+          "testnet4"
+          "mutinynet"
+          "liquid"
+        ];
+        default = "mainnet";
+        description = "Chain that instance indexes. Mutinynet is signet with mutinynet magic.";
+      };
+
+      jsonrpcImport = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Pass --jsonrpc-import so the indexer uses JSON-RPC instead of
+          local blk*.dat. Default true for this wrap (remote or
+          already-running bitcoind).
+        '';
+      };
+
+      daemonRpcAddr = mkOption {
+        type = types.str;
+        default = "";
+        example = "127.0.0.1:8332";
+        description = ''
+          Bitcoin Core JSON-RPC host:port passed as --daemon-rpc-addr.
+          Required when enable. Host-local. Not a published guest address.
+        '';
+      };
+
+      cookieFile = mkOption {
+        type = types.str;
+        default = "";
+        example = "/run/surmount-secrets/splora/rpc.cookie";
+        description = ''
+          Host path to the bitcoind cookie file (--cookie-file). Path
+          only. Never cookie bytes. Required when enable. Strict absolute
+          path charset (same as other host secrets).
+        '';
+      };
+
+      daemonDir = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = ''
+          Optional local bitcoind or elementsd datadir (--daemon-dir).
+          Null means remote JSON-RPC: do not require /var/lib/bitcoind,
+          and systemd ReadOnlyPaths must not list that missing path.
+        '';
+      };
+
+      dbBlockCacheMb = mkOption {
+        type = types.ints.positive;
+        default = 24;
+        description = ''
+          RocksDB block cache MiB for the instance this wrap creates
+          (--db-block-cache-mb). Matches the imported module and CLI
+          default of 24.
+        '';
+      };
+
+      publicHealth = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Pass --public-health so GET /blocks/tip/height can skip
+          NIP-98. Empty allowlist still 401s address/tx/mempool.
+        '';
+      };
+
+      extraArgs = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = "Extra indexer argv after --jsonrpc-import and --public-health.";
       };
     };
 

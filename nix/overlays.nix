@@ -3,7 +3,7 @@
 # ops bins: private-data / host-logs / shc / niced-builder / leftover-homes /
 # host-probe / static-sites / diskstation / deploy-host / dns-zone /
 # domain-audit / host-cutover / acme-namecheap / stalwart-ops / mail-import /
-# secrets-install).
+# secrets-install, grok-oss, splora / splora-liquid from flake input packages).
 # Keep this file for any extra pins that should not live in the flake body.
 #
 # artiOnionService lives in flake surmountOverlay (distinct from stock

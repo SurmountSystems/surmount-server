@@ -587,6 +587,22 @@ pub fn rewrite_uri_path_keep_query(uri: &Uri, new_path: &str) -> Option<Uri> {
     Uri::from_parts(origin).ok()
 }
 
+/// Append an Alt-Svc token (comma-separated) so clearnet h3 and onion h2 coexist.
+pub(crate) fn merge_alt_svc_token(headers: &mut HeaderMap, extra: &str) -> bool {
+    if extra.is_empty() || extra.contains('\n') || extra.contains('\r') {
+        return false;
+    }
+    let merged = match headers.get(&ALT_SVC).and_then(|v| v.to_str().ok()) {
+        Some(existing) if !existing.trim().is_empty() => format!("{existing}, {extra}"),
+        _ => extra.to_string(),
+    };
+    let Ok(hv) = HeaderValue::from_str(&merged) else {
+        return false;
+    };
+    headers.insert(ALT_SVC.clone(), hv);
+    true
+}
+
 pub fn alt_svc_value(mapping: &OnionMapping) -> Option<String> {
     if mapping.protocols.is_empty() {
         return None;
@@ -660,12 +676,10 @@ pub fn apply_onion_discovery_headers(
         headers.insert(ONION_LOCATION.clone(), hv);
         injected = true;
     }
-    if emit_alt
-        && let Some(val) = alt_svc_value(mapping)
-        && let Ok(hv) = HeaderValue::from_str(&val)
-    {
-        headers.insert(ALT_SVC.clone(), hv);
-        injected = true;
+    if emit_alt && let Some(val) = alt_svc_value(mapping) {
+        if merge_alt_svc_token(headers, &val) {
+            injected = true;
+        }
     }
     if injected {
         let (clearnet, onion) = onion_discovery_trace_fields(host, &mapping.onion_host);

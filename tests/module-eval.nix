@@ -11,6 +11,9 @@
   pkgs,
   lib,
   sops-nix,
+  # Imported splora NixOS module (flake input). Needed so extraGroups and
+  # unitsMemoryMax contracts can turn services.splora.enable without IFD.
+  sploraNixosModule ? null,
 }:
 let
   # Cheap stand-ins so eval does not pull Stalwart binary FOD or real arti.
@@ -68,7 +71,24 @@ let
       # passthru attrs are also visible at top-level on real derivations.
       surmountOnionServiceCapable = true;
     };
+    # services.splora.package default is pkgs.splora. Keep this a cheap fake
+    # so extraGroups eval never instantiates crane / rocksdb.
+    splora = fakeSplora;
+    splora-liquid = fakeSplora;
   };
+
+  fakeSplora =
+    pkgs.runCommand "splora-fake" { } ''
+      mkdir -p "$out/bin"
+      for b in splora splora-queue splora-import popular-scripts; do
+        printf '%s\n' "#!${pkgs.runtimeShell}" "exit 0" > "$out/bin/$b"
+        chmod +x "$out/bin/$b"
+      done
+    ''
+    // {
+      pname = "splora";
+      meta.mainProgram = "splora";
+    };
 
   # extra is surmount attrs. Optional __extraModules: list of extra NixOS modules
   # (for host-level services.* mkForce, etc.) stripped before surmount merge.
@@ -83,6 +103,9 @@ let
       modules = [
         sops-nix.nixosModules.sops
         ../modules
+      ]
+      ++ lib.optional (sploraNixosModule != null) sploraNixosModule
+      ++ [
         (
           { ... }:
           {
@@ -152,11 +175,28 @@ let
     assert e.config.surmount.remoteBuilder.diskGuardPercent == 95;
     assert e.config.surmount.lake.enable == false;
     assert e.config.surmount.lake.jobs == 4;
+    # Grok OSS is opt-in (host-local). Scaffold off; no grok user.
+    assert e.config.surmount.grokOss.enable == false;
+    assert e.config.surmount.grokOss.package == null;
+    assert e.config.surmount.grokOss.user == "grok";
+    assert e.config.surmount.grokOss.memoryMax == "4G";
     assert e.config.surmount.logging.rateLimitBurst == "50000";
     # Domain C Vaultwarden stays off on sample defaults (no production footgun).
     assert e.config.surmount.vaultwarden.enable == false;
     assert e.config.services.vaultwarden.enable or false == false;
     assert e.config.surmount.managementUi.vaultwardenUrl == "";
+    # Splora Unix proxy default off. HTTP/3 option default on; UDP 443 only
+    # when listenMode is https (plain HTTP default must not open it).
+    assert e.config.surmount.sploraProxy.enable == false;
+    assert e.config.surmount.sploraProxy.unitsMemoryMax == null;
+    assert e.config.surmount.sploraIndexer.enable == false;
+    assert e.config.surmount.sploraIndexer.dbBlockCacheMb == 24;
+    assert e.config.surmount.sploraIndexer.jsonrpcImport == true;
+    assert e.config.surmount.sploraIndexer.daemonDir == null;
+    assert e.config.surmount.sploraIndexer.publicHealth == false;
+    assert e.config.surmount.managementUi.http3Enable == true;
+    assert (e.config.services.splora.enable or false) == false;
+    assert !(builtins.elem 443 (e.config.networking.firewall.allowedUDPPorts or [ ]));
     assert failedAssertions e == [ ];
     "t1-defaults-ok";
 
@@ -955,6 +995,8 @@ let
     # Restart caps always present (fail-closed binary must not thrash forever).
     assert uc.StartLimitBurst == 5;
     assert uc.StartLimitIntervalSec == 300;
+    assert builtins.elem 443 (e.config.networking.firewall.allowedUDPPorts or [ ]);
+    assert !(builtins.any (x: lib.hasPrefix "SURMOUNT_HTTP3=0" x) env);
     "t8-https-bare-with-pems-ok";
 
   # https without PEM path strings must fail eval (no silent empty-path https).
@@ -2151,6 +2193,9 @@ let
     assert entry != null;
     assert lib.hasInfix "nixbuilder_uid" text;
     assert lib.hasInfix "pane is dead" text;
+    assert lib.hasInfix "runuser -u grok" text;
+    assert lib.hasInfix "tmux attach -t grok-oss" text;
+    assert lib.hasInfix "grok-oss running --json" text;
     assert builtins.any (r: lib.hasInfix "/root/justfile" r) rules;
     assert builtins.any (n: lib.hasPrefix "just" n) pkgsList;
     "t42-guest-root-justfile-ok";
@@ -2646,6 +2691,321 @@ let
     assert serviceNice e "sshd" == null;
     "t44b-lake-enable-memory-cap-ok";
 
+  t45-grok-oss-default-off =
+    let
+      e = evalSurmount { };
+      pkgsList = e.config.environment.systemPackages;
+      isGrokOss =
+        p:
+        (p.pname or "") == "grok-oss"
+        || (p.name or "") == "grok-oss"
+        || lib.hasPrefix "grok-oss-" (p.name or "")
+        || lib.hasSuffix "-grok-oss" (p.name or "");
+      isTmux =
+        p: (p.pname or "") == "tmux" || (p.name or "") == "tmux" || lib.hasPrefix "tmux-" (p.name or "");
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.grokOss.enable == false;
+    assert e.config.surmount.grokOss.package == null;
+    assert !(e.config.users.users ? grok);
+    assert !(e.config.systemd.slices ? "user-1988");
+    assert !(e.config.systemd.services ? surmount-grok-oss);
+    assert !(builtins.any isGrokOss pkgsList);
+    assert !(builtins.any isTmux pkgsList);
+    "t45-grok-oss-default-off-ok";
+
+  t45b-grok-oss-enable-user-and-memory-cap =
+    let
+      e = evalSurmount {
+        grokOss.enable = true;
+        grokOss.package = pkgs.writeShellScriptBin "grok-oss" "exit 0";
+      };
+      userSlice = e.config.systemd.slices."user-1988".sliceConfig or { };
+      grok = e.config.users.users.grok or { };
+      pkgsList = e.config.environment.systemPackages;
+      isGrokOss =
+        p:
+        (p.pname or "") == "grok-oss"
+        || (p.name or "") == "grok-oss"
+        || lib.hasPrefix "grok-oss-" (p.name or "")
+        || lib.hasSuffix "-grok-oss" (p.name or "");
+      isTmux =
+        p: (p.pname or "") == "tmux" || (p.name or "") == "tmux" || lib.hasPrefix "tmux-" (p.name or "");
+      tmp = e.config.systemd.tmpfiles.rules or [ ];
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.users.users ? grok;
+    assert grok.isNormalUser == true;
+    assert grok.uid == 1988;
+    assert grok.home == "/home/grok";
+    assert grok.linger == false;
+    assert userSlice.MemoryMax or null == "4G";
+    assert !(userSlice ? Nice);
+    assert !(e.config.systemd.services ? surmount-grok-oss);
+    assert builtins.any isGrokOss pkgsList;
+    assert builtins.any isTmux pkgsList;
+    assert builtins.any (r: lib.hasInfix "/home/grok/.grok" r) tmp;
+    assert serviceNice e "stalwart-mail" == null;
+    assert serviceNice e "sshd" == null;
+    "t45b-grok-oss-enable-user-and-memory-cap-ok";
+
+  t45c-grok-oss-enable-requires-package =
+    let
+      failed = failedAssertions (evalSurmount {
+        grokOss.enable = true;
+      });
+    in
+    assert builtins.any (a: lib.hasInfix "grokOss.package" a.message) failed;
+    "t45c-grok-oss-enable-requires-package-ok";
+
+  t50-splora-proxy-default-off =
+    let
+      e = evalSurmount { managementUi.enable = true; };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraProxy.enable == false;
+    assert !(builtins.any (x: lib.hasPrefix "SURMOUNT_SPLORA_PROXY=1" x) envList);
+    "t50-splora-proxy-default-off-ok";
+
+  t51-splora-proxy-enable-env-and-udp-https =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        managementUi.listenMode = "https";
+        managementUi.tlsCertPath = "/run/surmount-secrets/tls/cert.pem";
+        managementUi.tlsKeyPath = "/run/surmount-secrets/tls/key.pem";
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          mainnet = {
+            hosts = [ "esplora.example.test" ];
+            socket = "/run/splora/mainnet.http.sock";
+          };
+        };
+      };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = builtins.unsafeDiscardStringContext (lib.concatStringsSep "\n" envList);
+    in
+    assert failedAssertions e == [ ];
+    assert builtins.any (x: x == "SURMOUNT_SPLORA_PROXY=1") envList;
+    assert lib.hasInfix "SURMOUNT_SPLORA_INSTANCES=" envBlob;
+    assert lib.hasInfix ''"mainnet"'' envBlob;
+    assert lib.hasInfix ''"hosts"'' envBlob;
+    assert lib.hasInfix ''"socket"'' envBlob;
+    assert builtins.elem 443 (e.config.networking.firewall.allowedUDPPorts or [ ]);
+    assert e.config.surmount.managementUi.http3Enable == true;
+    assert !(builtins.any (x: lib.hasPrefix "SURMOUNT_HTTP3=0" x) envList);
+    assert !(builtins.elem "splora" (e.config.users.users.surmount-ui.extraGroups or [ ]));
+    "t51-splora-proxy-enable-env-and-udp-https-ok";
+
+  t52-splora-electrum-socket-asserts =
+    let
+      failed = failedAssertions (evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          mainnet = {
+            hosts = [ "esplora.example.test" ];
+            socket = "/run/splora/mainnet.electrum.sock";
+          };
+        };
+      });
+    in
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "Electrum" a.message) failed;
+    "t52-splora-electrum-socket-asserts-ok";
+
+  # Queue-only services.splora (empty instances: do not start five indexers).
+  sploraQueueOnlyExtra = {
+    services.splora.enable = true;
+    services.splora.instances = { };
+  };
+
+  t53-splora-ui-extra-groups-when-both-on =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          mainnet = {
+            hosts = [ "esplora.example.test" ];
+            socket = "/run/splora/mainnet.http.sock";
+          };
+        };
+        __extraModules = [ sploraQueueOnlyExtra ];
+      };
+      extra = e.config.users.users.surmount-ui.extraGroups or [ ];
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.services.splora.enable == true;
+    assert builtins.elem "splora" extra;
+    assert e.config.surmount.managementUi.http3Enable == true;
+    "t53-splora-ui-extra-groups-when-both-on-ok";
+
+  t54-splora-ui-no-extra-group-when-service-off =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          mainnet = {
+            hosts = [ "esplora.example.test" ];
+            socket = "/run/splora/mainnet.http.sock";
+          };
+        };
+      };
+    in
+    assert failedAssertions e == [ ];
+    assert (e.config.services.splora.enable or false) == false;
+    assert !(builtins.elem "splora" (e.config.users.users.surmount-ui.extraGroups or [ ]));
+    "t54-splora-ui-no-extra-group-when-service-off-ok";
+
+  t55-splora-units-memory-max-when-set =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.enable = true;
+        sploraProxy.unitsMemoryMax = "2G";
+        sploraProxy.instances = {
+          mainnet = {
+            hosts = [ "esplora.example.test" ];
+            socket = "/run/splora/mainnet.http.sock";
+          };
+        };
+        __extraModules = [ sploraQueueOnlyExtra ];
+      };
+      q = e.config.systemd.services.splora-queue.serviceConfig;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraProxy.unitsMemoryMax == "2G";
+    assert q.MemoryMax or null == "2G";
+    "t55-splora-units-memory-max-when-set-ok";
+
+  t56-splora-units-memory-max-default-off =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          mainnet = {
+            hosts = [ "esplora.example.test" ];
+            socket = "/run/splora/mainnet.http.sock";
+          };
+        };
+        __extraModules = [ sploraQueueOnlyExtra ];
+      };
+      q = e.config.systemd.services.splora-queue.serviceConfig or { };
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraProxy.unitsMemoryMax == null;
+    assert !(q ? MemoryMax) || q.MemoryMax == null;
+    "t56-splora-units-memory-max-default-off-ok";
+
+  # Remote JSON-RPC wrap: one instance, cookie path, no local datadir.
+  # Cookie bytes never appear. Imported instance daemonDir = null omits
+  # --daemon-dir and does not list /var/lib/bitcoind on ReadOnlyPaths.
+  sploraRemoteRpc = {
+    enable = true;
+    instanceName = "mainnet";
+    network = "mainnet";
+    jsonrpcImport = true;
+    daemonRpcAddr = "127.0.0.1:8332";
+    cookieFile = "/run/surmount-secrets/splora/rpc.cookie";
+  };
+
+  sploraReadOnlyBlob =
+    rop:
+    builtins.unsafeDiscardStringContext (
+      if rop == null then
+        ""
+      else if builtins.isList rop then
+        lib.concatStringsSep " " (map toString rop)
+      else
+        toString rop
+    );
+
+  t57-splora-remote-jsonrpc-no-local-datadir =
+    let
+      e = evalSurmount { sploraIndexer = sploraRemoteRpc; };
+      svc = e.config.systemd.services.splora-mainnet or { };
+      exec = builtins.unsafeDiscardStringContext (svc.serviceConfig.ExecStart or "");
+      rop = sploraReadOnlyBlob (svc.serviceConfig.ReadOnlyPaths or null);
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraIndexer.enable == true;
+    assert e.config.services.splora.enable == true;
+    assert (e.config.services.splora.instances.mainnet.enable or false) == true;
+    assert e.config.systemd.services ? splora-mainnet;
+    assert lib.hasInfix "--jsonrpc-import" exec;
+    assert lib.hasInfix "--daemon-rpc-addr" exec;
+    assert lib.hasInfix "127.0.0.1:8332" exec;
+    assert lib.hasInfix "--cookie-file" exec;
+    assert lib.hasInfix "/run/surmount-secrets/splora/rpc.cookie" exec;
+    assert lib.hasInfix "--db-block-cache-mb" exec;
+    assert lib.hasInfix "24" exec;
+    assert !(lib.hasInfix "--daemon-dir" exec);
+    assert !(lib.hasInfix "/var/lib/bitcoind" exec);
+    assert !(lib.hasInfix "/var/lib/bitcoind" rop);
+    assert (e.config.services.splora.instances.mainnet.daemonDir or "unset") == null;
+    assert e.config.services.splora.instances.mainnet.jsonrpcImport == true;
+    assert !(lib.hasInfix ":" e.config.surmount.sploraIndexer.cookieFile);
+    "t57-splora-remote-jsonrpc-no-local-datadir-ok";
+
+  t58-splora-remote-public-health-extra-arg =
+    let
+      e = evalSurmount {
+        sploraIndexer = sploraRemoteRpc // {
+          publicHealth = true;
+        };
+      };
+      exec = builtins.unsafeDiscardStringContext (
+        e.config.systemd.services.splora-mainnet.serviceConfig.ExecStart or ""
+      );
+    in
+    assert failedAssertions e == [ ];
+    assert lib.hasInfix "--public-health" exec;
+    assert lib.hasInfix "--jsonrpc-import" exec;
+    "t58-splora-remote-public-health-extra-arg-ok";
+
+  t59-splora-remote-ui-extra-groups-when-proxy-on =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          mainnet = {
+            hosts = [ "esplora.example.test" ];
+            socket = "/run/splora/mainnet.http.sock";
+          };
+        };
+        sploraIndexer = sploraRemoteRpc;
+      };
+      extra = e.config.users.users.surmount-ui.extraGroups or [ ];
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.services.splora.enable == true;
+    assert builtins.elem "splora" extra;
+    assert e.config.surmount.managementUi.http3Enable == true;
+    "t59-splora-remote-ui-extra-groups-when-proxy-on-ok";
+
+  t60-splora-remote-enable-needs-cookie-path =
+    let
+      failed = failedAssertions (evalSurmount {
+        sploraIndexer = {
+          enable = true;
+          daemonRpcAddr = "127.0.0.1:8332";
+          cookieFile = "";
+        };
+      });
+    in
+    assert failed != [ ];
+    assert builtins.any (
+      a: lib.hasInfix "cookieFile" a.message || lib.hasInfix "cookie file" a.message
+    ) failed;
+    "t60-splora-remote-enable-needs-cookie-path-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -2746,10 +3106,31 @@ let
     t42-journal-persistent-when-logging-on
     t44-lake-default-off
     t44b-lake-enable-memory-cap
+    t45-grok-oss-default-off
+    t45b-grok-oss-enable-user-and-memory-cap
+    t45c-grok-oss-enable-requires-package
+    t50-splora-proxy-default-off
+    t51-splora-proxy-enable-env-and-udp-https
+    t52-splora-electrum-socket-asserts
+    t53-splora-ui-extra-groups-when-both-on
+    t54-splora-ui-no-extra-group-when-service-off
+    t55-splora-units-memory-max-when-set
+    t56-splora-units-memory-max-default-off
+    t57-splora-remote-jsonrpc-no-local-datadir
+    t58-splora-remote-public-health-extra-arg
+    t59-splora-remote-ui-extra-groups-when-proxy-on
+    t60-splora-remote-enable-needs-cookie-path
   ];
 in
 {
   inherit results;
   ok = results;
   inherit t41b-static-vhosts-default-proven-roots;
+  inherit
+    t53-splora-ui-extra-groups-when-both-on
+    t57-splora-remote-jsonrpc-no-local-datadir
+    t58-splora-remote-public-health-extra-arg
+    t59-splora-remote-ui-extra-groups-when-proxy-on
+    t60-splora-remote-enable-needs-cookie-path
+    ;
 }

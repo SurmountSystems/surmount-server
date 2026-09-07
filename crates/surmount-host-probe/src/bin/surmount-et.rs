@@ -3,17 +3,24 @@
 
 use std::process::{Command, ExitCode};
 
-use surmount_host_probe::et::{build_et_argv, operator_ssh_identity};
+use surmount_host_probe::et::{
+    build_et_argv, collect_et_status, format_et_status, operator_ssh_identity,
+};
 use surmount_host_probe::ssh_target::resolve_target;
 use surmount_host_probe::{ProbeError, format_argv, resolve_program};
 
 const USAGE: &str = "\
 Usage:
   surmount-et [--help]
+  surmount-et [--status] [--target HOST]
   surmount-et [--dry-run] [--target HOST] [-- ET_ARGS...]
 
 Eternal Terminal client (et). Survives laptop sleep and network change.
 Does not replace Mullvad. Long commands on the guest still belong in tmux.
+
+--status prints whether TCP 22 and TCP 2022 answer. It does not print
+addresses. If 2022 does not answer, it tells you to use SSH/tmux
+(just grok-oss).
 
 Target resolution (first wins):
   1. --target HOST
@@ -26,6 +33,7 @@ when that file exists (Host surmount-1 is the nixbuilder key). Override:
 SURMOUNT_DEPLOY_SSH_IDENTITY.
 
 Options:
+  --status    Probe TCP 22 and TCP 2022; print answers without addresses.
   --dry-run   Print planned et argv; do not connect.
   --target    SSH/et target (user@host or host). Must not start with '-'.
   -h, --help  Show this help.
@@ -34,16 +42,20 @@ Environment:
   SURMOUNT_DEPLOY_TARGET
   SURMOUNT_DEPLOY_SSH_IDENTITY
   SURMOUNT_ET_BIN             et binary override (tests)
+  SURMOUNT_ET_STATUS_TCP22    1/0 override for --status (tests)
+  SURMOUNT_ET_STATUS_TCP2022  1/0 override for --status (tests)
 ";
 
 struct Opts {
     dry_run: bool,
+    status: bool,
     target: Option<String>,
     extra: Vec<String>,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts, ProbeError> {
     let mut dry_run = false;
+    let mut status = false;
     let mut target = None;
     let mut extra = Vec::new();
     let mut i = 0;
@@ -54,6 +66,7 @@ fn parse_args(args: &[String]) -> Result<Opts, ProbeError> {
                 std::process::exit(0);
             }
             "--dry-run" => dry_run = true,
+            "--status" => status = true,
             "--target" => {
                 i += 1;
                 if i >= args.len() {
@@ -79,8 +92,13 @@ fn parse_args(args: &[String]) -> Result<Opts, ProbeError> {
         }
         i += 1;
     }
+    if extra.iter().any(|a| a == "--status") {
+        status = true;
+        extra.retain(|a| a != "--status");
+    }
     Ok(Opts {
         dry_run,
+        status,
         target,
         extra,
     })
@@ -100,6 +118,11 @@ fn main() -> ExitCode {
 fn run(args: &[String]) -> Result<(), ProbeError> {
     let opts = parse_args(args)?;
     let target = resolve_target(opts.target.as_deref(), None)?;
+    if opts.status {
+        let text = format_et_status(collect_et_status(&target));
+        println!("{text}");
+        return Ok(());
+    }
     let et_spec = std::env::var("SURMOUNT_ET_BIN").unwrap_or_else(|_| "et".to_string());
     let et = resolve_program(&et_spec, "et")?;
     let id = operator_ssh_identity(&target);

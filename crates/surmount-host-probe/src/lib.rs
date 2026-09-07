@@ -1,6 +1,7 @@
-//! Host probes: SSH inxi, Eternal Terminal btop, plus env-gated hybrid TLS.
+//! Host probes: SSH inxi, Eternal Terminal btop, SSH+tmux grok-oss as user grok, hybrid TLS.
 
 pub mod et;
+pub mod grok_oss;
 pub mod ssh_target;
 pub mod tls_hybrid;
 

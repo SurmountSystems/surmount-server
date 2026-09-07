@@ -32,6 +32,19 @@ status:
 logs:
     journalctl -p err -b -n 40 --no-pager
 
+# grok-oss on THIS box. Never ssh to itself. Attach tmux session grok-oss
+# as user grok (MemoryMax on user-1988.slice). Root tmux is a miss.
+grok-oss:
+    #!/usr/bin/env bash
+    echo "Guest grok-oss (this box). Local tmux as user grok; not SSH and not Eternal Terminal." >&2
+    runuser -u grok -- env HOME=/home/grok GROK_HOME=/home/grok/.grok sh -c 'tmux attach -t grok-oss || tmux new -s grok-oss grok-oss'
+
+# grok-oss running --json on THIS box as user grok. No bind. No SSH.
+grok-oss-running:
+    #!/usr/bin/env bash
+    echo "Guest grok-oss running --json (this box) as user grok." >&2
+    runuser -u grok -- env HOME=/home/grok GROK_HOME=/home/grok/.grok grok-oss running --json
+
 # Live load on THIS box. Never ssh or et to itself.
 # If the clock in this pane stops, the pane is dead. Press q, exit the
 # remote shell, then run `just btop` from the laptop (Eternal Terminal).

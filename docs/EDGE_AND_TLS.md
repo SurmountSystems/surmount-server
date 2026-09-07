@@ -4,7 +4,7 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-08-25 (operator bins are `nix run .#...`.) Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (live production leaf is 18 certificate
+**Last updated:** 2026-09-03 (HTTP/3 NIP-07 login 500: axum-h3 omits Axum `ConnectInfo` on `POST /api/v1/auth/session`; optional peer, do not ban unspecified). Prior 2026-09-02 (Splora REST requires a Bitcoin JSON-RPC peer by design; indexer is not Core; remote shape is `daemonDir = null` plus cookie path plus `daemonRpcAddr`; node inventory is tasked in the splora tree). Prior same day (flake input `splora` locked to `9481e4cb87273aa99b0357be48503765beadb919`; `surmount.sploraIndexer` stays the host-local single knob over first-class instance JSON-RPC options; five esplora Hosts and UDP 443 / HTTP/3 stay optional Axum edge, not mempool REST prerequisites; Unix socket or one existing Host is enough; do not map REST onto the mail console Host). Prior 2026-09-01 (`surmount.sploraIndexer` host-local wrap for one remote JSON-RPC indexer). Prior 2026-09-01 (flake input `splora` locked to `343727487988ed0a764674ff21c0750465b9a3e8`; overlay consumes input packages; no this-tree crane wrap). Prior 2026-09-01 (Splora Host map: TCP HTTP/2 vs UDP HTTP/3; leftover esplora certificate hostnames as complete sentences). Prior 2026-09-01 (flake input `splora` on the `surmount` branch). Prior 2026-09-01 (documented esplora Hosts for the Splora Unix proxy; flake input `splora`). Prior 2026-08-31 (splora Unix sockets behind Axum; HTTP/3 QUIC on UDP :443). Prior 2026-08-25 (operator bins are `nix run .#...`.) Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (live production leaf is 18 certificate
 hostnames: six extra static zones apex+www plus surmount apex, www,
 mail, services, mta-sts, plus **mail.cryptoquick.com** for IMAP/SMTP.
 Extra-vhost HTTPS live for those six. `cryptoquick.com` apex/www stay
@@ -74,10 +74,12 @@ edge. Prefer first-party code in the Surmount workspace.
 | Cert obtain/renew | ACME or other path; may share PEMs with mail; see TLS research |
 | HTTP :80 | challenges and/or redirect |
 | Rate limits | tower / governor style |
-| Routing | UI vs optional Stalwart HTTP vs static legacy vs optional Vaultwarden `/vault/` |
-| Headers / hardening | baseline security headers, Onion-Location + Alt-Svc on mapped HTTPS, body limits |
+| Routing | UI vs optional Stalwart HTTP vs static legacy vs optional Vaultwarden `/vault/` vs splora Hosts |
+| Headers / hardening | baseline security headers, Onion-Location + onion `h2` Alt-Svc on mapped HTTPS, clearnet `h3` Alt-Svc only when QUIC is bound, body limits |
 | Local upstreams | Prefer UDS; loopback TCP until backends support UDS |
 | Vaultwarden subpath | Optional Axum reverse-proxy of loopback Rocket under `/vault/` (no nginx, no new subdomain) |
+| Splora | Optional Host -> `/run/splora/<instance>.http.sock` (HTTP/1.1); queue POST on its own socket; no Electrum newline proxy |
+| HTTP/3 | UDP :443 QUIC next to TCP :443; same PEMs; QUIC ALPN h3 only. axum-h3 does not insert Axum `ConnectInfo`; NIP-98 session POST must not 500 for that (optional peer; do not ban unspecified). |
 
 **Shape options (both Axum-family):**
 
@@ -105,7 +107,8 @@ the permanent product clearnet HTTPS owner on :443.
 | Plane | Owner | Notes |
 |-------|--------|------|
 | Public :80 | management-ui redirect-only (or dual-run nginx ACME escape) | Free production :80 is operator-approved for product redirect |
-| Public :443 | management-ui rustls (`listenMode=https` + host PEMs or in-process ACME) | Product browser / services HTTPS |
+| Public :443 TCP | management-ui rustls (`listenMode=https` + host PEMs or in-process ACME) | Product browser / services HTTPS (`h2` + `http/1.1`) |
+| Public :443 UDP | management-ui QUIC HTTP/3 (same PEMs, ALPN `h3`) | First-class with TCP; firewall UDP 443 when UI HTTPS is on |
 | Mail 25/465/587/993/4190 | Stalwart | Same durable Let's Encrypt PEMs as Axum (`/var/lib/surmount/secrets/tls/{cert,key}.pem`) after day-2 Certificate apply. First-boot still inserts an engine self-signed leaf until that apply. |
 | Stalwart HTTP management | Loopback (prefer `127.0.0.1:8080`) | SSH tunnel / bootstrap; not public product edge |
 | Stalwart first-boot HTTPS :443 | Temporary engine default until removed | Free with apply plan before public B1 |
@@ -275,6 +278,46 @@ nginx features. Module file remains until operators no longer need dual-run.
   the services console. `http://{onion}/` stays the console. Mail stays
   unmapped. Do not put nginx back as product edge.
 
+### Splora Host -> Unix socket map
+
+The public sample host keeps `surmount.sploraProxy.enable` at the default
+**off**. Private host-local enables the proxy. Indexer sockets exist only
+when those indexer units run.
+
+Mempool / Esplora REST is the indexer process on a Unix socket (or TCP
+`--http-addr`). It does **not** require public Hosts, Let's Encrypt names,
+or HTTP/3. A local client can call
+`curl --unix-socket /run/splora/<instance>.http.sock http://localhost/blocks/tip/height`
+(plus NIP-98 unless `--public-health` and that exact tip path). Unix
+socket or **one existing** Host on the already-running Axum listener is
+enough. Do **not** map REST onto the mail console Host
+(`services.surmount.systems`); that Host would steal every path. Do not
+invent a `/esplora` prefix on the console.
+
+The five `esplora.*` names below are an **optional** documented Host map,
+not a REST gate. They are not on the live leaf today. Adding them to the
+production leaf is optional edge work. Do not invent extra domains this
+turn. Do not treat a Host map in this file as proof the certificate
+already covers them.
+
+Clearnet clients that use this optional map reach the edge on TCP :443
+(TLS 1.3, ALPN `h2` and `http/1.1`) and, when HTTP/3 is on (the
+`http3Enable` default), on UDP :443 (QUIC, ALPN `h3` only). HTTP/3 and
+hypervisor UDP 443 are optional edge, not prerequisites of the mempool
+REST. The hop from this process to each Splora Unix socket is still
+HTTP/1.1. A client that arrived on HTTP/3 does not make the indexer
+speak HTTP/3. Splora does not listen on UDP.
+
+| Network | Public Host | Unix socket | Notes |
+|---------|-------------|-------------|-------|
+| mainnet | `esplora.surmount.systems` | `/run/splora/mainnet.http.sock` | Indexer HTTP + `GET /api/v1/ws` |
+| testnet3 | `testnet3.esplora.surmount.systems` | `/run/splora/testnet3.http.sock` | Same |
+| testnet4 | `testnet4.esplora.surmount.systems` | `/run/splora/testnet4.http.sock` | Same |
+| mutinynet | `mutinynet.esplora.surmount.systems` | `/run/splora/mutinynet.http.sock` | Same |
+| liquid | `liquid.esplora.surmount.systems` | `/run/splora/liquid.http.sock` | Same |
+| queue | `POST /splora/queue` (any Host) | `/run/splora/queue.sock` | `{npub,email}` only; not indexer |
+| Electrum newline socket | **not proxied** | (no socket) | Fail-closed if configured |
+
   **Live in browsers (2026-08-20):** Namecheap NS, exclusive A matching
   this host, HTTPS **200**, production leaf covers apex+www, packaged
   site content, not console, not COMING SOON:
@@ -395,6 +438,67 @@ nginx features. Module file remains until operators no longer need dual-run.
   `vaultwarden.domain` / console URL to `https://{servicesHostname}/vault`
   when publishing. Not nginx; not a second subdomain. Prefer after free-443
   and public https listen are real. See [SECURITY.md](SECURITY.md).
+- **Splora Unix proxy (optional, default off):** `surmount.sploraProxy.enable`
+  maps public Hosts to HTTP/1.1 Unix sockets on the **edge host**. Documented
+  Hosts (optional edge, not a REST requirement):
+  `esplora.surmount.systems` to `/run/splora/mainnet.http.sock`,
+  `testnet3.esplora.surmount.systems` to `/run/splora/testnet3.http.sock`,
+  `testnet4.esplora.surmount.systems` to `/run/splora/testnet4.http.sock`,
+  `mutinynet.esplora.surmount.systems` to `/run/splora/mutinynet.http.sock`,
+  `liquid.esplora.surmount.systems` to `/run/splora/liquid.http.sock`. The
+  public sample stays proxy off. Private host-local enables the proxy.
+  Indexer sockets exist only when those units run. Unix socket or one
+  existing Host is enough for mempool REST. Do not map REST onto the
+  mail console Host. Five esplora Let's Encrypt names are optional
+  edge; they are not on the live leaf today and are not a REST gate.
+  The Axum edge forwards **Host** and **X-Forwarded-Proto** (tests fail
+  if proto is omitted). `GET /api/v1/ws` WebSocket-upgrades to the same
+  indexer HTTP socket. Queue `POST {npub,email}` goes only to
+  `/run/splora/queue.sock` on `/splora/queue`, never to indexer units.
+  Queue is not REST. NIP-98 stays in splora (no edge API keys). The
+  Electrum newline Unix socket is **not** proxied (fail-closed if
+  configured). Not nginx; do not enable `modules/web.nix` for this path.
+  Backend from the edge is still HTTP/1.1 over UDS when the client arrived
+  on HTTP/3. HTTP/3 and hypervisor UDP 443 are optional edge, not
+  prerequisites of the mempool REST. When `surmount.sploraProxy.enable`
+  and `services.splora.enable` are both true, `users.users.surmount-ui.extraGroups`
+  includes the `splora` group so the edge can connect to 0750 sockets.
+  Flake input `splora` (`github:SurmountSystems/splora` on the `surmount`
+  branch, locked rev `9481e4cb87273aa99b0357be48503765beadb919`) supplies
+  `pkgs.splora`, `pkgs.splora-liquid`, and `nixosModules.splora`.
+  Upstream crane omits `.cargo/config.toml` from Nix src (laptop cargo
+  still uses Menhera). This overlay does not wrap that src again. Do
+  not set `services.splora.enable` or `surmount.sploraIndexer.enable` in
+  the public sample host. Splora REST **requires a Bitcoin JSON-RPC peer
+  by design**. The indexer is not Bitcoin Core. That is **not a bug**.
+  The remote shape is `daemonDir = null`, a cookie file path
+  (`cookieFile`; never cookie bytes in git), and a JSON-RPC address
+  (`daemonRpcAddr`). REST needs that peer plus one indexer instance, not
+  a local bitcoind datadir on this guest. Host-local sets
+  `surmount.sploraIndexer` (one instance, first-class `--jsonrpc-import`,
+  cookie path, `daemonDir = null`, 24 MiB db cache; optional
+  `--public-health`). Bitcoin node inventory is tasked in the splora
+  tree (branch `surmount`). Do not start five indexers.
+- **HTTP/3 (required on HTTPS, not later):** UDP :443 QUIC next to TCP :443,
+  same host PEMs, TLS 1.3. That is Axum edge product, not a mempool REST
+  prerequisite. Hypervisor UDP 443 is only if clearnet HTTP/3 should
+  answer from the public internet. QUIC rustls ALPN is **h3 only**; TCP ALPN stays
+  `h2` + `http/1.1`. Same Axum `Router`. Stack: quinn + h3, via
+  [axum-h3](https://crates.io/crates/axum-h3) 0.0.6 production **quinn**
+  backend (`h3-util` feature `quinn`; accessed: 2026-08-31). **ConnectInfo:**
+  TCP HTTPS uses `into_make_service_with_connect_info`. The QUIC path
+  (`H3Router::from(app)`) does **not** insert `ConnectInfo<SocketAddr>`.
+  A required extractor there is Axum 500 text ("Missing request extension"),
+  which the `/login` NIP-07 script shows as **Login failed: 500**. Session
+  exchange uses an optional peer (unspecified when missing) and does not
+  ban 0.0.0.0/`::`. Leftover: inject the real QUIC peer into `ConnectInfo`
+  so H3 bans and rate-limit keys are per-client. Clearnet
+  Alt-Svc adds `h3=":443"` **only if** the QUIC listener bound; onion `h2`
+  Alt-Svc stays a separate token (merged, not replaced).
+  `networking.firewall.allowedUDPPorts` includes 443 when the UI HTTPS
+  listener is on (not the cleartext https-escape). Keep the workspace
+  `[patch.crates-io]` for `chacha20` if quinn pulls that crate (menhera
+  yank of 0.10.0/0.10.1).
 - **Ban layer (first path):** `crates/management-ui/src/ban.rs` decisions
   (Allow / Whitelisted / RateLimited / Banned / BanCandidate). Whitelist never
   banned; last-used touched on allowed requests from a whitelist match.
@@ -491,6 +595,8 @@ change issuance.
   MTA-STS policy are served from that rewritten Host, not a second onion
   key). `http://{onion}/` stays the services console.
 - Alt-Svc: `h2="{onion_host}:{port}"; ma={ma}; persist=1`.
+  Clearnet HTTP/3 is a **separate** token (`h3=":443"`) added only when
+  the QUIC listener is bound. Onion `h2` is not replaced by `h3`.
 - Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`,
   `SURMOUNT_ONION_ALT_SVC_ENABLED` (default on),
   `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`,

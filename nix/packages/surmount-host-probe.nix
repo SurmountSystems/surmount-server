@@ -1,5 +1,5 @@
 # Hermetic crane build of crates/surmount-host-probe
-# (inxi-host, btop-host, tls-hybrid).
+# (inxi-host, btop-host, tls-hybrid, et, grok-oss attach).
 # Call as: pkgs.callPackage ./surmount-host-probe.nix { inherit craneLib; }
 
 {
@@ -69,6 +69,13 @@ pkgs.symlinkJoin {
         ]
       } \
       --set ET_NO_TELEMETRY 1
+    wrapProgram $out/bin/surmount-grok-oss \
+      --prefix PATH : ${
+        lib.makeBinPath [
+          pkgs.openssh
+          pkgs.tmux
+        ]
+      }
   '';
   meta = unwrapped.meta;
 }

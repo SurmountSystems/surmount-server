@@ -4,7 +4,14 @@ How the Surmount mail VPS should be operated, observed, and checked
 end-to-end. Aligned with [hygiene.md](hygiene.md). Architecture:
 [STACK.md](STACK.md).
 
-**Last updated:** 2026-08-25 (docs polish: operator bins are `nix run .#...`;
+**Last updated:** 2026-09-03 (public NIP-07 login over HTTP/3 must not 500
+missing `ConnectInfo`; NWC is the `/mail` wallet store). Prior 2026-09-02 (guest grok-oss uses a machine xAI console
+API key on surmount-1, path only under `/home/grok/.grok`; guest has no
+git and no GitHub SSH; signed commits stay on the laptop). Prior same
+day (flake input grok-oss tracks
+`github:SurmountSystems/grok-oss/remote-1`; after a host switch, run
+`just grok-oss` as user grok).
+Prior 2026-08-25 (docs polish: operator bins are `nix run .#...`;
 living mailbox maps stay in `~/.agents/surmount-server/operator-facts.md`,
 not this public file. Prior same day: every `nix/packages/surmount-*.nix`
 is a flake package/app; `just` aliases only `nix run`; product `script/*.sh`
@@ -1770,6 +1777,53 @@ just et -- --target root@surmount-1
 # or: nix run .#surmount-et -- --target root@surmount-1
 ```
 
+Remote grok-oss attach is SSH plus tmux as user grok (`just grok-oss` /
+`nix run .#surmount-grok-oss`): `ssh -t` then `runuser -u grok` so
+`tmux attach -t grok-oss` or `tmux new -s grok-oss grok-oss` runs as that
+user (module uid, default grok). Root tmux is a miss: `user-1988.slice`
+MemoryMax applies only when the process uid is grok. It is **not** Eternal
+Terminal (`et -p 2022`). Nested guest `just grok-oss` attaches that same
+local tmux session as user grok and does not SSH to itself. `just et -- --status`
+prints whether TCP 22 and TCP 2022 answer, without addresses. If 2022 does not
+answer, that status tells you to use SSH/tmux (`just grok-oss`).
+
+Guest grok-oss on surmount-1 uses a **machine xAI console API key**. That
+key spends **console API credits** (console team prepaid). It is **not**
+included SuperGrok period limits. It is **not** SuperGrok dollar credits.
+Path only (never key bytes in git): `/home/grok/.grok/console.env`
+(`XAI_API_KEY`, mode 0600) and `/home/grok/.grok/machine-console-auth.toml`
+(`[auth] preferred_method = "api_key"`; that file does not hold the key).
+The guest has **no git** and **no GitHub SSH**. Signed commits stay on
+the laptop. Laptop L0 (`surmount-coordinator-gui
+set-remote-host-console-api-key`) lives in grok-oss `remote-1`; the
+operator already tasked that tree. Dual-pin [SECRETS.md](SECRETS.md).
+
+Grok OSS has three distinct surfaces. Do not merge them.
+
+The pager `/dashboard` (also `grok-oss dashboard`, or Ctrl+backslash in the TUI) is
+the Agent Dashboard inside **this** grok-oss TUI process. It is not a web
+page, not management-ui, and not L0.
+
+`/running` (alias `/windows`, CLI `grok-oss running` and
+`grok-oss running --json`) lists live TUI windows on **this** `$GROK_HOME`
+from `active_sessions.json`. That list is not L0. `just grok-oss-running`
+SSHes to the mail host and prints that JSON as user grok. It does not
+allocate a TTY, does not bind HTTP, and does not print secrets.
+
+L0 is the laptop Surmount coordinator GUI (`surmount-coordinator-gui`)
+tagging `grok-oss running --json` with a host name such as surmount-1.
+It does not bind HTTP and it does not listen on the mail host. The guest
+`grok-oss` package does not install that GUI. Do not serve L0 on
+management-ui or on :443.
+
+`surmount.grokOss.enable` stays default false. Enable only from private
+host-local. The module does not start a boot TUI unit. Do not set `Nice=`
+on grok-oss (sshd class). Flake input grok-oss tracks
+`github:SurmountSystems/grok-oss/remote-1` (open PR 51 is the product
+tip; default branch main is not). Operator bumps:
+`nix flake update grok-oss`. After a host switch that includes this
+package, attach with `just grok-oss` as user grok.
+
 For a rebuild that must finish even if every laptop tunnel dies, SSH or
 `just et` in, then `tmux new -s switch` and run the command inside tmux.
 
@@ -1808,6 +1862,8 @@ exceptions*.
 | `nix run .#surmount-private-data` / `just check-private-data` | Private-data pattern scan (`--staged` / `--tree` / `--paths`). |
 | `nix run .#surmount-host-logs` / `just host-logs` | Host journal follow and `--status`. |
 | `nix run .#surmount-et` / `just et` | Eternal Terminal client. Reconnects after sleep and network change. Does not replace Mullvad. After the host switch, `etserver` listens on TCP 2022. Long commands still belong in tmux on the guest. |
+| `nix run .#surmount-grok-oss` / `just grok-oss` | Attach grok-oss on the mail host via SSH + tmux as user grok. Not Eternal Terminal. Nested guest is local tmux as grok. Live TTY required. MemoryMax only if uid grok. |
+| `just grok-oss-running` | SSH (or local on the guest) `grok-oss running --json` as user grok. No TTY, no HTTP bind, no secrets. Input for laptop L0 tagging, not a dashboard. |
 | `nix run .#surmount-rekey` / `just rekey` | SHC Backups PGP paste: mint age identity (age/rage crate), wrap with gpg, print `age1...` for type PGP. Identity stays 0600 on disk. |
 | `nix run .#surmount-shc` / `just rdns-shc` | SHC customer user-api (rDNS PTR + tickets). No python3 in the crate. |
 | `nix run .#surmount-tls-hybrid` / `just check-tls-hybrid` | **D1** host hybrid TLS negotiation probe after B1. Requires `SURMOUNT_E2E_BASE_URL=https://...` or exit **2** BLOCKED. Never a flake check. |
@@ -1961,6 +2017,10 @@ just dev
 Then open `http://127.0.0.1:8080/login` (or `SURMOUNT_LISTEN`). Use NIP-07 in
 a capable browser extension, or exchange a kind 27235 event against
 `POST /api/v1/auth/session`. Public always: `/health` and auth endpoints.
+Public HTTPS advertises HTTP/3 (`h3=":443"`). The NIP-07 button POSTs that
+same session URL. axum-h3 does not insert Axum `ConnectInfo`; the handler
+must not 500 for that. NWC on `/mail` is a wallet URI store after login,
+not the login button.
 
 | Env | Role |
 |-----|------|

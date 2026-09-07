@@ -17,6 +17,8 @@
     ./mail.nix
     ./web.nix
     ./management-ui.nix
+    # One remote JSON-RPC Splora indexer (wraps imported services.splora).
+    ./splora-indexer.nix
     # Arti onion/hidden service (REQUIRED product surface; management-publish).
     ./arti-hidden-service.nix
     # Domain C human vault (Vaultwarden; sample host stays enable=false).
@@ -36,5 +38,7 @@
     ./remote-builder.nix
     # Optional Lean/Lake: default off, niced, MemoryMax on the lake unit.
     ./lake.nix
+    # Optional Grok OSS: default off, user grok, MemoryMax, no boot TUI.
+    ./grok-oss.nix
   ];
 }

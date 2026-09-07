@@ -211,6 +211,28 @@ et *args:
     fi
     exec nix run ".#surmount-et" -- "$@"
 
+# Attach grok-oss on the mail host via SSH + tmux as user grok (not Eternal Terminal).
+# Nested guest: the crate attaches local tmux session grok-oss as user grok.
+[positional-arguments]
+grok-oss *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    exec nix run ".#surmount-grok-oss" -- "$@"
+
+# Print grok-oss running --json from the mail host as user grok.
+# SSH, no TTY, no HTTP bind. Nested guest prints local JSON.
+[positional-arguments]
+grok-oss-running *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    exec nix run ".#surmount-grok-oss" -- --running "$@"
+
 [positional-arguments]
 host-logs *args:
     #!/usr/bin/env bash

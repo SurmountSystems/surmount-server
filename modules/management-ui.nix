@@ -14,6 +14,7 @@
   config,
   lib,
   pkgs,
+  options,
   ...
 }:
 let
@@ -61,6 +62,30 @@ let
   hs = cfg.artiHiddenService;
   ac = cfg.accessControl;
   vw = cfg.vaultwarden;
+  splora = cfg.sploraProxy;
+  # Group exists only when the imported services.splora module is on.
+  # Indexer RuntimeDirectory is 0750 / UMask 0007; the edge needs this group
+  # to connect to /run/splora sockets.
+  sploraServiceOn = (options.services ? splora) && config.services.splora.enable;
+  sploraGroupName = if sploraServiceOn then config.services.splora.group else "splora";
+
+  allowedSploraInstances = [
+    "mainnet"
+    "testnet3"
+    "testnet4"
+    "mutinynet"
+    "liquid"
+  ];
+  sploraInstanceNameOk = n: builtins.elem n allowedSploraInstances;
+  sploraSocketLooksElectrum = p: p != "" && builtins.match ".*electrum.*" (lib.toLower p) != null;
+  sploraInstancesJson =
+    let
+      toEntry = name: inst: {
+        inherit (inst) hosts;
+        socket = if inst.socket != "" then inst.socket else "${splora.socketDir}/${name}.http.sock";
+      };
+    in
+    builtins.toJSON (lib.mapAttrs toEntry splora.instances);
 
   # Console link to domain C vault:
   # 1) explicit managementUi.vaultwardenUrl wins
@@ -200,6 +225,16 @@ let
     "SURMOUNT_VAULTWARDEN_PROXY_PREFIX=${effectiveVaultwardenProxyPrefix}"
     "SURMOUNT_VAULTWARDEN_PROXY_UPSTREAM=${effectiveVaultwardenProxyUpstream}"
   ]
+  ++ lib.optionals splora.enable [
+    "SURMOUNT_SPLORA_PROXY=1"
+    "SURMOUNT_SPLORA_SOCKET_DIR=${splora.socketDir}"
+    "SURMOUNT_SPLORA_QUEUE_SOCKET=${splora.queueSocket}"
+    "SURMOUNT_SPLORA_QUEUE_PATH=${splora.queuePath}"
+    # systemd Environment= without wrapping quotes treats inner " as syntax
+    # and strips them. Single-quoted KEY=VALUE keeps JSON in process env.
+    "'SURMOUNT_SPLORA_INSTANCES=${sploraInstancesJson}'"
+  ]
+  ++ lib.optional (ui.listenMode == "https" && !ui.http3Enable) "SURMOUNT_HTTP3=0"
   ++ [
     "SURMOUNT_AUTH_MODE=${ui.authMode}"
     "SURMOUNT_SESSION_TTL_SECS=${toString ui.sessionTtlSecs}"
@@ -708,6 +743,44 @@ in
         '';
       }
       {
+        assertion = !splora.enable || splora.instances != { };
+        message = ''
+          surmount.sploraProxy.enable is true but instances is empty.
+          Configure Host -> /run/splora/<instance>.http.sock (mainnet,
+          testnet3, testnet4, mutinynet, liquid). Fail-closed.
+        '';
+      }
+      {
+        assertion = lib.all sploraInstanceNameOk (lib.attrNames splora.instances);
+        message = ''
+          surmount.sploraProxy.instances keys must be mainnet, testnet3,
+          testnet4, mutinynet, or liquid.
+        '';
+      }
+      {
+        assertion =
+          !(sploraSocketLooksElectrum splora.queueSocket)
+          && !(sploraSocketLooksElectrum splora.socketDir)
+          && lib.all (inst: !(sploraSocketLooksElectrum inst.socket)) (lib.attrValues splora.instances);
+        message = ''
+          surmount.sploraProxy must not point at an Electrum newline Unix
+          socket. This edge proxies HTTP/1.1 indexer sockets and the queue
+          unit only (fail-closed).
+        '';
+      }
+      {
+        assertion =
+          !(splora.enable && sploraServiceOn)
+          || builtins.elem sploraGroupName (config.users.users.surmount-ui.extraGroups or [ ]);
+        message = ''
+          surmount.sploraProxy.enable and services.splora.enable are both
+          true, but users.users.surmount-ui.extraGroups does not include
+          the splora group (${sploraGroupName}). Indexer sockets live in
+          a 0750 RuntimeDirectory with UMask 0007, so the edge process
+          needs that group to connect.
+        '';
+      }
+      {
         assertion = directoryLabInlineTokenOk;
         message = ''
           surmount.managementUi.stalwartTokenEnv is set but
@@ -733,23 +806,49 @@ in
       of the Nix store / unit Environment=.
     '';
 
+    # UDP :443 for HTTP/3 QUIC when the UI terminates HTTPS in-process.
+    # Cleartext https-escape does not bind QUIC; omit UDP then.
+    networking.firewall.allowedUDPPorts = lib.mkIf (
+      ui.listenMode == "https" && !ui.allowCleartextHttpsEscape
+    ) [ 443 ];
+
     users.groups.surmount-ui = { };
     users.groups.surmount-tls = { };
     users.users.surmount-ui = {
       isSystemUser = true;
       group = "surmount-ui";
-      extraGroups = [ "surmount-tls" ];
+      extraGroups = [
+        "surmount-tls"
+      ]
+      ++ lib.optionals (splora.enable && sploraServiceOn) [ sploraGroupName ];
       description = "Surmount management UI";
     };
 
-    systemd.services.surmount-management-ui = {
-      description = "Surmount management UI (Axum edge foundation)";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ] ++ lib.optionals ac.nftHelper [ "surmount-nft-ban-helper.socket" ];
-      wants = lib.optionals ac.nftHelper [ "surmount-nft-ban-helper.socket" ];
-      unitConfig = unitConfig;
-      serviceConfig = serviceConfig;
-    };
+    systemd.services = {
+      surmount-management-ui = {
+        description = "Surmount management UI (Axum edge foundation)";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network.target" ] ++ lib.optionals ac.nftHelper [ "surmount-nft-ban-helper.socket" ];
+        wants = lib.optionals ac.nftHelper [ "surmount-nft-ban-helper.socket" ];
+        unitConfig = unitConfig;
+        serviceConfig = serviceConfig;
+      };
+    }
+    // lib.optionalAttrs (sploraServiceOn && splora.unitsMemoryMax != null) (
+      let
+        cap = {
+          serviceConfig.MemoryMax = splora.unitsMemoryMax;
+        };
+        inst = lib.filterAttrs (_: i: i.enable or false) config.services.splora.instances;
+      in
+      lib.optionalAttrs (config.services.splora.queueEnable or false) {
+        splora-queue = cap;
+      }
+      // lib.mapAttrs' (name: _: lib.nameValuePair "splora-${name}" cap) inst
+      // lib.optionalAttrs (config.services.splora.popularScripts.enable or false) {
+        splora-popular-scripts = cap;
+      }
+    );
 
     # State dir always (0755 so surmount-ui can traverse to durable Domain B
     # under stateDir/secrets; H2b). Durable Domain B leaves for runtime secrets
@@ -769,6 +868,7 @@ in
       "z ${cfg.secrets.durableMaterialDir}/tls/cert.pem 0640 surmount-ui surmount-tls -"
       "z ${cfg.secrets.durableMaterialDir}/tls/key.pem 0600 surmount-ui surmount-tls -"
     ]
+    ++ lib.optionals splora.enable [ "d ${splora.socketDir} 0755 surmount-ui surmount-ui - -" ]
     ++ lib.optionals (staticVhostReadPaths != [ ]) (
       [ "d ${cfg.stateDir}/static-sites 0755 surmount-ui surmount-ui - -" ]
       ++ map (p: "d ${p} 0755 surmount-ui surmount-ui - -") (

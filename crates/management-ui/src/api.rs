@@ -1042,6 +1042,8 @@ mod tests {
             onion_discovery: crate::onion_discovery::OnionDiscoveryConfig::empty(),
             vaultwarden_url: None,
             vaultwarden_proxy: crate::proxy_vaultwarden::VaultwardenProxyConfig::default(),
+            splora_proxy: crate::proxy_vaultwarden::splora::SploraProxyConfig::default(),
+            http3: crate::tls::http3::Http3Config::default(),
             apex_public_root: None,
             static_vhosts: Default::default(),
             rate_limit_max_requests: 0,

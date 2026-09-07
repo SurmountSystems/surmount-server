@@ -1,18 +1,77 @@
 # Residual (open work after Phases A-D foundation + review fix rounds)
 
-**Last updated:** 2026-08-27 (scram crate 7/7 tests; module-eval includes t43
-watchdog + swap-path refuse. **192 GiB builder ceiling is live** and in
-host-local. **Swap 256 GiB is off** until you set `surmount.swapFile.path`
-on a disk with 256 GiB free — pencils down, no invented path. **Lean
-probe** that fills every MemoryMax is a Name split, not 224 GiB.
-`just deploy-host` ships scram `--watch`, `/root/justfile` `just scram`,
-and 192G persist. Laptop: `just scram` SSHes `--now` default
-`root@surmount-1`. Do not start Lake from this agent. Slake 47 of ~206.)
+**Last updated:** 2026-09-03. NIP-07 `/login` **Login failed: 500** on
+HTTP/3 was Axum missing `ConnectInfo` on `POST /api/v1/auth/session`
+(axum-h3 does not insert it; TCP HTTP/2 was JSON 401). Tree fix: optional
+peer extractor + do not ban unspecified. Leftover: inject the real QUIC
+peer into `ConnectInfo` so HTTP/3 bans and rate-limit keys are per-client
+(today H3 middleware already falls back to 0.0.0.0 when the extension is
+absent). NWC is not that 500; it is the `/mail` wallet store after login.
+Live switch still operator-owned. Flake input `splora` is
+`github:SurmountSystems/splora` on the `surmount` branch, locked rev
+`9481e4cb87273aa99b0357be48503765beadb919` (previous lock
+`343727487988ed0a764674ff21c0750465b9a3e8`). Imported
+`nixosModules.splora` instance options now include `cookieFile`,
+`daemonRpcAddr`, `jsonrpcImport`, `daemonDir` (null is remote JSON-RPC),
+`publicHealth`, db cache default 24, and `httpSocketFile` default
+`/run/splora/${name}.http.sock`. No QUIC on those Unix sockets. HTTP/2
+and HTTP/3 stay on this-tree Axum. This tree **keeps**
+`surmount.sploraIndexer` as the host-local single knob (one instance,
+cookie path charset, sample stays off). The wrap maps those first-class
+instance options. It does not mkForce ReadOnlyPaths and does not inject
+`--jsonrpc-import` / `--public-health` through extraArgs. Eval of the
+remote JSON-RPC wrap does not fight the imported module. Do not delete
+the wrap. Indexer units stay off until private host-local sets that
+option with a reachable JSON-RPC address and cookie path. grokOss is
+unrelated to REST. Flake input grok-oss tracks
+`github:SurmountSystems/grok-oss/remote-1` at PR 51 head
+(`6edf5fda9507c9e3c9c9f5a67871ebb3ce6cca7d`; open PR, product tip
+https://github.com/SurmountSystems/grok-oss/pull/51). Enable
+`surmount.grokOss` still from private host-local only; public sample
+stays default off. This slice did not bump grok-oss. Upstream crane omits
+`.cargo/config.toml` from src and builds `--offline --locked`. Laptop
+`cargo` still uses Menhera. This tree does not wrap crane. Menhera
+in-sandbox fetch is already fixed upstream. The public sample host keeps
+`surmount.sploraProxy.enable` default off, `surmount.sploraIndexer.enable`
+default off, and does not set `services.splora.enable`. Private host-local
+already enables `surmount.sploraProxy` with the five esplora Host maps.
+Those Host maps and hypervisor UDP 443 are optional Axum edge, not
+prerequisites of the mempool REST. Unix socket or one existing Host is
+enough. Do not map REST onto the mail console Host.
+`surmount.managementUi.http3Enable` stays default true. The live UI
+process has `SURMOUNT_SPLORA_PROXY=1`. `/run/splora` exists from tmpfiles.
+There are no indexer HTTP sockets and no `queue.sock`. Do not claim
+Esplora is live in browsers. Do not claim the queue unit is live.
+`just grok-oss` attaches as user grok (`runuser`) so MemoryMax can apply.
+The grokOss module stays default off. Do not start Lake from this agent.
+Do not invent MX / DMARC `p=reject` / Vaultwarden / ban / Q-AUTH-1 /
+reboot.
 
-**Highest value next (unblock):** persist switch (scram unit + 192G + guest
-justfile). Then Lean agent: **one** measurement prove at 192 GiB or **split
-the probe now**. If RSS sits on 192 GiB, stop raising. Operator: swap path
-if you want 256 GiB swap. Signed commit of the dirty tree.
+**Open leftover (operator host-local, complete sentences):**
+
+1. Private host-local still needs `surmount.sploraIndexer.enable = true`
+   plus a reachable Bitcoin Core JSON-RPC address
+   (`surmount.sploraIndexer.daemonRpcAddr`) and a cookie file path
+   (`surmount.sploraIndexer.cookieFile`; never cookie bytes in git) so
+   one indexer instance can start. A local bitcoind datadir on this
+   guest is not required. Optional `publicHealth = true` passes
+   `--public-health`. elementsd is not required unless a liquid instance
+   is enabled. Do not start five indexers. Do not treat queue-only
+   `services.splora.enable` as REST. Do not set this on the public sample
+   host.
+2. The operator still enables `surmount.grokOss` from private host-local,
+   sets `package` to `pkgs.grok-oss`, and sets a MemoryMax budget string
+   there. The flake pin is open PR 51 head on `remote-1`. That is grok-oss
+   product leftover. It is not a mempool REST gate. That does not
+   auto-start the TUI; start grok-oss in tmux as user grok after login.
+   Default remains off.
+
+**Highest value next (unblock):** private host-local JSON-RPC address,
+cookie file path, and one indexer instance. Do not treat a local
+bitcoind datadir as leftover. Do not wait on five esplora Let's Encrypt
+names, `just check-remote` as a REST gate, hypervisor UDP 443, or
+grokOss for the mempool API. Menhera in-sandbox is already fixed
+upstream. Do not start Lake.
 
 ---
 
