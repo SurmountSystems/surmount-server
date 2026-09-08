@@ -1,6 +1,6 @@
 //! Runtime configuration from environment (set by systemd unit / Nix module).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -42,6 +42,59 @@ pub fn unused_nwc_store_path() -> PathBuf {
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     ))
+}
+
+/// Hermetic `example.test` fixture. Tests mutate copies.
+#[cfg(test)]
+impl AppConfig {
+    pub fn example_test() -> Self {
+        use crate::tls::ListenMode;
+        use surmount_management_ui::ban::{BanBackendKind, BanEnforcement};
+        Self {
+            listen: "127.0.0.1:8090".parse().unwrap(),
+            http_redirect_listen: None,
+            local_cleartext_listen: None,
+            listen_mode: ListenMode::PlainHttp,
+            redirect_http_to_https: false,
+            redirect_allowed_hosts: vec!["services.example.test".into()],
+            https_allow_cleartext_escape: false,
+            acme: crate::acme::AcmeConfig::default(),
+            mta_sts_mode: crate::mta_sts::MtaStsMode::Off,
+            mta_sts_max_age: 86_400,
+            primary_domain: "example.test".into(),
+            mail_hostname: "mail.example.test".into(),
+            services_hostname: "services.example.test".into(),
+            stalwart_url: "http://127.0.0.1:8080".into(),
+            onion_surface: OnionSurface::NotProvisioned,
+            onion_url: None,
+            onion_discovery: crate::onion_discovery::OnionDiscoveryConfig::empty(),
+            vaultwarden_url: None,
+            vaultwarden_proxy: crate::proxy_vaultwarden::VaultwardenProxyConfig::default(),
+            splora_proxy: crate::proxy_vaultwarden::splora::SploraProxyConfig::default(),
+            http3: crate::tls::http3::Http3Config::default(),
+            apex_public_root: None,
+            static_vhosts: BTreeMap::new(),
+            extra_mail_hostnames: Vec::new(),
+            rate_limit_max_requests: 0,
+            rate_limit_window: Duration::from_secs(60),
+            rate_limit_max_keys: 1000,
+            ban: BanConfig {
+                enforcement: BanEnforcement::Off,
+                backend_kind: BanBackendKind::Memory,
+                whitelist: vec![],
+                state_path: None,
+                nft_exec_enabled: false,
+                nft_bin: None,
+                nft_helper_sock: None,
+                nft_helper_bin: None,
+            },
+            auth: surmount_management_ui::auth::AuthConfig::off(),
+            allow_directory_unauthenticated: false,
+            allow_public_auth_off: false,
+            console_accounts_path: unused_console_accounts_path(),
+            nwc_store_path: unused_nwc_store_path(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +152,11 @@ pub struct AppConfig {
     /// `SURMOUNT_STATIC_VHOSTS_FILE` (same JSON on disk). Empty = none.
     /// Do not overload `SURMOUNT_APEX_PUBLIC_ROOT` for these names.
     pub static_vhosts: BTreeMap<String, PathBuf>,
+    /// Extra mail Hosts that are not `mail_hostname` and not static vhost keys
+    /// (for example `mail.cryptoquick.com` on the production leaf).
+    /// Env `SURMOUNT_EXTRA_MAIL_HOSTNAMES` (comma list). Empty = none.
+    /// Do not parse `/etc/surmount/mail-domains.txt` as source of truth.
+    pub extra_mail_hostnames: Vec<String>,
     /// Max requests per client key per window (0 disables limiter).
     pub rate_limit_max_requests: u32,
     pub rate_limit_window: Duration,
@@ -493,6 +551,7 @@ impl AppConfig {
         // Extra static Hosts first so onion auto-map can include them.
         // JSON object hostname -> root. Env wins over file.
         let static_vhosts = static_vhosts_from_env()?;
+        let extra_mail_hostnames = extra_mail_hostnames_from_env();
         let redirect_allowed_hosts =
             union_static_vhost_hosts(redirect_allowed_hosts, &static_vhosts);
         let extra_onion_hosts: Vec<String> = static_vhosts.keys().cloned().collect();
@@ -566,6 +625,7 @@ impl AppConfig {
             http3,
             apex_public_root,
             static_vhosts,
+            extra_mail_hostnames,
             rate_limit_max_requests,
             rate_limit_window: Duration::from_secs(rate_limit_window_secs.max(1)),
             rate_limit_max_keys: rate_limit_max_keys.max(1),
@@ -690,6 +750,33 @@ pub fn parse_env_flag_truthy(raw: &str) -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+/// Extra mail Hosts from `SURMOUNT_EXTRA_MAIL_HOSTNAMES` (comma list).
+/// Empty or unset is none. Names are trimmed and lowercased. Duplicates drop.
+pub fn extra_mail_hostnames_from_env() -> Vec<String> {
+    extra_mail_hostnames_from_csv(
+        env::var("SURMOUNT_EXTRA_MAIL_HOSTNAMES")
+            .ok()
+            .as_deref()
+            .unwrap_or(""),
+    )
+}
+
+/// Parse a comma-separated extra-mail hostname list (same rules as env).
+pub fn extra_mail_hostnames_from_csv(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for part in raw.split(',') {
+        let host = part.trim().to_ascii_lowercase();
+        if host.is_empty() {
+            continue;
+        }
+        if seen.insert(host.clone()) {
+            out.push(host);
+        }
+    }
+    out
 }
 
 /// Parse extra static vhosts from `SURMOUNT_STATIC_VHOSTS` (JSON object) or
@@ -973,6 +1060,7 @@ mod tests {
             "SURMOUNT_APEX_PUBLIC_ROOT",
             "SURMOUNT_STATIC_VHOSTS",
             "SURMOUNT_STATIC_VHOSTS_FILE",
+            "SURMOUNT_EXTRA_MAIL_HOSTNAMES",
             "SURMOUNT_CONSOLE_ACCOUNTS",
             "SURMOUNT_NWC_STORE",
         ] {
@@ -1000,6 +1088,30 @@ mod tests {
         assert_eq!(
             AppConfig::from_env().unwrap().apex_public_root.as_deref(),
             Some(std::path::Path::new("/var/lib/surmount/public-site"))
+        );
+    }
+
+    /// Named contract: extra mail Hosts come from a comma env list.
+    #[test]
+    fn extra_mail_hostnames_from_comma_env() {
+        let _g = EnvGuard::acquire();
+        assert!(
+            AppConfig::from_env()
+                .unwrap()
+                .extra_mail_hostnames
+                .is_empty()
+        );
+        set_env(
+            "SURMOUNT_EXTRA_MAIL_HOSTNAMES",
+            " mail.cryptoquick.com,MAIL.cryptoquick.com, mail.other.test ",
+        );
+        let cfg = AppConfig::from_env().unwrap();
+        assert_eq!(
+            cfg.extra_mail_hostnames,
+            vec![
+                "mail.cryptoquick.com".to_string(),
+                "mail.other.test".to_string()
+            ]
         );
     }
 

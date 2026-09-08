@@ -929,6 +929,13 @@ if [ \"$tls_axum\" = 1 ]; then\n\
   if [ \"$kind\" = tls-key ]; then chmod 0600 \"$mail_tls/$leaf\"; else chmod 0640 \"$mail_tls/$leaf\"; fi\n\
   chown stalwart-mail:stalwart-mail \"$mail_tls/$leaf\" 2>/dev/null || true\n\
 fi\n\
+if [ \"$ui_chown\" = 1 ]; then\n\
+  if [ \"$kind\" = tls-cert ]; then\n\
+    chown surmount-ui:surmount-tls \"$final\"\n\
+  else\n\
+    chown surmount-ui:surmount-ui \"$final\"\n\
+  fi\n\
+fi\n\
 if [ -L \"$final\" ] || [ ! -f \"$final\" ]; then echo \"secrets-install-host: refuse: install did not produce a regular file\" >&2; exit 1; fi\n",
         sh_quote(material),
         sh_quote(&parent),

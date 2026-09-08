@@ -960,6 +960,7 @@ mod tests {
             vaultwarden_url: Some("https://services.example.test/vault".into()),
             apex_public_root: None,
             static_vhosts: Default::default(),
+            extra_mail_hostnames: Vec::new(),
             vaultwarden_proxy: VaultwardenProxyConfig {
                 enable,
                 public_prefix: "/vault".into(),
@@ -1896,6 +1897,7 @@ pub(crate) mod splora {
                 http3: crate::tls::http3::Http3Config::default(),
                 apex_public_root: None,
                 static_vhosts: Default::default(),
+                extra_mail_hostnames: Vec::new(),
                 rate_limit_max_requests: 0,
                 rate_limit_window: Duration::from_secs(60),
                 rate_limit_max_keys: 1000,

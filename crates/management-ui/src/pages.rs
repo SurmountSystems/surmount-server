@@ -3253,6 +3253,7 @@ mod tests {
             http3: crate::tls::http3::Http3Config::default(),
             apex_public_root: None,
             static_vhosts: Default::default(),
+            extra_mail_hostnames: Vec::new(),
             rate_limit_max_requests: 0,
             rate_limit_window: std::time::Duration::from_secs(60),
             rate_limit_max_keys: 1,
@@ -4835,14 +4836,52 @@ mod tests {
         );
     }
 
+    /// Named contract: Domains table is the config union, including static
+    /// vhost keys and extra mail hostnames, still labeled config inventory.
     #[test]
     fn domains_page_has_hostname_role_source_columns() {
-        let html = render_domains_page(&sample_data("/domains"));
+        let mut cfg = AppConfig::example_test();
+        let root = std::path::PathBuf::from("/var/lib/surmount/static-sites/fixture");
+        for host in [
+            "yiffa.app",
+            "www.yiffa.app",
+            "baxterartworks.com",
+            "www.baxterartworks.com",
+            "cryptoquick.com",
+            "www.cryptoquick.com",
+        ] {
+            cfg.static_vhosts.insert(host.into(), root.clone());
+        }
+        cfg.extra_mail_hostnames = vec!["mail.cryptoquick.com".into()];
+        let mut data = sample_data("/domains");
+        data.domains = domains_inventory(&cfg);
+        let html = render_domains_page(&data);
         assert!(html.contains("Hostname"));
         assert!(html.contains("Role"));
         assert!(html.contains("Source note"));
         assert!(html.contains("example.test"));
         assert!(html.contains("config inventory"));
+        for must in [
+            "yiffa.app",
+            "baxterartworks.com",
+            "cryptoquick.com",
+            "www.cryptoquick.com",
+            "mail.cryptoquick.com",
+        ] {
+            assert!(
+                html.contains(must),
+                "Domains page must list {must}; snippet: {}",
+                html.chars().take(800).collect::<String>()
+            );
+        }
+        assert!(
+            html.contains("source: config"),
+            "page must stay config inventory, not Stalwart"
+        );
+        assert!(
+            !html.contains("source: stalwart"),
+            "Domains page must not claim Stalwart as inventory source"
+        );
     }
 
     #[test]

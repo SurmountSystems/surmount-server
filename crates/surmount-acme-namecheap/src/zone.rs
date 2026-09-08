@@ -9,7 +9,7 @@ use anyhow::Result;
 
 use crate::cred::die;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
     pub name: String,
     pub r#type: String,

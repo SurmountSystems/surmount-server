@@ -4,11 +4,23 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-09-03 (HTTP/3 NIP-07 login 500: axum-h3 omits Axum `ConnectInfo` on `POST /api/v1/auth/session`; optional peer, do not ban unspecified). Prior 2026-09-02 (Splora REST requires a Bitcoin JSON-RPC peer by design; indexer is not Core; remote shape is `daemonDir = null` plus cookie path plus `daemonRpcAddr`; node inventory is tasked in the splora tree). Prior same day (flake input `splora` locked to `9481e4cb87273aa99b0357be48503765beadb919`; `surmount.sploraIndexer` stays the host-local single knob over first-class instance JSON-RPC options; five esplora Hosts and UDP 443 / HTTP/3 stay optional Axum edge, not mempool REST prerequisites; Unix socket or one existing Host is enough; do not map REST onto the mail console Host). Prior 2026-09-01 (`surmount.sploraIndexer` host-local wrap for one remote JSON-RPC indexer). Prior 2026-09-01 (flake input `splora` locked to `343727487988ed0a764674ff21c0750465b9a3e8`; overlay consumes input packages; no this-tree crane wrap). Prior 2026-09-01 (Splora Host map: TCP HTTP/2 vs UDP HTTP/3; leftover esplora certificate hostnames as complete sentences). Prior 2026-09-01 (flake input `splora` on the `surmount` branch). Prior 2026-09-01 (documented esplora Hosts for the Splora Unix proxy; flake input `splora`). Prior 2026-08-31 (splora Unix sockets behind Axum; HTTP/3 QUIC on UDP :443). Prior 2026-08-25 (operator bins are `nix run .#...`.) Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (live production leaf is 18 certificate
+**Last updated:** 2026-09-07 (intended production leaf is **one** Let's
+Encrypt PEM pair (`with_single_cert`) covering **20** certificate
+hostnames: the live 18 plus `cryptoquick.com` and `www.cryptoquick.com`.
+Live leaf as of this measure still has **18** names (CT): extra static
+six zones apex+www, surmount apex/www/mail/services/mta-sts, and
+`mail.cryptoquick.com`. Missing: `cryptoquick.com` and
+`www.cryptoquick.com`. That mismatch is why cryptoquick HTTPS fails
+verify. Validating A for cryptoquick apex/www succeeds (AD true).
+Leftover parent DS key tag 2368 is gone. The old wait-for-SERVFAIL gate
+is closed as a live A-lookup gate. SHA-1 parent DS digest type 1 remains
+standing DNSSEC quality debt in operator-facts Monday leftover; it is
+not the HTTPS cause. Esplora Hosts stay off this leaf. Do not invent
+leftover Namecheap clicks. Do not MX-flip Baxter.) Prior 2026-09-03 (HTTP/3 NIP-07 login 500: axum-h3 omits Axum `ConnectInfo` on `POST /api/v1/auth/session`; optional peer, do not ban unspecified). Prior 2026-09-02 (Splora REST requires a Bitcoin JSON-RPC peer by design; indexer is not Core; remote shape is `daemonDir = null` plus cookie path plus `daemonRpcAddr`; node inventory is tasked in the splora tree). Prior same day (flake input `splora` locked to `9481e4cb87273aa99b0357be48503765beadb919`; `surmount.sploraIndexer` stays the host-local single knob over first-class instance JSON-RPC options; five esplora Hosts and UDP 443 / HTTP/3 stay optional Axum edge, not mempool REST prerequisites; Unix socket or one existing Host is enough; do not map REST onto the mail console Host). Prior 2026-09-01 (`surmount.sploraIndexer` host-local wrap for one remote JSON-RPC indexer). Prior 2026-09-01 (flake input `splora` locked to `343727487988ed0a764674ff21c0750465b9a3e8`; overlay consumes input packages; no this-tree crane wrap). Prior 2026-09-01 (Splora Host map: TCP HTTP/2 vs UDP HTTP/3; leftover esplora certificate hostnames as complete sentences). Prior 2026-09-01 (flake input `splora` on the `surmount` branch). Prior 2026-09-01 (documented esplora Hosts for the Splora Unix proxy; flake input `splora`). Prior 2026-08-31 (splora Unix sockets behind Axum; HTTP/3 QUIC on UDP :443). Prior 2026-08-25 (operator bins are `nix run .#...`.) Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (live production leaf was 18 certificate
 hostnames: six extra static zones apex+www plus surmount apex, www,
 mail, services, mta-sts, plus **mail.cryptoquick.com** for IMAP/SMTP.
-Extra-vhost HTTPS live for those six. `cryptoquick.com` apex/www stay
-off the leaf. Prior 2026-08-18: laptop Let's Encrypt renew is
+Extra-vhost HTTPS live for those six. `cryptoquick.com` apex/www stayed
+off the leaf that day. Prior 2026-08-18: laptop Let's Encrypt renew is
 `just laptop-renew-cert -- --check|--live --directory production`.
 `--live` issues only when due. Host ACME stays off. Stalwart 0.16.15
 query resolves certificate hostnames plus id.)
@@ -327,13 +339,18 @@ speak HTTP/3. Splora does not listen on UDP.
   local Stalwart Domain; public MX still parked. Static-site-only extras
   are **not** mail domains.
 
-  **Not live in browsers:** cryptoquick.com + www. Leftover parent DS
-  (key tag 2368, alg 13, digest type 1) with no child DNSKEY; validating
-  A SERVFAIL. Host tree is populated; insecure `-k` HTTP 200 packaged
-  site titled Hunter Beast. Live leaf does **not** include these names
-  (intentional). Operator click still required: Namecheap Domain List,
-  Manage cryptoquick.com, Advanced DNS, DNSSEC, toggle off. Do not
-  re-add key tag 2368. In-tree tools cannot delete DS.
+  **Not live in browsers as trusted HTTPS (2026-09-07):**
+  `cryptoquick.com` and `www.cryptoquick.com`. Validating A lookups
+  succeed (AD true). Leftover parent DS key tag 2368 is gone. The live
+  production leaf still has **18** names and does **not** include those
+  two. HTTPS fails at certificate hostname mismatch on the same Axum
+  listener and the same Let's Encrypt YE2 leaf. Intended leaf is **20**
+  names on one PEM (`with_single_cert`): the live 18 plus those two.
+  Host tree is populated; insecure `-k` can still return packaged site
+  titled Hunter Beast. Do **not** invent leftover Namecheap DNSSEC
+  clicks. SHA-1 parent DS digest type 1 remains standing DNSSEC quality
+  debt in operator-facts Monday leftover; it is not the HTTPS cause.
+  Esplora Hosts stay off this leaf. Do **not** MX-flip Baxter.
 
   Not extra Hosts (do not Host-serve): btcdragonlord.com (not
   operator-owned), btckitties.com (archived), denver.space,
@@ -350,13 +367,19 @@ speak HTTP/3. Splora does not listen on UDP.
   Those six extra zones already have DNS + production Let's Encrypt
   certificate hostnames. `https://<hostname>/` and
   `https://www.<hostname>/` are live **200**. Do not re-issue just to
-  add a name that is already on that leaf. **Live 2026-08-21:**
-  `mail.cryptoquick.com` is on this shared production leaf (IMAP :993 /
-  SMTPS :465 identity). Do **not** add `cryptoquick.com` /
-  `www.cryptoquick.com` unless a later slice proves those web names are
-  required. Extra-zone DNS-01 uses the dispatcher hook; the laptop
-  `--issue` wrap must re-export `HOME` (ACME `env_clear`) so dispatch
-  can find `namecheap/<sld.tld>.env`.
+  add a name that is already on that leaf. **Live 2026-08-21 through
+  2026-09-07:** `mail.cryptoquick.com` is on this shared production leaf
+  (IMAP :993 / SMTPS :465 identity). Cryptoquick apex/www are first-class
+  web Hosts like the six extra static zones. **Live 2026-09-07/08:**
+  production leaf is **20** names on the same PEM (`with_single_cert`),
+  including `exophiles.org` and `www.exophiles.org`. Do **not** omit
+  Namecheap static zones when adding cryptoquick apex/www. Pass an
+  explicit `--domains` list of those 20 names so host-profile Cloudflare
+  extras (`btcdragonlord.com`, `btckitties.com`) cannot sneak in.
+  `--live` does **not** detect missing certificate hostnames.
+  Extra-zone DNS-01 uses the dispatcher hook; the laptop `--issue` wrap
+  must re-export `HOME` (ACME `env_clear`) so dispatch can find
+  `namecheap/<sld.tld>.env`.
 
   Adding a name: copy existing apex/www A/AAAA with
   `just dns-zone-namecheap -- --credentials FILE -- list` then
@@ -384,7 +407,8 @@ speak HTTP/3. Splora does not listen on UDP.
   `mta-sts.<primaryDomain>` on the allowlist (HTTP/2 uses Host or URI
   `:authority` via `request_authority_host`). **Live (2026-08-12):** production
   leaf includes `mta-sts` and **mail** (plus six extra static zones
-  apex+www and `mail.cryptoquick.com`; 18 names total). Host-local `mtaStsMode=testing`; public
+  apex+www, cryptoquick apex/www, and `mail.cryptoquick.com`; live **20**
+  names). Host-local `mtaStsMode=testing`; public
   policy **200** over HTTP/1.1 and HTTP/2. Stay **testing** while DNS MX
   is eforward. DNS + policy body: [DNS.md](DNS.md).
 - **In-process ACME (operator-directed scaffold, 2026-08-10; A1/A2 2026-08-10):**
@@ -618,7 +642,9 @@ change issuance.
   (yiffa.app, baxterartworks.com, btcfur.com, iantuckerstudios.com,
   nostrfurs.com, exophiles.org) are on the live Let's Encrypt production
   leaf (apex+www). cryptoquick Hosts on this :443 map may exist; they are
-  **not** added to the leaf while leftover parent DS SERVFAILs. Mail stays
+  first-class static vhosts like those six. Live leaf still omits
+  cryptoquick apex/www (**18** names). Intended leaf is **20** names on
+  one PEM. The SERVFAIL A-lookup gate is closed. Mail stays
   unmapped. Tor Browser purple pill still not claimed.
 
 Header comment in `modules/web.nix` must keep pointing here.

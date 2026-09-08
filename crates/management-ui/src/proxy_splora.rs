@@ -872,6 +872,7 @@ mod tests {
             http3: crate::http3::Http3Config::default(),
             apex_public_root: None,
             static_vhosts: Default::default(),
+            extra_mail_hostnames: Vec::new(),
             rate_limit_max_requests: 0,
             rate_limit_window: Duration::from_secs(60),
             rate_limit_max_keys: 1000,

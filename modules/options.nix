@@ -563,6 +563,20 @@ in
         '';
       };
 
+      extraMailHostnames = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        example = [ "mail.cryptoquick.com" ];
+        description = ''
+          Extra mail Hosts that are not mailHostname and not staticVhosts keys
+          (for example mail.cryptoquick.com on the production leaf). Emitted as
+          SURMOUNT_EXTRA_MAIL_HOSTNAMES (comma list) for the management UI
+          domains inventory. Do not parse /etc/surmount/mail-domains.txt as
+          source of truth. The management-ui module mkDefaults
+          mail.cryptoquick.com when provenStaticVhosts includes cryptoquick.com.
+        '';
+      };
+
       rateLimitMaxRequests = mkOption {
         type = types.ints.unsigned;
         default = 120;

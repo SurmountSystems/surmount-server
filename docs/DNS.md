@@ -7,7 +7,17 @@ real user mail. Validate send path with
 [mail-tester.com](https://www.mail-tester.com/) and your provider's
 blocklist checks.
 
-**Last updated:** 2026-08-24 (self-asserted BIMI TXT at
+**Last updated:** 2026-09-07 (intended production leaf is **20**
+certificate hostnames on one Let's Encrypt PEM (`with_single_cert`): the
+live 18 plus `cryptoquick.com` and `www.cryptoquick.com`. Live leaf
+still has **18** names (CT). Validating A for cryptoquick apex/www
+succeeds (AD true). Leftover parent DS key tag 2368 is gone. HTTPS
+failure on those two names is certificate hostname mismatch, not
+SERVFAIL. The old wait-for-SERVFAIL gate is closed as a live A-lookup
+gate. SHA-1 parent DS digest type 1 remains standing DNSSEC quality debt
+in operator-facts Monday leftover; it is not the HTTPS cause. Do not
+invent leftover Namecheap clicks. Do not MX-flip Baxter. Esplora Hosts
+stay off this leaf.) Prior 2026-08-24 (self-asserted BIMI TXT at
 `default._bimi.surmount.systems`:
 `v=BIMI1; l=https://surmount.systems/bimi.svg;`. Logo is
 `https://surmount.systems/bimi.svg` (favicon-form Tiny-PS SVG, site repo
@@ -22,12 +32,10 @@ Encrypt; public `_dmarc` at `1.1.1.1` is **`p=quarantine`** (do **not**
 use `p=reject`; unsigned, no DS). `cryptoquick.com` child zone
 (`dig @1.1.1.1 +cd`): dual DKIM, TLS-RPT, CAA, SPF
 `a:mail.cryptoquick.com -all`, MX `10 mail.cryptoquick.com`, DMARC
-**`p=quarantine`** (leave as-is). Validating resolvers **SERVFAIL**
-(leftover parent DS key tag **2368** alg 13 digest type 1 SHA-1, no
-child DNSKEY). Operator UI this measure: Advanced DNS **DNSSEC Status
-off**. Do **not** re-add 2368. Same hosted **ON** after that DS is gone.
-Do **not** add `cryptoquick.com` / `www` to the production leaf. **Live
-2026-08-21:** `mail.cryptoquick.com` **is** on the shared production
+**`p=quarantine`** (leave as-is). That day's validating resolvers
+**SERVFAIL**ed on leftover parent DS key tag **2368** (alg 13 digest
+type 1 SHA-1, no child DNSKEY). That A-lookup gate is **closed** as of
+2026-09-07. **Live 2026-08-21:** `mail.cryptoquick.com` **is** on the shared production
 leaf (IMAP/SMTP identity). Extra MTA-STS wait (not on this leaf). `baxterartworks.com` EmailType still
 **FWD**; public MX still eforward1-5 (do **not** claim MX flipped).
 Mailbox `_dmarc.baxterartworks.com` **intended** is **`p=quarantine`**
@@ -47,7 +55,8 @@ MTA-STS not published.
 registrar eforward on a claimed mailbox. Extra domains do **not**
 entirely lack dual DKIM / TLS-RPT / CAA: cryptoquick child has them;
 Baxter getHosts has them; Baxter public NS has not republished.) Prior:
-17 certificate hostnames; extra-vhost HTTPS live for six static zones.
+17 then 18 certificate hostnames; extra-vhost HTTPS live for six static
+zones. Intended leaf is 20 names as of 2026-09-07.
 
 Living companions: [EDGE_AND_TLS.md](EDGE_AND_TLS.md),
 [research/tls-trust-and-acme.md](research/tls-trust-and-acme.md),
@@ -80,7 +89,7 @@ Apply, for **each mail domain we actually use**:
 | Record class | What "same as primary" means |
 |--------------|------------------------------|
 | Public DNS | Working nameservers we can edit. Namecheap hosted DNS when we are the registrar. Leftover Custom DNS / Cloudflare NS is not enough for records we must change. |
-| DNSSEC honesty | Mail domains get the **same hosted DNSSEC** as `surmount.systems`: Namecheap **DNSSEC Status** **ON**. Leftover parent **DS** without a matching child DNSKEY SERVFAILs validating resolvers (`cryptoquick.com` was this). That is a **bug to clear then sign**, not a reason to stay unsigned. **DS digest type 1 (SHA-1) is also a fail**, even if a DNSKEY exists. Audit **INFO** for unsigned with no DS is not the product end state. Published Namecheap API has **no** DNSSEC/DS commands. Zone tool is A/AAAA/TXT/CAA/MX only. **Sequencing:** we asked cryptoquick **OFF** only because leftover DS key tag **2368** (algorithm 13, digest type 1) had no DNSKEY. **Live 2026-08-20:** operator UI **DNSSEC Status off**; DS 2368 still present; do **not** re-add 2368 by hand. Toggle **ON** after 2368 is gone (enabling while stale SHA-1 DS remains can stay SERVFAIL). Do **not** add `cryptoquick.com` / `www.cryptoquick.com` to the production LE leaf until a later web slice proves those names. **Live 2026-08-21:** `mail.cryptoquick.com` is on the shared production leaf. Path: [Best DNSSEC we can actually run](#best-dnssec-we-can-actually-run). Remaining work: [RESIDUAL.md](../RESIDUAL.md). |
+| DNSSEC honesty | Mail domains get the **same hosted DNSSEC** as `surmount.systems`: Namecheap **DNSSEC Status** **ON**. Leftover parent **DS** without a matching child DNSKEY SERVFAILs validating resolvers (`cryptoquick.com` was this). That is a **bug to clear then sign**, not a reason to stay unsigned. **DS digest type 1 (SHA-1) is also a fail**, even if a DNSKEY exists. Audit **INFO** for unsigned with no DS is not the product end state. Published Namecheap API has **no** DNSSEC/DS commands. Zone tool is A/AAAA/TXT/CAA/MX only. **Sequencing:** we asked cryptoquick **OFF** only because leftover DS key tag **2368** (algorithm 13, digest type 1) had no DNSKEY. **Live 2026-09-07:** leftover parent DS key tag 2368 is **gone**. Validating A for cryptoquick apex/www succeeds (AD true). That SERVFAIL wait is **not** the live A-lookup gate. SHA-1 parent DS digest type 1 remains standing DNSSEC quality debt in operator-facts Monday leftover; it is not the HTTPS cause. Do **not** re-add 2368 by hand. Do **not** invent leftover Namecheap clicks. Intended production leaf is **20** certificate hostnames on one PEM (`with_single_cert`). Live leaf still has **18** names and still omits `cryptoquick.com` / `www.cryptoquick.com`. **Live 2026-08-21:** `mail.cryptoquick.com` is on the shared production leaf. Path: [Best DNSSEC we can actually run](#best-dnssec-we-can-actually-run). Remaining work: [RESIDUAL.md](../RESIDUAL.md). |
 | SPF | TXT that authorizes this host (and the current MX while forwarding is still live). |
 | Dual DKIM TXT | Selectors we actually sign with: `stalwart` (Ed25519) **and** `stalwart-rsa` (RSA-4096). Not one selector. |
 | DMARC | Operator-directed policy. Do **not** use `p=reject`. **Live 2026-08-20:** `surmount.systems` public `_dmarc` is **`p=quarantine`**; `cryptoquick.com` child (`+cd`) is **`p=quarantine`** (leave as-is); `baxterartworks.com` `_dmarc` **intended** is **`p=quarantine`**. Public recursive may stay NXDOMAIN while EmailType is FWD even when getHosts has the TXT. Do **not** restore getHosts `_dmarc` to `p=none`. Keep existing rua/ruf and aspf/adkim unless missing. |
@@ -96,7 +105,8 @@ exist before public MX points here. **Primary** `surmount.systems`
 public MX is **live** (2026-08-20): `10 mail.surmount.systems` after
 the operator Custom MX click and laptop `--live set-mx`.
 `cryptoquick.com` public MX is already this host (`10 mail.cryptoquick.com`,
-Custom MX; validating lookups still SERVFAIL on leftover DS).
+Custom MX). Validating A for cryptoquick apex/www succeeds as of
+2026-09-07 (AD true). Leftover parent DS key tag 2368 is gone.
 `baxterartworks.com` public MX stays **parked** (EmailType **FWD**,
 eforward1-5) until the operator asks for Custom MX. `--live set-mx`
 fails closed while FWD. Do not invent a Baxter MX flip.
@@ -138,7 +148,7 @@ publish it (the UI does not offer a picker).
 
 | Apex | Now | Why |
 |------|-----|-----|
-| `cryptoquick.com` | **Enable after leftover DS 2368 is gone.** Same hosted **DNSSEC Status ON** as `surmount.systems` is still the goal. | Mail domain, not second-class. Leftover parent DS key tag **2368** (algorithm 13, digest type 1 SHA-1, no child DNSKEY) is a SERVFAIL **bug to clear then sign**, not a permanent off. **Live 2026-08-20:** DS 2368 still present (`1.1.1.1`); validating **SERVFAIL**; child visible only with `+cd` (SOA serial 1787271066). Operator UI this measure: Advanced DNS **DNSSEC Status off**. Do **not** re-add 2368 by hand. We asked OFF because unmatched SHA-1 DS SERVFAILs. Toggle **ON** only after 2368 is gone (or it can stay SERVFAIL until that DS drops). Prove **Secure** after that wait. Do **not** add apex/www to the production leaf until validating lookups succeed. |
+| `cryptoquick.com` | Leftover parent DS key tag **2368** is **gone** (live 2026-09-07). Validating A for apex/www succeeds (AD true). Same hosted **DNSSEC Status ON** as `surmount.systems` is still the goal. | Mail domain, not second-class. That leftover unmatched DS was a SERVFAIL **bug to clear then sign**, not a permanent off. The A-lookup SERVFAIL gate is **closed**. SHA-1 parent DS digest type 1 remains standing DNSSEC quality debt in operator-facts Monday leftover; it is not the HTTPS cause. Do **not** re-add 2368 by hand. Do **not** invent leftover Namecheap clicks. Intended production leaf includes cryptoquick apex/www on the same PEM (20 names). Live leaf still omits those two names (18 names). Prove **Secure** when claiming DNSSEC end state. |
 | `surmount.systems` | Operator already clicked hosted **ON**. | **Live 2026-08-20:** not yet Secure. Parent DS NXRRSET. No apex DNSKEY. SOA unsigned. NS Namecheap registrar-servers. Not SERVFAIL. Waiting for Namecheap to publish matching DS+DNSKEY. Algorithm 13 is acceptable. |
 | Other Namecheap-hosted mail zones (`baxterartworks.com` when it is a mailbox domain) | Same hosted **ON** as the primary. Do **not** enable during a broken mid-flip. | Same class, not leftover-unsigned. Static-site-only extra vhosts are **not** automatically mail domains. Operator click only. Agents cannot toggle via API. |
 
@@ -677,9 +687,10 @@ off). Primary public MX is this host (2026-08-20). Stay **testing**.
 Do **not** `enforce` until the operator asks. Dual-pin: [EDGE_AND_TLS.md](EDGE_AND_TLS.md),
 [OPS.md](OPS.md).
 
-**Certificate hostnames (not a storage area network):** live production
-leaf (2026-08-21, LE production YE2, laptop DNS-01, host ACME off) is
-**18** names:
+**Certificate hostnames (not a storage area network):** intended
+production leaf is **one** Let's Encrypt PEM pair (`with_single_cert`)
+covering **20** names. Live leaf as of 2026-09-07 (LE production YE2,
+laptop DNS-01, host ACME off, public CT) is still **18** names:
 `baxterartworks.com`, `www.baxterartworks.com`, `btcfur.com`,
 `www.btcfur.com`, `exophiles.org`, `www.exophiles.org`,
 `iantuckerstudios.com`, `www.iantuckerstudios.com`, `nostrfurs.com`,
@@ -687,12 +698,17 @@ leaf (2026-08-21, LE production YE2, laptop DNS-01, host ACME off) is
 `www.surmount.systems`, `mail.surmount.systems`,
 `services.surmount.systems`, `mta-sts.surmount.systems`,
 `mail.cryptoquick.com`.
-`mail.surmount.systems` and `mail.cryptoquick.com` **are** on that leaf
-(IMAP/SMTPS). Six extra static zones are **live** HTTPS 200. Do **not**
-add `cryptoquick.com` / `www.cryptoquick.com` unless a later web slice
-proves those names. Do **not**
-re-issue just to add a name already on that leaf. Renew path: private
-host-profile domains + `just laptop-renew-cert -- --directory production`
+The two names still missing from the live leaf are `cryptoquick.com` and
+`www.cryptoquick.com`. That hostname mismatch is why cryptoquick HTTPS
+fails verify. Validating A for those names succeeds (AD true). Leftover
+parent DS key tag 2368 is gone. `mail.surmount.systems` and
+`mail.cryptoquick.com` **are** on the live leaf (IMAP/SMTPS). Six extra
+static zones are **live** HTTPS 200. After the tree lists the two missing
+names, laptop `--issue` is operator-gated (Namecheap custody). `--live`
+does **not** detect missing certificate hostnames. Do **not**
+re-issue just to add a name already on that leaf. Esplora Hosts stay off
+this leaf. Renew path: private host-profile `acme_domains` +
+`just laptop-renew-cert -- --issue --directory production`
 (Namecheap ClientIp = laptop egress). Extra-zone names need
 `--hook` from `nix run .#acme-dns-hook-namecheap-dispatch`. Mail-plane apply:
 `just point-stalwart-mail-tls`. Then restart `stalwart-mail` so File
@@ -813,11 +829,11 @@ Domains can already exist for local delivery (`cryptoquick.com`,
 Same record classes as the primary. Dual DKIM TXT, not one selector.
 Do not invent MX flips. Documentation addresses only.
 
-**Live extra-domain facts (2026-08-20):**
+**Live extra-domain facts (2026-08-20 mail records; 2026-09-07 A and leaf):**
 
 | Apex | Mail records now | Public MX | Still remaining |
 |------|------------------|-----------|-----------------|
-| `cryptoquick.com` | Child (`+cd` at `1.1.1.1`): dual DKIM, TLS-RPT, CAA, SPF `a:mail.cryptoquick.com -all`, `_dmarc` `p=quarantine` (leave as-is). Validating **SERVFAIL** on leftover parent DS 2368. Extra MTA-STS wait. | Already `10 mail.cryptoquick.com` (Custom MX). | Leftover DS 2368 (operator UI DNSSEC **off**; do not re-add 2368). Do not add apex/www to the production leaf. |
+| `cryptoquick.com` | Dual DKIM, TLS-RPT, CAA, SPF `a:mail.cryptoquick.com -all`, `_dmarc` `p=quarantine` (leave as-is). **Live 2026-09-07:** validating A for apex/www succeeds (AD true). Leftover parent DS key tag 2368 is gone. Extra MTA-STS wait. | Already `10 mail.cryptoquick.com` (Custom MX). | Live leaf still omits apex/www (18 names). Intended leaf is 20 names on one PEM. Laptop `--issue` after the tree lists those names is operator-gated (Namecheap custody). SHA-1 parent DS digest type 1 remains standing DNSSEC quality debt in operator-facts Monday leftover; it is not the HTTPS cause. Do not re-add 2368. Do not invent leftover Namecheap clicks. |
 | `baxterartworks.com` | getHosts (11 records): dual DKIM (same `p=` as primary), TLS-RPT, CAA Let's Encrypt, SPF `a:mail.surmount.systems` plus eforward include `-all`. `_dmarc` **intended** **`p=quarantine`**. Do **not** restore getHosts `_dmarc` to `p=none`. Leftover `_acme-challenge` TXT still in getHosts. Extra MTA-STS not published. | EmailType **FWD**; public MX eforward1-5. Do **not** claim MX flipped. `--live set-mx` fail-closed while FWD. | Public NS republish/lag: `1.1.1.1` still NXDOMAIN for DKIM/`_dmarc`/TLS-RPT even when getHosts has the TXT (EmailType FWD). Empty CAA, old eforward-only SPF `~all`, SOA serial **1787245654** not bumped. Custom MX only if the operator asks. |
 
 ```dns
@@ -877,11 +893,14 @@ TLS-RPT, CAA, or MTA-STS. `baxterartworks.com` is also a local Stalwart
 Domain (getHosts already has dual DKIM / TLS-RPT / CAA / SPF; `_dmarc`
 intended **`p=quarantine`**; public `_dmarc` may stay NXDOMAIN while
 EmailType is FWD; public MX still eforward). Do not invent
-mail on yiffa.app or other static-only extras. **Not live in browsers:**
-cryptoquick.com leftover parent DS (key tag 2368, alg 13, digest type 1,
-no child DNSKEY); live 2026-08-20 validating SERVFAIL; Host tree
-populated; operator UI DNSSEC **off** until 2368 is gone; do **not** add those names to
-the leaf until validating lookups succeed. Unowned names are not ours. Do not
+mail on yiffa.app or other static-only extras. **Not live in browsers as
+trusted HTTPS (2026-09-07):** `cryptoquick.com` and `www.cryptoquick.com`
+fail verify because the live 18-name leaf omits them. Validating A
+succeeds (AD true). Leftover parent DS key tag 2368 is gone. Host tree
+is populated. Intended leaf is 20 names on one PEM. SHA-1 parent DS
+digest type 1 remains standing DNSSEC quality debt in operator-facts
+Monday leftover; it is not the HTTPS cause. Do **not** invent leftover
+Namecheap clicks. Unowned names are not ours. Do not
 Host-serve btcdragonlord.com, btckitties.com, denver.space, or
 justsaybits.org.
 Point `@` and `www` at those existing addresses (`just dns-zone-namecheap --

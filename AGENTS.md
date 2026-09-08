@@ -38,6 +38,13 @@ Product detail lives under `docs/`. This file is standing law only.
   **which hostnames this cert covers**. If the wire term is needed once,
   write it out: Subject Alternative Name (the cert hostname list), then use
   plain words.
+- **Operator-facing chat is CATE (operator 2026-09-07).** Follow Concise
+  American Technical English, numbered specification
+  [0005_CATE.md](https://github.com/SurmountSystems/specs/blob/main/0005_CATE.md)
+  (accessed: 2026-09-07). Do **not** say **production leaf**. Say the
+  Let's Encrypt certificate this host presents, and the names on that
+  certificate. Decoder-ring nicknames for that PEM pair are forbidden
+  in chat to the operator. Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 - **Production public HTTPS = Let's Encrypt production.** Operator has been
   clear: production uses **Let's Encrypt** (the real, browser-trusted
   directory). Do **not** talk as if production certs might be some other CA
@@ -74,15 +81,20 @@ Product detail lives under `docs/`. This file is standing law only.
   One-time "remind me next time we talk" leftovers go in that facts file
   and the remaining-work pointer. Do **not** start a recurring scheduler
   loop for that.
-  **Prove the operator gate (operator 2026-09-02).** Do not list a step
+  **Prove the operator gate (operator 2026-09-02; laptop issue 2026-09-07).** Do not list a step
   as operator residual unless you have evidence the agent cannot do it:
   secrets custody, standing forbid of the real `just deploy-host`
   switch and of `just check-remote` (2026-08-25; narrowed 2026-09-02:
   `just deploy-host -- --dry-run` is required agent work), hypervisor,
-  Namecheap click, or the operator using a TUI they asked to sit in.
+  Namecheap **hosted DNSSEC Status** click, or the operator using a TUI they asked to sit in.
   Host-local enable is agent work when this machine already has
   host-local. Using `just grok-oss` after the guest has the package is
-  the product, not a leftover click. Each leftover sentence names
+  the product, not a leftover click. If this laptop already has the
+  Namecheap env files (mode 0600 regular files under
+  `~/.local/share/surmount/`), `just laptop-renew-cert` is **agent work**.
+  Do not leftover that recipe as an operator click. Do not print the env.
+  "Laptop custody" means DNS-01 uses laptop egress (ClientIp), not that
+  the operator must type the command. Each leftover sentence names
   **why** the agent cannot do that step. Dumping a six-step ritual
   without that proof is a broken tool.
 - **Recommendations need reasons and sources (operator 2026-08-24).** When

@@ -2647,6 +2647,21 @@ let
     assert lib.all (h: !(lib.hasInfix h jsonBody)) dropHosts;
     "t41b-static-vhosts-default-proven-roots-ok";
 
+  # Extra mail Hosts: default mail.cryptoquick.com when provenStaticVhosts
+  # includes cryptoquick.com. Inventory env, not mail-domains.txt.
+  t41c-extra-mail-hostnames-env =
+    let
+      e = evalSurmount { managementUi.enable = true; };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = builtins.unsafeDiscardStringContext (lib.concatStringsSep "\n" envList);
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.managementUi.extraMailHostnames == [ "mail.cryptoquick.com" ];
+    assert builtins.any (x: x == "SURMOUNT_EXTRA_MAIL_HOSTNAMES=mail.cryptoquick.com") envList;
+    assert lib.hasInfix "SURMOUNT_EXTRA_MAIL_HOSTNAMES=mail.cryptoquick.com" envBlob;
+    "t41c-extra-mail-hostnames-env-ok";
+
   t42-journal-persistent-when-logging-on =
     let
       e = evalSurmount { };
@@ -3103,6 +3118,7 @@ let
     t40-apex-public-root-packaged-site
     t41-static-vhosts-env-and-readonly-paths
     t41b-static-vhosts-default-proven-roots
+    t41c-extra-mail-hostnames-env
     t42-journal-persistent-when-logging-on
     t44-lake-default-off
     t44b-lake-enable-memory-cap

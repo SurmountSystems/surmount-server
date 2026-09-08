@@ -4,6 +4,7 @@ result-*
 crates/target/
 *.rmeta
 *.rlib
+target
 
 # Editor / OS
 .DS_Store

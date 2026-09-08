@@ -59,6 +59,7 @@ let
       ""
     else
       "${pkgs.writeText "surmount-static-vhosts.json" (builtins.toJSON staticVhostsJsonMap)}";
+  extraMailHostnamesCsv = lib.concatStringsSep "," (lib.filter (h: h != "") ui.extraMailHostnames);
   hs = cfg.artiHiddenService;
   ac = cfg.accessControl;
   vw = cfg.vaultwarden;
@@ -183,6 +184,7 @@ let
     ui.apexPublicRoot != null && ui.apexPublicRoot != ""
   ) "SURMOUNT_APEX_PUBLIC_ROOT=${ui.apexPublicRoot}"
   ++ optional (staticVhostsFile != "") "SURMOUNT_STATIC_VHOSTS_FILE=${staticVhostsFile}"
+  ++ optional (extraMailHostnamesCsv != "") "SURMOUNT_EXTRA_MAIL_HOSTNAMES=${extraMailHostnamesCsv}"
   ++ optional (ui.tlsCertPath != "") "SURMOUNT_TLS_CERT=${ui.tlsCertPath}"
   ++ optional (ui.tlsKeyPath != "") "SURMOUNT_TLS_KEY=${ui.tlsKeyPath}"
   ++ optional ui.allowCleartextHttpsEscape "SURMOUNT_HTTPS_ALLOW_CLEARTEXT_ESCAPE=1"
@@ -513,6 +515,11 @@ in
       lib.mkDefault packagedPublicSite
     );
     surmount.managementUi.staticVhosts = lib.mkDefault provenStaticVhosts;
+    # Extra mail Hosts that are not static vhost keys. cryptoquick.com is a
+    # proven extra zone; mail.cryptoquick.com is on the leaf.
+    surmount.managementUi.extraMailHostnames = lib.mkDefault (
+      lib.optional (provenStaticVhosts ? "cryptoquick.com") "mail.cryptoquick.com"
+    );
     assertions = [
       {
         assertion = pkg != null;

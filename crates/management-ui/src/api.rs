@@ -3,6 +3,7 @@
 //! Inventory helpers are shared with SSR pages so HTML and JSON stay consistent.
 //! Accounts never invent live mailboxes without a real directory connection.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -46,25 +47,39 @@ pub struct DomainsInventory {
 }
 
 /// Build config-backed domain inventory (not a live Stalwart directory list).
+///
+/// Union, dedupe, stable-sort: primary + mail + services, derived
+/// `www.{primary}` and `mta-sts.{primary}`, extra mail hostnames, then
+/// every `static_vhosts` key. First role wins when a name appears twice.
 pub fn domains_inventory(config: &AppConfig) -> DomainsInventory {
+    let mut by_name: BTreeMap<String, String> = BTreeMap::new();
+    let mut insert = |name: &str, role: &str| {
+        let host = name.trim().to_ascii_lowercase();
+        if host.is_empty() {
+            return;
+        }
+        by_name.entry(host).or_insert_with(|| role.to_string());
+    };
+    insert(&config.primary_domain, "primary");
+    insert(&config.mail_hostname, "mail_hostname");
+    insert(&config.services_hostname, "services_hostname");
+    insert(&format!("www.{}", config.primary_domain), "www");
+    insert(&format!("mta-sts.{}", config.primary_domain), "mta_sts");
+    for host in &config.extra_mail_hostnames {
+        insert(host, "extra_mail_hostname");
+    }
+    for host in config.static_vhosts.keys() {
+        insert(host, "static_vhost");
+    }
+    let domains = by_name
+        .into_iter()
+        .map(|(name, role)| DomainEntry { name, role })
+        .collect();
     DomainsInventory {
-        domains: vec![
-            DomainEntry {
-                name: config.primary_domain.clone(),
-                role: "primary".into(),
-            },
-            DomainEntry {
-                name: config.mail_hostname.clone(),
-                role: "mail_hostname".into(),
-            },
-            DomainEntry {
-                name: config.services_hostname.clone(),
-                role: "services_hostname".into(),
-            },
-        ],
+        domains,
         source: "config",
-        note: "Inventory from deploy/config (SURMOUNT_* hostnames), not Stalwart directory. \
-Wire directory API when available."
+        note: "Inventory from deploy/config (SURMOUNT_* hostnames, static vhosts, \
+extra mail hostnames), not Stalwart directory. Wire directory API when available."
             .into(),
     }
 }
@@ -1016,55 +1031,9 @@ mod tests {
     use super::*;
     use crate::config::AppConfig;
     use crate::directory::{Directory, MockDirectory, UnavailableDirectory};
-    use crate::tls::ListenMode;
-    use std::net::SocketAddr;
-    use std::time::Duration;
-    use surmount_management_ui::ban::{BanBackendKind, BanConfig, BanEnforcement};
 
     fn sample_config() -> AppConfig {
-        AppConfig {
-            listen: SocketAddr::from(([127, 0, 0, 1], 8090)),
-            http_redirect_listen: None,
-            local_cleartext_listen: None,
-            listen_mode: ListenMode::PlainHttp,
-            redirect_http_to_https: false,
-            redirect_allowed_hosts: vec!["services.example.test".into()],
-            https_allow_cleartext_escape: false,
-            acme: crate::acme::AcmeConfig::default(),
-            mta_sts_mode: crate::mta_sts::MtaStsMode::Off,
-            mta_sts_max_age: 86_400,
-            primary_domain: "example.test".into(),
-            mail_hostname: "mail.example.test".into(),
-            services_hostname: "services.example.test".into(),
-            stalwart_url: "http://127.0.0.1:8080".into(),
-            onion_surface: crate::config::OnionSurface::NotProvisioned,
-            onion_url: None,
-            onion_discovery: crate::onion_discovery::OnionDiscoveryConfig::empty(),
-            vaultwarden_url: None,
-            vaultwarden_proxy: crate::proxy_vaultwarden::VaultwardenProxyConfig::default(),
-            splora_proxy: crate::proxy_vaultwarden::splora::SploraProxyConfig::default(),
-            http3: crate::tls::http3::Http3Config::default(),
-            apex_public_root: None,
-            static_vhosts: Default::default(),
-            rate_limit_max_requests: 0,
-            rate_limit_window: Duration::from_secs(60),
-            rate_limit_max_keys: 1000,
-            ban: BanConfig {
-                enforcement: BanEnforcement::Off,
-                backend_kind: BanBackendKind::Memory,
-                whitelist: vec![],
-                state_path: None,
-                nft_exec_enabled: false,
-                nft_bin: None,
-                nft_helper_sock: None,
-                nft_helper_bin: None,
-            },
-            auth: surmount_management_ui::auth::AuthConfig::off(),
-            allow_directory_unauthenticated: false,
-            allow_public_auth_off: false,
-            console_accounts_path: crate::config::unused_console_accounts_path(),
-            nwc_store_path: crate::config::unused_nwc_store_path(),
-        }
+        AppConfig::example_test()
     }
 
     /// Named contract: accounts API does not invent fake live Stalwart mailboxes.
@@ -1109,16 +1078,104 @@ mod tests {
         );
     }
 
+    /// Named contract: inventory is the config union (primary trio, derived
+    /// www/mta-sts, static vhost keys, extra mail hostnames), still source
+    /// config, never Stalwart. A length-3 primary-only helper fails this.
     #[test]
     fn domains_inventory_is_config_source() {
-        let inv = domains_inventory(&sample_config());
+        let mut cfg = sample_config();
+        let root = std::path::PathBuf::from("/var/lib/surmount/static-sites/fixture");
+        for host in [
+            "yiffa.app",
+            "www.yiffa.app",
+            "baxterartworks.com",
+            "www.baxterartworks.com",
+            "cryptoquick.com",
+            "www.cryptoquick.com",
+        ] {
+            cfg.static_vhosts.insert(host.into(), root.clone());
+        }
+        cfg.extra_mail_hostnames = vec!["mail.cryptoquick.com".into()];
+        let inv = domains_inventory(&cfg);
         assert_eq!(inv.source, "config");
-        assert_eq!(inv.domains.len(), 3);
-        assert!(inv.domains.iter().any(|d| d.role == "primary"));
+        assert_ne!(inv.source, "stalwart");
+        let names: Vec<&str> = inv.domains.iter().map(|d| d.name.as_str()).collect();
+        for must in [
+            "example.test",
+            "www.example.test",
+            "mta-sts.example.test",
+            "mail.example.test",
+            "services.example.test",
+            "yiffa.app",
+            "baxterartworks.com",
+            "cryptoquick.com",
+            "www.cryptoquick.com",
+            "mail.cryptoquick.com",
+        ] {
+            assert!(
+                names.contains(&must),
+                "config union must include {must}; got {names:?}"
+            );
+        }
+        assert!(
+            inv.domains.len() > 3,
+            "union must not be the old three-row helper; got {} rows: {names:?}",
+            inv.domains.len()
+        );
         assert!(
             inv.domains
                 .iter()
-                .any(|d| d.name == "services.example.test")
+                .any(|d| d.role == "primary" && d.name == "example.test")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.role == "www" && d.name == "www.example.test")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.role == "mta_sts" && d.name == "mta-sts.example.test")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.role == "static_vhost" && d.name == "yiffa.app")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.role == "static_vhost" && d.name == "baxterartworks.com")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.role == "static_vhost" && d.name == "cryptoquick.com")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.role == "static_vhost" && d.name == "www.cryptoquick.com")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| { d.role == "extra_mail_hostname" && d.name == "mail.cryptoquick.com" })
+        );
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted, "inventory names must be stable-sorted");
+        let unique = names.len()
+            == names
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+        assert!(unique, "inventory names must be unique: {names:?}");
+        let blob = serde_json::to_string(&inv).unwrap();
+        assert!(
+            !blob.contains("\"source\":\"stalwart\""),
+            "must not claim Stalwart: {blob}"
         );
     }
 

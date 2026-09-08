@@ -1457,6 +1457,7 @@ pub(crate) mod http3 {
                     http3: http3_cfg.clone(),
                     apex_public_root: None,
                     static_vhosts: Default::default(),
+                    extra_mail_hostnames: Vec::new(),
                     rate_limit_max_requests: 0,
                     rate_limit_window: Duration::from_secs(60),
                     rate_limit_max_keys: 1000,

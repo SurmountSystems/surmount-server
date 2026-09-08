@@ -575,3 +575,63 @@ sh -c \"$out\"\n",
     );
     assert!(!err.contains(PLANT));
 }
+
+/// Remote tls-cert install must chown the Axum leaf so surmount-ui can read
+/// mode 0640. root:root 0640 is Permission denied on the edge.
+#[test]
+fn remote_tls_cert_script_chowns_surmount_ui_surmount_tls() {
+    let work = temp_dir("ssh-chown");
+    let staging = work.join("staging");
+    fs::create_dir_all(&staging).unwrap();
+    make_item(
+        &staging,
+        "item-tls",
+        "tls-cert",
+        "/var/lib/surmount/secrets/tls/cert.pem",
+        PLANT,
+        "mail-lab",
+    );
+    let capture = work.join("remote-script.txt");
+    let mock_bin = work.join("mock-bin");
+    fs::create_dir_all(&mock_bin).unwrap();
+    let ssh = mock_bin.join("ssh");
+    fs::write(
+        &ssh,
+        format!(
+            "#!/bin/sh\nset -eu\ncap='{}'\n: >\"$cap\"\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >>\"$cap\"; done\nexit 1\n",
+            capture.display()
+        ),
+    )
+    .unwrap();
+    let mut p = fs::metadata(&ssh).unwrap().permissions();
+    p.set_mode(0o755);
+    fs::set_permissions(&ssh, p).unwrap();
+    let out = cmd()
+        .args(["--from-staging"])
+        .arg(&staging)
+        .args([
+            "--host-id",
+            "mail-lab",
+            "--target",
+            "mock-host",
+            "--ssh-cmd",
+        ])
+        .arg(&ssh)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let script = fs::read_to_string(&capture).unwrap();
+    assert!(
+        script.contains("chown surmount-ui:surmount-tls"),
+        "tls-cert remote script must chown Axum cert: {script}"
+    );
+    assert!(
+        script.contains("ui_chown="),
+        "tls-cert remote script must set ui_chown: {script}"
+    );
+    assert!(
+        !script.contains("chown surmount-ui:surmount-tls \"$final\" 2>/dev/null"),
+        "tls-cert chown must fail closed, not swallow Permission denied: {script}"
+    );
+    assert!(!script.contains(PLANT));
+}

@@ -6,7 +6,12 @@ Operator direction: [operator-direction.md](operator-direction.md).
 Stack map: [STACK.md](STACK.md). Glossary: [glossary.md](glossary.md)
 (Internal FTS).
 
-**Last updated:** 2026-09-03 (HTTP/3 NIP-07 session POST must not 500 for
+**Last updated:** 2026-09-07 (`/domains` and `GET /api/v1/domains` are a
+config union of primary names including derived www and mta-sts when
+those are first-class, every `static_vhosts` key, and extra mail
+hostnames such as `mail.cryptoquick.com`. `source` stays `config`. That
+table is not a three-name inventory, not Namecheap API, and not Stalwart
+directory.) Prior 2026-09-03 (HTTP/3 NIP-07 session POST must not 500 for
 missing Axum `ConnectInfo`; NWC is not that login). Prior 2026-08-25 (living mailbox map stays in
 `~/.agents/surmount-server/operator-facts.md`, not this public file.)
 Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (living mailbox map:
@@ -125,7 +130,11 @@ leftover is closed.
 - Axum binary `surmount-management-ui`
 - HTML routes (SSR): `/`, `/domains`, `/accounts`, `/system`, `/mail`
 - JSON: `/health`, `/api/v1/system` (onion surface + `onion_discovery` map), `/api/v1/domains`
-  (config inventory), `/api/v1/accounts` (directory strategy: default
+  (config union: primary names including derived `www.{primary}` and
+  `mta-sts.{primary}` when those are first-class, every `static_vhosts`
+  key (six extra static zones plus cryptoquick apex/www), and extra mail
+  hostnames such as `mail.cryptoquick.com`; `source` stays `config`; not
+  Namecheap API; not Stalwart directory), `/api/v1/accounts` (directory strategy: default
   honest empty / `source: unavailable`; hermetic `mock`; live `stalwart`
   via management JMAP when explicitly configured + host token),
   `/api/v1/stalwart/status` (live probe), `POST /api/v1/jmap` (honest 501
@@ -207,7 +216,9 @@ full Q-AUTH-1 still residual).
 
 - **Multi-page console done (2026-08-01):** overview, domains, accounts,
   system, mail on Axum (`pages.rs`, ssr feature); shared DOGE chrome;
-  honest empty accounts; config domain inventory; live Stalwart probe.
+  honest empty accounts; `/domains` config union (primary names plus
+  derived www and mta-sts, `static_vhosts` keys, extra mail hostnames;
+  `source` stays `config`); live Stalwart probe.
 - **Live Stalwart directory list client shipped (2026-08-07):** trait + mock +
   management JMAP client; default still honest empty; never default-on.
 - **Operator UX pass (2026-08-10):** Overview is a health-first operator
@@ -357,7 +368,7 @@ an encouraged path, not a gate.
 |--------|------|--------|
 | GET | `/health` | Liveness for edge/monitor |
 | GET | `/api/v1/stalwart/status` | Best-effort upstream probe |
-| GET | `/api/v1/domains` | Inventory (Nix and/or Stalwart) |
+| GET | `/api/v1/domains` | Config union of primary names (including derived www and mta-sts when first-class), `static_vhosts` keys, and extra mail hostnames. `source` stays `config`. Not Namecheap API. Not Stalwart directory. |
 | GET/POST | `/api/v1/accounts` | Directory operations |
 | POST | `/api/v1/accounts/console` | Administrator attach/clear npub on a mailbox (session CSRF; map write; listing optional) |
 | POST | `/api/v1/jmap` | Honest 501 today (`jmap_proxy_not_implemented`); authenticated JMAP proxy residual |
