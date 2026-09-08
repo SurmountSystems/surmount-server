@@ -275,6 +275,8 @@ Living maps: [docs/DNS.md](docs/DNS.md), [docs/SECURITY.md](docs/SECURITY.md),
 - Update living docs in the same turn as design changes.
 - New durable stores: update [docs/DATASTORES.md](docs/DATASTORES.md) inventory.
 - Agents never `git commit` (human-signed only). No bulk find-and-replace.
+  Collaborating GitHub work uses git-flow feature branches and the
+  GitHub issue / PR loop below. Agents still never sign.
 - ASCII only in docs we own; no em dashes.
 - **Name the UI the operator showed (operator 2026-08-17).** Do not assume
   Thunderbird, or any other client, from an older mail thread. Read the
@@ -315,6 +317,47 @@ Do not "fix" or "clean up" Git. That erases their tracker. Tell them if
 they asked. Do not nag about commits. Do not mention uncommitted trees
 in reports unless they asked about Git that turn. Operator 2026-08-28:
 stop touching Git. Unstaging is still touching Git.
+
+## GitHub tracking and git-flow branches (operator 2026-09-08)
+
+A peer is collaborating on this project. Chat-only "noted" is a process
+miss. Dual-pin this section and [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)
+in the same turn. Host overlay: `~/.grok/AGENTS.md` (git-flow on every
+collaborating project). Plan skill: `~/.agents/skills/plan/SKILL.md`.
+
+Agents still **never** `git commit`, never GPG-sign, never disable
+signing, and never `git push`. The operator signs on a real TTY and
+pushes. After that push, the agent **must** open the GitHub pull
+request. That is not nagging. That is the loop.
+
+1. **Plan Approve -> GitHub issue.** Same turn the operator Approves a
+   plan, create a new issue on this GitHub repo
+   (`SurmountSystems/surmount-server`) whose body is the approved plan
+   text. Strip secrets, provisioned IPs, live npubs, tokens, and PEM
+   material. Title names the product outcome. Do not say "noted" and
+   skip the issue.
+2. **Bug report -> GitHub issue, with screenshots.** Same turn the
+   operator reports a bug, open an issue on this repo. Attach the
+   screenshots they showed (`gh issue create --attach`). Describe the
+   screen in complete American English. Session board `bug:` stays.
+   GitHub is the collaborating tracker. Add the issue to the GitHub
+   Project for this repo when `gh` has project scope. Missing project
+   scope is not a reason to skip the issue.
+3. **After the operator signs and pushes, open the PR.** Do not sign.
+   Do not push. Do not invent `git commit`. Once the operator has a
+   signed commit on the pushed feature branch, create a GitHub pull
+   request for that branch. The PR body describes all the work on that
+   branch (plan issue, bug issues, what landed). Base is `develop` if
+   that branch exists, otherwise `main`.
+4. **Git-flow feature branches.** Collaborating git work uses git-flow
+   feature branches so peers can parallelize: `feature/<slug>` and
+   `bugfix/<slug>` (hotfix/release names when that is the slice). Do
+   not pile collaborating work as unsigned commits on `main`. Agents
+   still do not create the signed commit. Name the branch in the GitHub
+   issue. The operator checks out, signs, and pushes. Then the agent
+   opens the PR.
+
+Public-repo hygiene still applies: no secrets in issues or PR bodies.
 
 ## "Always remember" is dual-pin law (operator 2026-08-27)
 

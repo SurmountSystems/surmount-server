@@ -4,7 +4,13 @@
 Read this first, then follow links into child docs. Do not invent product
 scope from memory alone.
 
-**Last updated:** 2026-09-07 (intended production leaf is **20**
+**Last updated:** 2026-09-08 (GitHub tracking: plan Approve opens a
+repo issue with the plan text; operator bug reports open a repo issue
+with screenshots; agents never GPG-sign or push; after the operator
+signs and pushes the feature branch the agent opens the PR; git-flow
+`feature/` and `bugfix/` branches when collaborating. Dual-pin
+`AGENTS.md`. Live Let's Encrypt certificate this host presents is
+**20** names including cryptoquick and exophiles apex/www). Prior 2026-09-07 (intended production leaf is **20**
 certificate hostnames on one Let's Encrypt PEM (`with_single_cert`): the
 live 18 plus `cryptoquick.com` and `www.cryptoquick.com`. Live leaf
 still has **18** names (CT). Validating A for cryptoquick apex/www
@@ -108,6 +114,7 @@ Ladder detail: [fix-and-fixos.md](fix-and-fixos.md).
 | **No nginx product edge** | In-tree nginx is **transitional-to-delete**. Target **first-party Axum** HTTPS edge. [EDGE_AND_TLS.md](EDGE_AND_TLS.md). |
 | **No Cloudflare products** | Direct-to-VPS path required. CF Research blog posts may be **cited for learning** only. No orange-cloud, Workers, Tunnel, CF WAF, CF Access as critical path. |
 | **Agents never touch Git's index** | The index is how the operator tracks agent work. No `git add`, `git commit`, `git push`, stage, `git restore --staged`, `git reset`, `git rm --cached`. Do not "clean up" the index. Operator 2026-08-28: stop touching Git. Dual-pin host `~/.grok/AGENTS.md`. |
+| **GitHub tracking and git-flow (operator 2026-09-08)** | Same-turn GitHub issue on plan Approve (plan text, no secrets). Same-turn GitHub issue on operator bug reports, with screenshots attached. Agents never GPG-sign and never push. After the operator signs and pushes the feature branch, the agent opens the PR describing the work. Collaborating git uses git-flow `feature/<slug>` and `bugfix/<slug>` branches, not a pile on `main`. Dual-pin `AGENTS.md` and host `~/.grok/AGENTS.md`. |
 | **Leftovers: complete sentences, none already done** | Operator 2026-08-28: every numbered leftover is a complete sentence. Do not re-list work the screenshot or live host already shows is done. Dual-pin host `~/.grok/AGENTS.md`. |
 | **Prove the operator gate** | Operator 2026-09-02: do not list a step as operator residual without evidence the agent cannot do it (secrets, standing forbid of the real `just deploy-host` switch and of `just check-remote`, hypervisor, Namecheap hosted DNSSEC Status click). Host-local enable is agent work. Using the TUI is the product, not leftover. Operator 2026-09-07: if this laptop already has Namecheap env files, `just laptop-renew-cert` is agent work. Dual-pin `AGENTS.md`. |
 | **Operator-facing chat is CATE** | Operator 2026-09-07: Concise American Technical English ([0005_CATE.md](https://github.com/SurmountSystems/specs/blob/main/0005_CATE.md), accessed: 2026-09-07). Do **not** say **production leaf**. Say the Let's Encrypt certificate this host presents, and the names on that certificate. Dual-pin `AGENTS.md`. |

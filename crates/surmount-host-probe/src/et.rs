@@ -27,11 +27,7 @@ pub fn operator_ssh_identity(target: &str) -> Option<PathBuf> {
     }
     let home = env::var("HOME").ok()?;
     let id = PathBuf::from(home).join(".ssh/id_ed25519");
-    if id.is_file() {
-        Some(id)
-    } else {
-        None
-    }
+    if id.is_file() { Some(id) } else { None }
 }
 
 /// Build `et` argv. Does not spawn. Keepalives via et -k 5 (client max).

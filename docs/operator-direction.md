@@ -16,6 +16,22 @@ When this file and older scaffold docs disagree, update the living docs and
 mark scaffold pieces transitional. Do not silently keep invented provider
 defaults or "Caddy target" copy if the operator restated otherwise.
 
+## GitHub tracking and git-flow (operator 2026-09-08)
+
+A peer is collaborating. Agents must not compact this away as "noted."
+
+- Plan Approve: open a GitHub issue on `SurmountSystems/surmount-server`
+  with the approved plan text (no secrets).
+- Operator bug report: open a GitHub issue the same turn, attach
+  screenshots.
+- Agents never GPG-sign and never `git push`.
+- After the operator signs and pushes the feature branch, the agent
+  opens the GitHub pull request for that branch and describes the work.
+- Collaborating git uses git-flow `feature/<slug>` and `bugfix/<slug>`
+  branches so peers can parallelize.
+
+Standing copies: [../AGENTS.md](../AGENTS.md), [COMPACTION-PIN.md](COMPACTION-PIN.md).
+
 ---
 
 ## 1. Host

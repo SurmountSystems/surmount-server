@@ -5,9 +5,9 @@
 use std::io::{self, IsTerminal};
 use std::path::Path;
 
+use crate::ProbeError;
 use crate::et::env_is_off;
 use crate::shell_quote;
-use crate::ProbeError;
 
 pub const SESSION: &str = "grok-oss";
 pub const DEFAULT_USER: &str = "grok";
@@ -152,7 +152,7 @@ pub fn build_running_json_argv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::et::{already_on_mail_guest_from, GuestSessionHints};
+    use crate::et::{GuestSessionHints, already_on_mail_guest_from};
     use std::path::Path;
 
     #[test]

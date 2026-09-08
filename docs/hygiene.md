@@ -7,6 +7,15 @@ Agent process pins also live in [../AGENTS.md](../AGENTS.md).
 Principles: [principles.md](principles.md). Glossary: [glossary.md](glossary.md).
 Operator direction: [operator-direction.md](operator-direction.md).
 
+Collaborating GitHub (operator 2026-09-08): plan Approve opens a GitHub
+issue with the plan text. An operator bug report opens a GitHub issue
+with screenshots. Agents never GPG-sign and never push. After the
+operator signs and pushes a git-flow `feature/` or `bugfix/` branch,
+the agent opens the pull request. Detail: [../AGENTS.md](../AGENTS.md)
+section GitHub tracking and git-flow branches, and
+[COMPACTION-PIN.md](COMPACTION-PIN.md). Issue bodies stay public: no
+secrets.
+
 ---
 
 ## NEVER secrets in git (absolute; public repo)
