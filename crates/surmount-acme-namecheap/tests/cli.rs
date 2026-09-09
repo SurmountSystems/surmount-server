@@ -916,7 +916,7 @@ fn spawn_namecheap_http(state: std::sync::Arc<std::sync::Mutex<FakeNc>>) -> Stri
             let req = String::from_utf8_lossy(&buf[..n]);
             let first = req.lines().next().unwrap_or("");
             let path = first.split_whitespace().nth(1).unwrap_or("/");
-            let q = path.splitn(2, '?').nth(1).unwrap_or("");
+            let q = path.split_once('?').map(|x| x.1).unwrap_or("");
             let params = parse_query(q);
             let body = {
                 let mut g = state.lock().unwrap();
