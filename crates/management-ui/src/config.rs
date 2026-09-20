@@ -1655,7 +1655,8 @@ mod tests {
         assert_eq!(cfg.onion_discovery.mappings().count(), 0);
     }
 
-    /// Named contract: configured onion auto-derives apex, www, services, and mta-sts mappings.
+    /// Named contract: SURMOUNT_ONION_URL maps the services Host only.
+    /// Sharing that v3 onto apex/www would correlate sites.
     #[test]
     fn onion_discovery_auto_derive_from_onion_url() {
         let _g = EnvGuard::acquire();
@@ -1668,25 +1669,24 @@ mod tests {
             .mappings()
             .map(|m| m.clearnet_host.as_str())
             .collect();
-        assert!(hosts.contains(&"example.test"));
-        assert!(hosts.contains(&"www.example.test"));
         assert!(hosts.contains(&"services.example.test"));
-        assert!(hosts.contains(&"mta-sts.example.test"));
-        assert!(!hosts.contains(&"mail.example.test"));
-        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
-        assert_eq!(apex.onion_port, 443);
-        assert_eq!(apex.protocols, vec!["h2".to_string()]);
-        assert_eq!(apex.onion_scheme, "http");
-        assert_eq!(apex.ma_seconds, 86_400);
-        assert_eq!(apex.onion_path_prefix, "/_o/example.test");
-        let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
         assert!(
-            services.onion_path_prefix.is_empty(),
-            "services console stays onion root"
+            !hosts.contains(&"example.test"),
+            "one onion URL must not map every public Host: {hosts:?}"
         );
+        assert!(!hosts.contains(&"www.example.test"));
+        assert!(!hosts.contains(&"mta-sts.example.test"));
+        assert!(!hosts.contains(&"mail.example.test"));
+        let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
+        assert_eq!(services.onion_port, 443);
+        assert_eq!(services.protocols, vec!["h2".to_string()]);
+        assert_eq!(services.onion_scheme, "http");
+        assert_eq!(services.ma_seconds, 86_400);
+        assert!(services.onion_path_prefix.is_empty());
+        assert_eq!(services.onion_host, format!("{SAMPLE_V3}.onion"));
     }
 
-    /// Named contract: extra static Hosts auto-map; mail does not.
+    /// Named contract: extra static Hosts map only with their own onion; mail does not.
     #[test]
     fn onion_discovery_auto_maps_extra_static_vhosts() {
         let _g = EnvGuard::acquire();
@@ -1697,13 +1697,101 @@ mod tests {
             "SURMOUNT_STATIC_VHOSTS",
             r#"{"extra.test":"/tmp/extra","www.extra.test":"/tmp/extra"}"#,
         );
+        let dir = std::env::temp_dir().join(format!(
+            "surmount-onion-sites-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let extra_onion = crate::onion_discovery::unique_v3_onion_host(3);
+        let www_extra_onion = crate::onion_discovery::unique_v3_onion_host(4);
+        std::fs::write(dir.join("extra.test"), format!("{extra_onion}\n")).unwrap();
+        std::fs::write(dir.join("www.extra.test"), format!("{www_extra_onion}\n")).unwrap();
+        set_env(
+            "SURMOUNT_ONION_SITES_DIR",
+            dir.to_str().expect("utf8 temp path"),
+        );
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.onion_discovery.lookup("extra.test").is_some());
         assert!(cfg.onion_discovery.lookup("www.extra.test").is_some());
-        assert!(cfg.onion_discovery.lookup("mta-sts.example.test").is_some());
         assert!(cfg.onion_discovery.lookup("mail.example.test").is_none());
         let extra = cfg.onion_discovery.lookup("extra.test").unwrap();
-        assert_eq!(extra.onion_path_prefix, "/_o/extra.test");
+        let www_extra = cfg.onion_discovery.lookup("www.extra.test").unwrap();
+        assert_eq!(extra.onion_host, extra_onion);
+        assert_eq!(www_extra.onion_host, www_extra_onion);
+        assert_ne!(extra.onion_host, www_extra.onion_host);
+        assert!(extra.onion_path_prefix.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Named contract: nickname JSON plus published-hostnames files map two
+    /// Hosts to two different v3 onions at onion root (no `/_o/` prefix).
+    #[test]
+    fn onion_discovery_from_published_nickname_files_is_per_site() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_PRIMARY_DOMAIN", "example.test");
+        set_env("SURMOUNT_SERVICES_HOSTNAME", "services.example.test");
+        set_env("SURMOUNT_MAIL_HOSTNAME", "mail.example.test");
+        set_env("SURMOUNT_EXTRA_MAIL_HOSTNAMES", "mail.cryptoquick.com");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "surmount-onion-published-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nick_path = dir.join("nicknames.json");
+        let pub_dir = dir.join("published-hostnames");
+        std::fs::create_dir_all(&pub_dir).unwrap();
+        std::fs::write(
+            &nick_path,
+            r#"{"example.test":"site-example-test","www.example.test":"site-www-example-test","mail.example.test":"site-mail-example-test","mail.cryptoquick.com":"site-mail-cryptoquick-com"}"#,
+        )
+        .unwrap();
+        let onion_a = crate::onion_discovery::unique_v3_onion_host(11);
+        let onion_b = crate::onion_discovery::unique_v3_onion_host(12);
+        let onion_mail = crate::onion_discovery::unique_v3_onion_host(13);
+        std::fs::write(pub_dir.join("site-example-test"), format!("{onion_a}\n")).unwrap();
+        std::fs::write(
+            pub_dir.join("site-www-example-test"),
+            format!("{onion_b}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            pub_dir.join("site-mail-example-test"),
+            format!("{onion_mail}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            pub_dir.join("site-mail-cryptoquick-com"),
+            format!("{}\n", crate::onion_discovery::unique_v3_onion_host(14)),
+        )
+        .unwrap();
+        set_env(
+            "SURMOUNT_ONION_SITE_NICKNAMES_FILE",
+            nick_path.to_str().expect("utf8 nick path"),
+        );
+        set_env(
+            "SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR",
+            pub_dir.to_str().expect("utf8 published dir"),
+        );
+        let cfg = AppConfig::from_env().unwrap();
+        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
+        let www = cfg.onion_discovery.lookup("www.example.test").unwrap();
+        assert_eq!(apex.onion_host, onion_a);
+        assert_eq!(www.onion_host, onion_b);
+        assert_ne!(apex.onion_host, www.onion_host);
+        assert!(apex.onion_path_prefix.is_empty());
+        assert!(www.onion_path_prefix.is_empty());
+        assert!(cfg.onion_discovery.lookup("mail.example.test").is_none());
+        assert!(cfg.onion_discovery.lookup("mail.cryptoquick.com").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Named contract: invalid v3 onion is rejected for discovery (no panic, no map).
@@ -1730,8 +1818,8 @@ mod tests {
         let cfg = AppConfig::from_env().unwrap();
         assert!(!cfg.onion_discovery.onion_location_enabled);
         assert!(!cfg.onion_discovery.alt_svc_enabled);
-        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
-        assert_eq!(apex.onion_scheme, "https");
+        let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
+        assert_eq!(services.onion_scheme, "https");
     }
 
     /// Named contract: path set but missing material => hostname_missing (not invent).

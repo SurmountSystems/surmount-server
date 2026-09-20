@@ -369,6 +369,11 @@ file is still not a reason to stage.
 
 ## Deploy dry-run is agent work (operator 2026-09-02)
 
+Full command list: [docs/TEST-AND-DEPLOY.md](docs/TEST-AND-DEPLOY.md).
+The operator does **not** run named eval, `just check-remote`, or the
+dry-run in order to discover errors. The agent runs that entire prefix,
+including the dry-run, then asks for the real switch.
+
 Before any sentence that asks the operator to deploy or switch, agents
 must have already run both of these and must report the results:
 

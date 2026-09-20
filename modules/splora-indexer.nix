@@ -1,6 +1,6 @@
 # Wrap imported services.splora for one remote JSON-RPC indexer.
 # Host-local single knob. Sample host stays off. Cookie bytes never belong here.
-# Imported instance options (9481e4c) already have cookieFile, daemonRpcAddr,
+# Imported instance options (22d6dcf) already have cookieFile, daemonRpcAddr,
 # jsonrpcImport, publicHealth, daemonDir = null, db cache 24, and
 # httpSocketFile /run/splora/${name}.http.sock. This wrap still maps one
 # instance, asserts cookie path charset, and does not start five indexers.

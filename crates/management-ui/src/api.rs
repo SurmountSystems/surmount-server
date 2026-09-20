@@ -1202,13 +1202,18 @@ mod tests {
         let url = "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion";
         cfg.onion_url = Some(url.into());
         cfg.onion_surface = crate::config::OnionSurface::Configured { url: url.into() };
+        let extra = crate::onion_discovery::per_site_mappings(
+            &cfg.primary_domain,
+            &cfg.services_hostname,
+            &[] as &[&str],
+        );
         cfg.onion_discovery = crate::onion_discovery::build_onion_discovery(
             &cfg.primary_domain,
             &cfg.services_hostname,
             Some(url),
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             &[] as &[&str],
@@ -1228,6 +1233,19 @@ mod tests {
         assert!(hosts.contains(&"www.example.test"));
         assert!(hosts.contains(&"services.example.test"));
         assert!(!hosts.contains(&"mail.example.test"));
+        let apex = s
+            .onion_discovery
+            .mappings
+            .iter()
+            .find(|m| m.clearnet_host == "example.test")
+            .unwrap();
+        let www = s
+            .onion_discovery
+            .mappings
+            .iter()
+            .find(|m| m.clearnet_host == "www.example.test")
+            .unwrap();
+        assert_ne!(apex.onion_host, www.onion_host);
         let blob = serde_json::to_string(&s).unwrap();
         assert!(
             blob.contains("\"onion_discovery\""),

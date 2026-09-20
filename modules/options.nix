@@ -915,6 +915,7 @@ in
     # Arti onion / hidden service (REQUIRED product surface).
     # HS private keys are deploy secrets on the host only (never in git).
     # Generated arti.toml is a management-publish config (onion + rproxy).
+    # One [onion_services] nickname per public HTTP Host. Mail Hosts unmapped.
     artiHiddenService = {
       enable = mkEnableOption "Arti onion/hidden service for Surmount backends";
 
@@ -1004,7 +1005,8 @@ in
         default = "/run/surmount-secrets/arti/onion-service";
         description = ''
           Host path for onion service identity and HS instance state
-          (arti storage.state_dir). Deploy secrets on host only; never example
+          (arti storage.state_dir). One Arti keystore root for every public
+          HTTP Host nickname. Deploy secrets on host only; never example
           private key material in repo. Daemon unit requires this directory
           to exist (ConditionPathIsDirectory) and to be writable by the
           surmount-arti service user (e.g. chown surmount-arti:surmount-arti,

@@ -165,8 +165,9 @@ See [EDGE_AND_TLS.md](EDGE_AND_TLS.md) and open-choices.
   Arti HS alongside clearnet; HS keys never in git; not a clearnet edge
   replacement. Clearnet HTTPS advertises the onion with **Onion-Location**
   and **Alt-Svc** (apex, www, services, extra static Hosts, MTA-STS;
-  same v3; `/_o/{host}` on non-console Onion-Location; process-start load;
-  restart after hostname/env/map/static-vhost change). Live unit
+  one v3 per public HTTP Host; Onion-Location is that Host's onion root
+  plus path; process-start load; restart after hostname/env/map/static-vhost
+  change). Live unit
   `surmount-arti-hidden-service` is **active** (2026-08-17); Tor Browser
   verify and operator HS backup remain residual. Do **not** claim B3 fully
   closed. [research/arti-and-secrets-manager.md](research/arti-and-secrets-manager.md),
@@ -458,9 +459,11 @@ surfaces must raise the hook) remains open.
   NIP-07 inline script; `style-src 'self' 'unsafe-inline'` for DOGE CSS;
   `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`.
-  **Onion-Location + Alt-Svc (2026-08-17, every public Host 2026-08-20):**
+  **Onion-Location + Alt-Svc (2026-08-17, every public Host 2026-08-20;
+  per-site v3 2026-09-11):**
   emitted on mapped HTTPS 2xx/3xx (apex, www, services, extra static
-  Hosts, MTA-STS; same v3; `/_o/{host}` discriminator for non-console).
+  Hosts, MTA-STS; one v3 per Host; Onion-Location is
+  `http://{that-host-onion}{path}`).
   Not on `.onion` Host, not on the `:80` redirect router, not on the
   local Arti cleartext bind. Mail unmapped. 4xx/5xx emit nothing.
   Mapping is loaded at process start (no hot-reload). Dump on

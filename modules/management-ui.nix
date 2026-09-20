@@ -218,6 +218,8 @@ let
   # When Arti HS module is on, expose state dir so the binary can walk for
   # hostname material (Arti layout may nest under keystore). Never invent.
   ++ optional hs.enable "SURMOUNT_ONION_HS_STATE_DIR=${hs.onionServiceStateDir}"
+  ++ optional hs.enable "SURMOUNT_ONION_SITE_NICKNAMES_FILE=/etc/surmount/onion-site-nicknames.json"
+  ++ optional hs.enable "SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR=${hs.stateDir}/published-hostnames"
   # Domain C Vaultwarden console link (operator-published, proxy public URL, or loopback).
   # Never ADMIN_TOKEN. Empty = residual not configured in UI.
   ++ optional (effectiveVaultwardenUrl != "") "SURMOUNT_VAULTWARDEN_URL=${effectiveVaultwardenUrl}"
@@ -325,7 +327,10 @@ let
     ++ staticVhostReadPaths
     # Allow reading hostname material under HS state dir when Arti is enabled
     # (nested hostname files; missing path is ignored by systemd ReadOnlyPaths).
-    ++ lib.optionals hs.enable [ hs.onionServiceStateDir ]
+    ++ lib.optionals hs.enable [
+      hs.onionServiceStateDir
+      "${hs.stateDir}/published-hostnames"
+    ]
   );
 
   # EnvironmentFile expects KEY=value lines (e.g. SURMOUNT_SESSION_SECRET=...).
@@ -827,6 +832,7 @@ in
       extraGroups = [
         "surmount-tls"
       ]
+      ++ lib.optionals hs.enable [ "surmount-arti" ]
       ++ lib.optionals (splora.enable && sploraServiceOn) [ sploraGroupName ];
       description = "Surmount management UI";
     };

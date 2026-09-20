@@ -4,7 +4,9 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-09-07 (intended production leaf is **one** Let's
+**Last updated:** 2026-09-11 (each public HTTP Host gets its own v3 onion;
+Onion-Location is `http://{that-host-onion}{path}`; mail Hosts stay
+unmapped). Prior 2026-09-07 (intended production leaf is **one** Let's
 Encrypt PEM pair (`with_single_cert`) covering **20** certificate
 hostnames: the live 18 plus `cryptoquick.com` and `www.cryptoquick.com`.
 Live leaf as of this measure still has **18** names (CT): extra static
@@ -284,11 +286,11 @@ nginx features. Module file remains until operators no longer need dual-run.
   (closed 404 if missing); `/health` and `/api/health` stay edge probes;
   never the operator console. Do **not** overload `SURMOUNT_APEX_PUBLIC_ROOT`.
   `services.surmount.systems` stays the operator console. Extra Hosts
-  **auto-map** Onion-Location / Alt-Svc to the same v3 onion (2026-08-20).
-  Onion-Location for extra Hosts, apex/www, and `mta-sts.{primary}` uses
-  `/_o/{clearnet-host}{path}` so Tor Browser lands on that surface, not
-  the services console. `http://{onion}/` stays the console. Mail stays
-  unmapped. Do not put nginx back as product edge.
+  each get a distinct v3 onion (2026-09-11), not a shared onion.
+  Onion-Location for extra Hosts, apex/www, and `mta-sts.{primary}` is
+  `http://{that-host-onion}{path}` (empty path becomes `/`). The services
+  onion root stays the console. Mail stays unmapped. Do not put nginx
+  back as product edge.
 
 ### Splora Host -> Unix socket map
 
@@ -488,7 +490,7 @@ speak HTTP/3. Splora does not listen on UDP.
   and `services.splora.enable` are both true, `users.users.surmount-ui.extraGroups`
   includes the `splora` group so the edge can connect to 0750 sockets.
   Flake input `splora` (`github:SurmountSystems/splora` on the `surmount`
-  branch, locked rev `9481e4cb87273aa99b0357be48503765beadb919`) supplies
+  branch, locked rev `22d6dcf7f76c1cacc23220d80203099018cde3aa`) supplies
   `pkgs.splora`, `pkgs.splora-liquid`, and `nixosModules.splora`.
   Upstream crane omits `.cargo/config.toml` from Nix src (laptop cargo
   still uses Menhera). This overlay does not wrap that src again. Do
@@ -598,26 +600,27 @@ Mandatory discovery headers on the custom Rust Axum edge
 public HTTPS is still **Let's Encrypt production**. This slice does not
 change issuance.
 
-- Mapping loads **once at process start** from the existing onion surface
-  (`SURMOUNT_ONION_URL` / `SURMOUNT_ONION_HOSTNAME_FILE` /
-  `SURMOUNT_ONION_HS_STATE_DIR` plus `SURMOUNT_PRIMARY_DOMAIN`,
-  `SURMOUNT_SERVICES_HOSTNAME`, and extra static Hosts from
-  `SURMOUNT_STATIC_VHOSTS` / `_FILE`). Auto-derive apex, `www.{apex}`,
-  services, `mta-sts.{apex}`, and extra static Hosts to the **same** v3
-  onion (port 443, `h2`, ma 86400). Mail and unmapped hosts emit nothing.
-  No hot-reload; restart the unit after hostname file, map file, static
+- Mapping loads **once at process start** from the onion surface
+  (`SURMOUNT_ONION_URL` maps the **services** Host only), plus per-site
+  published addresses (`SURMOUNT_ONION_SITE_NICKNAMES_FILE` +
+  `SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR`, optional
+  `SURMOUNT_ONION_SITES_DIR` / `SURMOUNT_ONION_MAP_FILE`), plus
+  `SURMOUNT_PRIMARY_DOMAIN`, `SURMOUNT_SERVICES_HOSTNAME`, extra static
+  Hosts, and extra mail Hosts to skip. Each public HTTP Host gets its
+  own v3 (port 443, `h2`, ma 86400). Mail and unmapped hosts emit
+  nothing. Sharing one v3 across Hosts is a correlation leak. No
+  hot-reload; restart the unit after hostname file, map file, static
   vhost map, or env change (same as PEMs).
 - Emit only when `listen_mode` is https, Host is a mapped clearnet name
   (not `.onion`), status is 2xx/3xx, and the request is not on the `:80`
   redirect router. Local Arti cleartext (`SURMOUNT_LOCAL_CLEARTEXT_LISTEN`)
   does **not** emit these headers.
-- Onion-Location: services console `{scheme}://{onion_host}{path}{?query}`
-  (empty path -> `/`). Other mapped Hosts:
-  `{scheme}://{onion_host}/_o/{clearnet-host}{path}{?query}`. Onion-side
-  middleware treats `/_o/{mapped-host}` as that clearnet Host and strips
-  the prefix (Axum `Router::layer` runs after routing; extra vhosts and
-  MTA-STS policy are served from that rewritten Host, not a second onion
-  key). `http://{onion}/` stays the services console.
+- Onion-Location: `{scheme}://{that-host-onion}{path}{?query}` (empty
+  path -> `/`). Onion-side middleware maps the request `.onion` Host to
+  that site's clearnet Host and keeps the path. There is no `/_o/{host}`
+  discriminator. Arti publishes one onion service nickname per public
+  HTTP Host (`/etc/surmount/arti.toml`, `/etc/surmount/onion-site-nicknames.json`).
+  Console keeps `artiHiddenService.nickname`.
 - Alt-Svc: `h2="{onion_host}:{port}"; ma={ma}; persist=1`.
   Clearnet HTTP/3 is a **separate** token (`h3=":443"`) added only when
   the QUIC listener is bound. Onion `h2` is not replaced by `h3`.
@@ -631,21 +634,24 @@ change issuance.
   (admin-gated when Nostr is on). Not on `/health`.
 - **Live (2026-08-17):** headers proven with HTTPS curl on 307/200 for
   `surmount.systems`, `www.surmount.systems`, and
-  `services.surmount.systems` (same onion). Unit
-  `surmount-arti-hidden-service` active. Tor Browser purple pill
-  **BLOCKED** (header presence is not an Alt-Svc upgrade proof).
-- **Every public HTTP Host (2026-08-20):** extra static vhosts and
-  `mta-sts.{primary}` auto-map the same dual headers. `/vault` on the
-  services Host emits path-preserving Onion-Location when the Vaultwarden
-  proxy is on (VW login is SoT on that prefix; the edge does not
-  Nostr-gate `/vault` once proxy enable is true). Six extra static zones
-  (yiffa.app, baxterartworks.com, btcfur.com, iantuckerstudios.com,
-  nostrfurs.com, exophiles.org) are on the live Let's Encrypt production
-  leaf (apex+www). cryptoquick Hosts on this :443 map may exist; they are
-  first-class static vhosts like those six. Live leaf still omits
-  cryptoquick apex/www (**18** names). Intended leaf is **20** names on
-  one PEM. The SERVFAIL A-lookup gate is closed. Mail stays
-  unmapped. Tor Browser purple pill still not claimed.
+  `services.surmount.systems`. Unit `surmount-arti-hidden-service`
+  active. That live generation still used one shared v3. This tree
+  (2026-09-11) is per-site onions after the next host switch. Tor
+  Browser purple pill **BLOCKED** (header presence is not an Alt-Svc
+  upgrade proof).
+- **Every public HTTP Host (2026-08-20; per-site 2026-09-11):** extra
+  static vhosts and `mta-sts.{primary}` emit dual headers at each Host's
+  own onion root. `/vault` on the services Host emits path-preserving
+  Onion-Location when the Vaultwarden proxy is on (VW login is SoT on
+  that prefix; the edge does not Nostr-gate `/vault` once proxy enable is
+  true). Six extra static zones (yiffa.app, baxterartworks.com,
+  btcfur.com, iantuckerstudios.com, nostrfurs.com, exophiles.org) are on
+  the live Let's Encrypt certificate this host presents (apex+www).
+  cryptoquick Hosts on this :443 map may exist; they are first-class
+  static vhosts like those six. Live certificate still omits cryptoquick
+  apex/www (**18** names). Intended certificate is **20** names on one
+  PEM. The SERVFAIL A-lookup gate is closed. Mail stays unmapped. Tor
+  Browser purple pill still not claimed.
 
 Header comment in `modules/web.nix` must keep pointing here.
 

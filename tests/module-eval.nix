@@ -394,6 +394,78 @@ let
       !(lib.hasInfix "SURMOUNT_ONION_HOSTNAME_FILE=/run/surmount-secrets/arti/onion-service/hostname" envBlob);
     "t5c-onion-hostname-file-option-wins-ok";
 
+  # Per-site v3 onions: two public HTTP Hosts get two different Arti nicknames.
+  # Onion-Location must be each Host's own onion root (not /_o/{host} on a
+  # shared onion). Mail Hosts stay unmapped. HS keys never appear in toml.
+  t5d-per-site-onions-distinct-nicknames =
+    let
+      extraRoot = "/var/lib/surmount/static-sites/extra";
+      e = evalSurmount {
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+        managementUi.enable = true;
+        managementUi.staticVhosts = {
+          "extra.example.test" = {
+            root = extraRoot;
+          };
+        };
+        managementUi.extraMailHostnames = [ "mail.cryptoquick.com" ];
+      };
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+      nick = e.config.surmount.artiHiddenService.nickname;
+      apex = e.config.surmount.primaryDomain;
+      www = "www.${apex}";
+      mail = e.config.surmount.mailHostname;
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = builtins.unsafeDiscardStringContext (lib.concatStringsSep "\n" envList);
+      nickLine = lib.findFirst (s: lib.hasPrefix "SURMOUNT_ONION_SITE_NICKNAMES_FILE=" s) null envList;
+      nickPath =
+        if nickLine == null then "" else lib.removePrefix "SURMOUNT_ONION_SITE_NICKNAMES_FILE=" nickLine;
+      nickEtc = e.config.environment.etc."surmount/onion-site-nicknames.json" or { };
+      nickJson =
+        if nickEtc ? text && nickEtc.text != null && nickEtc.text != "" then
+          builtins.unsafeDiscardStringContext nickEtc.text
+        else if nickEtc ? source && nickEtc.source != null then
+          builtins.unsafeDiscardStringContext (builtins.readFile nickEtc.source)
+        else
+          "";
+      nickMap = if nickJson == "" then { } else builtins.fromJSON nickJson;
+      apexNick = nickMap.${apex} or "";
+      wwwNick = nickMap.${www} or "";
+      extraNick = nickMap."extra.example.test" or "";
+      servicesNick = nickMap.${e.config.surmount.servicesHostname} or "";
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.environment.etc ? "surmount/onion-site-nicknames.json";
+    assert lib.hasInfix "SURMOUNT_ONION_SITE_NICKNAMES_FILE=" envBlob;
+    assert nickPath != "";
+    assert nickJson != "";
+    assert !(lib.hasInfix "/_o/" nickJson);
+    assert !(lib.hasInfix "BEGIN PRIVATE" toml);
+    assert !(lib.hasInfix "PRIVATE KEY" toml);
+    assert !(lib.hasInfix "hs_ed25519_secret_key" toml);
+    # Console keeps the existing HS nickname so the live identity stays that site.
+    assert servicesNick == nick;
+    assert lib.hasInfix "[onion_services.\"${nick}\"]" toml;
+    # Two different public Hosts -> two different onion service nicknames.
+    assert apexNick != "";
+    assert wwwNick != "";
+    assert extraNick != "";
+    assert apexNick != wwwNick;
+    assert extraNick != apexNick;
+    assert extraNick != wwwNick;
+    assert extraNick != nick;
+    assert lib.hasInfix "[onion_services.\"${apexNick}\"]" toml;
+    assert lib.hasInfix "[onion_services.\"${wwwNick}\"]" toml;
+    assert lib.hasInfix "[onion_services.\"${extraNick}\"]" toml;
+    # Mail Hosts stay unmapped (primary MX and extra mail hostname).
+    assert !(nickMap ? ${mail});
+    assert !(nickMap ? "mail.cryptoquick.com");
+    assert !(lib.hasInfix "mail.cryptoquick.com" nickJson);
+    assert !(lib.hasInfix "[onion_services.\"site-mail-" toml);
+    "t5d-per-site-onions-distinct-nicknames-ok";
+
   # Complete management-publish config: startDaemon does NOT need acceptIncomplete.
   t6-arti-start-daemon-complete-no-accept =
     let
@@ -3031,6 +3103,7 @@ let
     t5-arti-enable-no-daemon
     t5b-arti-enable-derives-ui-onion-hostname-env
     t5c-onion-hostname-file-option-wins
+    t5d-per-site-onions-distinct-nicknames
     t6-arti-start-daemon-complete-no-accept
     t6b-arti-start-daemon-ok
     t6c-arti-start-daemon-needs-package

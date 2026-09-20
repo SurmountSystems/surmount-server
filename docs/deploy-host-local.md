@@ -3,7 +3,9 @@
 How operators keep **box-specific** material off the public Surmount Server
 tree while still rebuilding `#mail-vps` repeatably.
 
-**Last updated:** 2026-08-25 (driver is `nix run .#surmount-deploy-host` /
+**Last updated:** 2026-09-20 (operator procedure through dry-run is
+agent work; real switch is operator. Full list:
+[TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md)). Prior 2026-08-25 (driver is `nix run .#surmount-deploy-host` /
 `just deploy-host`; crate tests in `checks.*.ci`. No product `nix run .#surmount-deploy-host --`.)
 **Companions:** [OPS.md](OPS.md) (cutover gates), [hygiene.md](hygiene.md),
 [SECRETS.md](SECRETS.md), [SECURITY.md](SECURITY.md), sample

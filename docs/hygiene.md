@@ -7,6 +7,10 @@ Agent process pins also live in [../AGENTS.md](../AGENTS.md).
 Principles: [principles.md](principles.md). Glossary: [glossary.md](glossary.md).
 Operator direction: [operator-direction.md](operator-direction.md).
 
+Test and deploy: [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md). Agent runs
+eval, `just check-remote`, and deploy dry-run. Operator runs the real
+switch.
+
 Collaborating GitHub (operator 2026-09-08): plan Approve opens a GitHub
 issue with the plan text. An operator bug report opens a GitHub issue
 with screenshots. Agents never GPG-sign and never push. After the

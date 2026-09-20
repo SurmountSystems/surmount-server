@@ -4,7 +4,10 @@ How the Surmount mail VPS should be operated, observed, and checked
 end-to-end. Aligned with [hygiene.md](hygiene.md). Architecture:
 [STACK.md](STACK.md).
 
-**Last updated:** 2026-09-03 (public NIP-07 login over HTTP/3 must not 500
+**Last updated:** 2026-09-20 (full test-and-deploy procedure:
+[TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md). Agent runs named eval,
+`just check-remote`, and `just deploy-host -- --dry-run`. Operator
+runs the real switch with Eternal Terminal open). Prior 2026-09-03 (public NIP-07 login over HTTP/3 must not 500
 missing `ConnectInfo`; NWC is the `/mail` wallet store). Prior 2026-09-02 (guest grok-oss uses a machine xAI console
 API key on surmount-1, path only under `/home/grok/.grok`; guest has no
 git and no GitHub SSH; signed commits stay on the laptop). Prior same
@@ -1669,8 +1672,8 @@ surmount-management-ui -g tls_handshake_failed`.
 | HS identity dir | `surmount.artiHiddenService.onionServiceStateDir` default `/run/surmount-secrets/arti/onion-service` (**ephemeral**; prefer durable Domain B). Live host uses `/var/lib/surmount/secrets/arti/onion-service`. |
 | Ownership | **Must** be owned/writable by `surmount-arti:surmount-arti` (e.g. mode **0750**). Module does **not** auto-create this dir (`ConditionPathIsDirectory` gates the daemon; missing dir => inactive, not a restart loop). Root-owned 0700 can pass the path check then fail at keystore open. Keystore stays **0700**. Live: `surmount-ui` is in group `surmount-arti` so the UI can read the hostname file (0750 dir). |
 | Process cache | `/var/lib/surmount/arti` (+ `cache/`) via tmpfiles 0750 surmount-arti. Live host-local sets unit `HOME=/var/lib/surmount/arti` so Arti can write `port_info.json` (public module does not set HOME). |
-| Hostname file | Arti 2.5.1 does **not** write `hostname`. Live host wrote it from `arti hss --nickname surmount-management onion-address`. Address is not a secret; HS keys are. Same v3 for apex, www, services. |
-| Discovery headers | Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`, `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`, `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`. Restart `surmount-management-ui` after hostname/env/map change. Dump: `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on). |
+| Hostname files | Arti 2.5.1 does **not** write `hostname`. Console: `arti hss --nickname` `artiHiddenService.nickname` `onion-address`. Per-site: ExecStartPost writes public addresses under `stateDir/published-hostnames/{nickname}`. Addresses are not secrets; HS keys are. One v3 per public HTTP Host. |
+| Discovery headers | Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Each mapped Host uses `http://{that-host-onion}{path}`. Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`, `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`, `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`, `SURMOUNT_ONION_SITE_NICKNAMES_FILE`, `SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR`. Restart `surmount-management-ui` after hostname/env/map change. Dump: `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on). |
 | Secrets | HS private keys **never in git**. Identity may be generated on first start in an empty writable dir; operator **offline backup** is still residual. |
 | Honesty | `systemctl is-active surmount-arti-hidden-service` does **not** prove an onion is published on the Tor network. Live (2026-08-17): unit **active**; hostname file present (v3 onion; do not paste the address in this public tree); headers proven on HTTPS 307/200. Tor Browser purple pill **BLOCKED**. Do **not** claim B3 fully closed. |
 

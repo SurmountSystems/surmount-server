@@ -7,10 +7,16 @@
 # Absolute: HS private keys and identity state are deploy secrets on the
 # host only. Never put keys (plain or ciphertext) in git or module examples.
 #
-# Default lean surfaces (Q-ARTI-3): management HTTP only.
-# Do NOT onion-publish Stalwart admin/JMAP unless explicitly enabled.
-# publishStalwartAdmin/Jmap flags are reserved; they do not yet add stanzas
-# (no backend address options). Defaults stay false.
+# Default lean surfaces (Q-ARTI-3): one reverse-proxy backend (management
+# HTTP / local cleartext). Do NOT onion-publish Stalwart admin/JMAP unless
+# explicitly enabled. publishStalwartAdmin/Jmap flags are reserved; they do
+# not yet add stanzas (no backend address options). Defaults stay false.
+#
+# Per-site v3 onions (operator 2026-09-11): every public HTTP Host gets its
+# own Arti onion service nickname and identity. Onion-Location for that Host
+# is that Host's onion root, not /_o/{host} on a shared onion. Mail Hosts
+# stay unmapped. Console keeps artiHiddenService.nickname so the already
+# published management onion stays the services Host.
 #
 # Daemon start is OFF by default (startDaemon=false). enable=true installs
 # config/docs only. When startDaemon=true with the complete management-publish
@@ -57,6 +63,20 @@ let
 
   hostPaths = import ./lib/host-paths.nix { inherit lib; };
   localCleartext = import ./lib/local-cleartext.nix { inherit lib; };
+  publicOnion = import ./lib/public-onion-sites.nix { inherit lib; };
+
+  publicOnionSites = publicOnion.publicOnionSites {
+    primaryDomain = cfg.primaryDomain;
+    servicesHostname = cfg.servicesHostname;
+    mailHostname = cfg.mailHostname;
+    extraStaticHosts = lib.attrNames ui.staticVhosts;
+    extraMailHostnames = ui.extraMailHostnames;
+    consoleNickname = hs.nickname;
+  };
+  publicOnionNicknames = publicOnion.nicknamesJsonMap publicOnionSites;
+  publicOnionNicknamesJson = builtins.toJSON publicOnionNicknames;
+  publicOnionNicknameList = map (s: s.nickname) publicOnionSites;
+  publishedHostnamesDir = "${hs.stateDir}/published-hostnames";
 
   # Prefer Surmount service-capable package when package is null so the happy
   # path is enable + host HS secrets (not silent stock client arti).
@@ -118,6 +138,15 @@ let
     || builtins.match "[A-Za-z0-9._-]+:[0-9]+" hs.backendAddress != null
     || builtins.match "[[][0-9a-fA-F:]+[]]:[0-9]+" hs.backendAddress != null;
 
+  onionServiceStanzas = lib.concatMapStrings (s: ''
+    [onion_services."${s.nickname}"]
+    proxy_ports = [
+        ["80", "${proxyTarget}"],
+        ["*", "destroy"]
+    ]
+
+  '') publicOnionSites;
+
   # Complete management-publish config. No private keys or .onion addresses.
   # state_dir points at onionServiceStateDir so HS identity + HS instance state
   # live under the deploy-secrets host path. cache_dir stays under stateDir.
@@ -130,6 +159,10 @@ let
     # (nix/packages/arti-onion-service.nix; GitLab arti-v2.5.1). Not stock
     # nixpkgs 1.4.x lag. Keys: socks_listen, onion_services, proxy_ports.
     # Command: arti proxy -c /etc/surmount/arti.toml
+    #
+    # One [onion_services] table per public HTTP Host. Same cleartext
+    # backend. Mail Hosts are not listed. Console nickname stays
+    # artiHiddenService.nickname.
     #
     # NOTE: systemd unit active does not prove an onion is published.
     # Prefer pkgs.artiOnionService (Surmount overlay). Stock pkgs.arti is
@@ -155,14 +188,22 @@ let
     console = "info"
     log_sensitive_information = false
 
-    # Lean default: one onion service reverse-proxying to management UI.
+    # Per-site v3 onions reverse-proxying to management UI cleartext.
     # Backend is cleartext TCP or unix: (not TLS). Stalwart admin/JMAP publish
     # options default false and do not add stanzas yet.
-    [onion_services."${hs.nickname}"]
-    proxy_ports = [
-        ["80", "${proxyTarget}"],
-        ["*", "destroy"]
-    ]
+    ${onionServiceStanzas}
+  '';
+
+  hostnamePublishScript = pkgs.writeShellScript "surmount-arti-publish-hostnames" ''
+    set -eu
+    out=${lib.escapeShellArg publishedHostnamesDir}
+    mkdir -p "$out"
+    ${lib.concatMapStrings (s: ''
+      nick=${lib.escapeShellArg s.nickname}
+      if addr="$(${artiBin} hss -c /etc/surmount/arti.toml --nickname "$nick" onion-address)"; then
+        printf '%s\n' "$addr" > "$out/$nick"
+      fi
+    '') publicOnionSites}
   '';
 in
 {
@@ -237,6 +278,22 @@ in
           (start with alphanumeric; then alphanumeric, underscore, or hyphen).
         '';
       }
+      {
+        assertion = lib.length publicOnionNicknameList == lib.length (lib.unique publicOnionNicknameList);
+        message = ''
+          surmount.artiHiddenService public HTTP onion nicknames must be unique
+          (two Hosts must not share an Arti nickname).
+        '';
+      }
+      {
+        assertion = lib.all (
+          n: builtins.match "[A-Za-z0-9][A-Za-z0-9_-]*" n != null
+        ) publicOnionNicknameList;
+        message = ''
+          Each per-site Arti onion nickname must be a simple Arti HS nickname
+          (start with alphanumeric; then alphanumeric, underscore, or hyphen).
+        '';
+      }
     ];
 
     warnings =
@@ -260,12 +317,15 @@ in
     };
 
     environment.etc."surmount/arti.toml".source = artiConfig;
+    environment.etc."surmount/onion-site-nicknames.json".text = publicOnionNicknamesJson;
 
     # Process cache under stateDir. HS state dir is operator deploy secrets:
     # do not auto-create onionServiceStateDir (ConditionPathIsDirectory gates daemon).
+    # published-hostnames holds public v3 addresses (not keys) for Onion-Location.
     systemd.tmpfiles.rules = [
       "d ${hs.stateDir} 0750 surmount-arti surmount-arti - -"
       "d ${hs.stateDir}/cache 0750 surmount-arti surmount-arti - -"
+      "d ${publishedHostnamesDir} 0750 surmount-arti surmount-arti - -"
     ];
 
     # Oneshot marker: enable=true without startDaemon does not touch multi-user
@@ -318,6 +378,9 @@ in
         User = "surmount-arti";
         Group = "surmount-arti";
         ExecStart = "${artiBin} proxy -c /etc/surmount/arti.toml";
+        # Addresses are public; never write keys here. Dash prefix: a missing
+        # nickname must not take down the publisher.
+        ExecStartPost = "-${hostnamePublishScript}";
         Restart = "on-failure";
         RestartSec = "10s";
         # state_dir is onionServiceStateDir (HS identity + instance state).
@@ -360,6 +423,8 @@ in
       publishStalwartJmap=${if hs.publishStalwartJmap then "true" else "false"}
       package=${if pkg != null then pkg.pname or "arti" else "missing"}
       configKind=management-publish
+      publicOnionSiteCount=${toString (lib.length publicOnionSites)}
+      publishedHostnamesDir=${publishedHostnamesDir}
     '';
   };
 }
