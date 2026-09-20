@@ -67,10 +67,7 @@ let
 
   sploraProxy = cfg.sploraProxy;
   sploraPortalHost =
-    if sploraProxy.portalHost != "" then
-      sploraProxy.portalHost
-    else
-      "splora.${cfg.primaryDomain}";
+    if sploraProxy.portalHost != "" then sploraProxy.portalHost else "splora.${cfg.primaryDomain}";
   sploraExtraOnionHosts =
     if sploraProxy.enable then
       lib.unique (

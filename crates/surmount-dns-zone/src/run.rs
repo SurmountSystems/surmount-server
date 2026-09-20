@@ -387,10 +387,8 @@ fn load_zone(cred: &crate::cred::Credentials, mock: Option<&std::path::Path>) ->
     if let Some(dir) = mock {
         return load_mock(dir);
     }
-    let hosts = surmount_acme_namecheap::hook::live::get_hosts_with_prefix(
-        &acme_cred(cred),
-        LIVE_PREFIX,
-    )?;
+    let hosts =
+        surmount_acme_namecheap::hook::live::get_hosts_with_prefix(&acme_cred(cred), LIVE_PREFIX)?;
     Ok(zone_from_hosts(hosts))
 }
 

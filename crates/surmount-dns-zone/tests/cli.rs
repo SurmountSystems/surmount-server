@@ -814,9 +814,5 @@ fn dry_run_without_mock_dir_gethosts_not_sethosts() {
     assert!(text.to_ascii_lowercase().contains("dry-run"));
     let g = state.lock().unwrap();
     assert_eq!(g.commands, ["getHosts"]);
-    assert!(
-        !g.records
-            .iter()
-            .any(|(n, _, _, _, _)| n == "splora")
-    );
+    assert!(!g.records.iter().any(|(n, _, _, _, _)| n == "splora"));
 }
