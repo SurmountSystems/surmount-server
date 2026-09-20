@@ -1073,6 +1073,9 @@ pub(crate) mod splora {
         pub queue_socket: PathBuf,
         pub queue_path: String,
         pub body_limit_bytes: usize,
+        /// Public portal Host (one DNS name). Not an indexer. Env
+        /// `SURMOUNT_SPLORA_PORTAL_HOST`. None when the proxy is off or unset.
+        pub portal_host: Option<String>,
     }
 
     impl Default for SploraProxyConfig {
@@ -1083,6 +1086,7 @@ pub(crate) mod splora {
                 queue_socket: PathBuf::from(DEFAULT_QUEUE_SOCKET),
                 queue_path: DEFAULT_QUEUE_PATH.to_string(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             }
         }
     }
@@ -1142,21 +1146,69 @@ pub(crate) mod splora {
                 );
             }
 
+            let portal_host = parse_portal_host(get("SURMOUNT_SPLORA_PORTAL_HOST"), enable)?;
+            if let Some(ref portal) = portal_host {
+                if instances
+                    .iter()
+                    .any(|inst| inst.hosts.iter().any(|h| h == portal))
+                {
+                    return Err(format!(
+                        "SURMOUNT_SPLORA_PORTAL_HOST={portal} must not also be an indexer Host \
+                         (the portal is not a fifth indexer)"
+                    ));
+                }
+            }
+
             Ok(Self {
                 enable,
                 instances,
                 queue_socket,
                 queue_path,
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host,
             })
         }
 
-        /// True when this request is a splora Host or the queue path (skip Nostr).
+        /// True when this request is a splora Host, the portal, or the queue path (skip Nostr).
         pub fn should_bypass_auth(&self, host: &str, path: &str) -> bool {
             if !self.enable {
                 return false;
             }
-            self.is_queue_path(path) || self.instance_for_host(host).is_some()
+            self.is_queue_path(path)
+                || self.is_portal_host(host)
+                || self.instance_for_host(host).is_some()
+        }
+
+        pub fn is_portal_host(&self, host: &str) -> bool {
+            if !self.enable {
+                return false;
+            }
+            let Some(portal) = self.portal_host.as_deref() else {
+                return false;
+            };
+            let key = normalize_host(host);
+            !key.is_empty() && key == portal
+        }
+
+        /// Indexer Hosts plus the portal Host (when set). Empty when the proxy is off.
+        pub fn extra_onion_and_redirect_hosts(&self) -> Vec<String> {
+            if !self.enable {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            for inst in &self.instances {
+                for host in &inst.hosts {
+                    if !out.iter().any(|h| h == host) {
+                        out.push(host.clone());
+                    }
+                }
+            }
+            if let Some(portal) = self.portal_host.as_ref() {
+                if !portal.is_empty() && !out.iter().any(|h| h == portal) {
+                    out.push(portal.clone());
+                }
+            }
+            out
         }
 
         pub fn is_queue_path(&self, path: &str) -> bool {
@@ -1173,6 +1225,83 @@ pub(crate) mod splora {
                 .iter()
                 .find(|inst| inst.hosts.iter().any(|h| h == &key))
         }
+    }
+
+    fn parse_portal_host(raw: Option<String>, enable: bool) -> Result<Option<String>, String> {
+        if !enable {
+            return Ok(None);
+        }
+        let Some(v) = raw else {
+            return Ok(None);
+        };
+        let n = normalize_host(&v);
+        if n.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(n))
+    }
+
+    /// Instance names listed on the portal page. Never mainnet.
+    pub const PORTAL_NETWORK_NAMES: &[&str] = &["testnet3", "testnet4", "mutinynet", "liquid"];
+
+    /// Live non-mainnet Hosts in portal order (every Host on those four instance names).
+    pub fn portal_live_hosts(cfg: &SploraProxyConfig) -> Vec<String> {
+        let mut out = Vec::new();
+        for name in PORTAL_NETWORK_NAMES {
+            let Some(inst) = cfg.instances.iter().find(|i| i.name == *name) else {
+                continue;
+            };
+            for host in &inst.hosts {
+                if !out.iter().any(|h| h == host) {
+                    out.push(host.clone());
+                }
+            }
+        }
+        out
+    }
+
+    fn html_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+
+    /// GET / HTML for the portal Host. Lists live network Hosts as https links.
+    /// Never invents mainnet.
+    pub fn portal_index_html(cfg: &SploraProxyConfig) -> String {
+        let mut items = String::new();
+        for host in portal_live_hosts(cfg) {
+            let h = html_escape(&host);
+            items.push_str(&format!("<li><a href=\"https://{h}/\">{h}</a></li>\n"));
+        }
+        format!(
+            "<!DOCTYPE html>\n\
+<html lang=\"en\">\n\
+<head><meta charset=\"utf-8\"/><title>Splora</title></head>\n\
+<body>\n\
+<h1>Splora</h1>\n\
+<p>Public indexer Hosts on this edge:</p>\n\
+<ul>\n{items}</ul>\n\
+</body>\n\
+</html>\n"
+        )
+    }
+
+    fn portal_response(cfg: &SploraProxyConfig, method: &Method, path: &str) -> Response {
+        let p = path.split('?').next().unwrap_or(path);
+        if p != "/" {
+            return (StatusCode::NOT_FOUND, "not found").into_response();
+        }
+        if *method != Method::GET {
+            return (StatusCode::METHOD_NOT_ALLOWED, "GET only").into_response();
+        }
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            portal_index_html(cfg),
+        )
+            .into_response()
     }
 
     fn refuse_electrum_path(path: &str, label: &str) -> Result<(), String> {
@@ -1315,6 +1444,10 @@ pub(crate) mod splora {
 
         if cfg.is_queue_path(&path) {
             return proxy_queue(state, request).await;
+        }
+
+        if cfg.is_portal_host(&host) {
+            return portal_response(cfg, request.method(), &path);
         }
 
         if let Some(instance) = cfg.instance_for_host(&host).cloned() {
@@ -1857,6 +1990,178 @@ pub(crate) mod splora {
             assert!(cfg.should_bypass_auth("esplora.example.test", "/api/tx/abc"));
             assert!(cfg.should_bypass_auth("services.example.test", "/splora/queue"));
             assert!(!cfg.should_bypass_auth("services.example.test", "/health"));
+            assert!(cfg.portal_host.is_none());
+        }
+
+        fn four_live_plus_mainnet_cfg(portal: &str) -> SploraProxyConfig {
+            SploraProxyConfig {
+                enable: true,
+                instances: vec![
+                    SploraInstance {
+                        name: "mainnet".into(),
+                        hosts: vec!["esplora.surmount.systems".into()],
+                        http_socket: PathBuf::from("/run/splora/mainnet.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "testnet3".into(),
+                        hosts: vec!["testnet3.esplora.surmount.systems".into()],
+                        http_socket: PathBuf::from("/run/splora/testnet3.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "testnet4".into(),
+                        hosts: vec!["testnet4.esplora.surmount.systems".into()],
+                        http_socket: PathBuf::from("/run/splora/testnet4.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "mutinynet".into(),
+                        hosts: vec!["mutinynet.esplora.surmount.systems".into()],
+                        http_socket: PathBuf::from("/run/splora/mutinynet.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "liquid".into(),
+                        hosts: vec!["liquid.esplora.surmount.systems".into()],
+                        http_socket: PathBuf::from("/run/splora/liquid.http.sock"),
+                    },
+                ],
+                queue_socket: PathBuf::from(DEFAULT_QUEUE_SOCKET),
+                queue_path: DEFAULT_QUEUE_PATH.into(),
+                body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: Some(portal.to_string()),
+            }
+        }
+
+        /// Named contract: portal GET / is 200 HTML listing the four live
+        /// network Hosts as https links. Not a fifth indexer. Not mainnet.
+        #[test]
+        fn portal_html_lists_four_live_hosts_not_mainnet() {
+            let cfg = four_live_plus_mainnet_cfg("splora.surmount.systems");
+            let html = portal_index_html(&cfg);
+            for host in [
+                "testnet3.esplora.surmount.systems",
+                "testnet4.esplora.surmount.systems",
+                "mutinynet.esplora.surmount.systems",
+                "liquid.esplora.surmount.systems",
+            ] {
+                assert!(
+                    html.contains(&format!("https://{host}/")),
+                    "portal must link https://{host}/ : {html}"
+                );
+                assert!(
+                    html.contains(&format!(">{host}<")),
+                    "portal must name {host}"
+                );
+            }
+            assert!(
+                !html.to_ascii_lowercase().contains("mainnet"),
+                "portal must not invent mainnet: {html}"
+            );
+            assert!(
+                !html.contains("https://esplora.surmount.systems/"),
+                "portal must not list the mainnet Host: {html}"
+            );
+            assert!(cfg.should_bypass_auth("splora.surmount.systems", "/"));
+            assert!(cfg.is_portal_host("Splora.surmount.systems"));
+            assert!(cfg.instance_for_host("splora.surmount.systems").is_none());
+            let extra = cfg.extra_onion_and_redirect_hosts();
+            assert!(
+                extra.iter().any(|h| h == "splora.surmount.systems"),
+                "onion extra hosts must include the portal: {extra:?}"
+            );
+            for host in [
+                "testnet3.esplora.surmount.systems",
+                "testnet4.esplora.surmount.systems",
+                "mutinynet.esplora.surmount.systems",
+                "liquid.esplora.surmount.systems",
+            ] {
+                assert!(
+                    extra.iter().any(|h| h == host),
+                    "missing {host} in {extra:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn portal_host_colliding_with_indexer_fails_closed() {
+            let err = SploraProxyConfig::from_env_map(|k| match k {
+                "SURMOUNT_SPLORA_PROXY" => Some("1".into()),
+                "SURMOUNT_SPLORA_PORTAL_HOST" => Some("testnet3.esplora.surmount.systems".into()),
+                "SURMOUNT_SPLORA_INSTANCES" => {
+                    Some(r#"{"testnet3":{"hosts":["testnet3.esplora.surmount.systems"]}}"#.into())
+                }
+                _ => None,
+            })
+            .unwrap_err();
+            assert!(err.contains("PORTAL_HOST"), "{err}");
+            assert!(
+                err.contains("fifth indexer") || err.contains("not also"),
+                "{err}"
+            );
+        }
+
+        #[test]
+        fn portal_env_ignored_when_proxy_off() {
+            let cfg = SploraProxyConfig::from_env_map(|k| match k {
+                "SURMOUNT_SPLORA_PORTAL_HOST" => Some("splora.surmount.systems".into()),
+                _ => None,
+            })
+            .unwrap();
+            assert!(!cfg.enable);
+            assert!(cfg.portal_host.is_none());
+            assert!(!cfg.is_portal_host("splora.surmount.systems"));
+        }
+
+        /// Named contract: GET / on Host splora.surmount.systems is 200 HTML.
+        #[tokio::test]
+        async fn splora_portal_get_root_is_200_html_listing_live_hosts() {
+            let cfg = four_live_plus_mainnet_cfg("splora.surmount.systems");
+            let state = test_state_for(cfg, false);
+            let app = Router::new()
+                .fallback(axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    splora_proxy_middleware,
+                ))
+                .with_state(state);
+            let lis = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = lis.local_addr().unwrap();
+            let serve = tokio::spawn(async move {
+                axum::serve(lis, app).await.ok();
+            });
+            let client = reqwest::Client::new();
+            let resp = client
+                .get(format!("http://{addr}/"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), reqwest::StatusCode::OK);
+            let ctype = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            assert!(
+                ctype.contains("text/html"),
+                "portal GET / must be HTML, content-type={ctype}"
+            );
+            let body = resp.text().await.unwrap();
+            for host in [
+                "testnet3.esplora.surmount.systems",
+                "testnet4.esplora.surmount.systems",
+                "mutinynet.esplora.surmount.systems",
+                "liquid.esplora.surmount.systems",
+            ] {
+                assert!(
+                    body.contains(&format!("https://{host}/")),
+                    "missing https link for {host}: {body}"
+                );
+            }
+            assert!(
+                !body.to_ascii_lowercase().contains("mainnet"),
+                "portal GET / must not invent mainnet: {body}"
+            );
+            assert!(!body.contains("https://esplora.surmount.systems/"));
+            serve.abort();
         }
 
         fn test_state_for(cfg: SploraProxyConfig, https: bool) -> Arc<AppState> {
@@ -1999,6 +2304,7 @@ pub(crate) mod splora {
                 queue_socket: PathBuf::from("/tmp/splora-queue-unused.sock"),
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             };
             let state = test_state_for(cfg, true);
             let app = Router::new()
@@ -2105,6 +2411,7 @@ pub(crate) mod splora {
                 queue_socket: q_sock.clone(),
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             };
             let state = test_state_for(cfg, false);
             let app = Router::new()
@@ -2189,6 +2496,7 @@ pub(crate) mod splora {
                 queue_socket: PathBuf::from("/tmp/splora-queue-unused.sock"),
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             };
             let state = test_state_for(cfg, true);
             let app = Router::new()

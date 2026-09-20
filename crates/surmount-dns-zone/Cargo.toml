@@ -3,7 +3,7 @@ name = "surmount-dns-zone"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Namecheap forward-zone helper (A/AAAA/TXT/CAA/MX). Dry-run default. Hermetic mock."
+description = "Namecheap forward-zone helper (A/AAAA/TXT/CAA/MX). Dry-run default. --live getHosts/setHosts."
 publish = false
 
 [[bin]]
@@ -16,6 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
+surmount-acme-namecheap = { path = "../surmount-acme-namecheap" }
 
 [lints]
 workspace = true

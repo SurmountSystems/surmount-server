@@ -87,6 +87,9 @@ let
       };
     in
     builtins.toJSON (lib.mapAttrs toEntry splora.instances);
+  # One DNS name for the product. Not a fifth indexer. Empty option = splora.<primary>.
+  sploraPortalHost =
+    if splora.portalHost != "" then splora.portalHost else "splora.${cfg.primaryDomain}";
 
   # Console link to domain C vault:
   # 1) explicit managementUi.vaultwardenUrl wins
@@ -234,6 +237,7 @@ let
     "SURMOUNT_SPLORA_SOCKET_DIR=${splora.socketDir}"
     "SURMOUNT_SPLORA_QUEUE_SOCKET=${splora.queueSocket}"
     "SURMOUNT_SPLORA_QUEUE_PATH=${splora.queuePath}"
+    "SURMOUNT_SPLORA_PORTAL_HOST=${sploraPortalHost}"
     # systemd Environment= without wrapping quotes treats inner " as syntax
     # and strips them. Single-quoted KEY=VALUE keeps JSON in process env.
     "'SURMOUNT_SPLORA_INSTANCES=${sploraInstancesJson}'"

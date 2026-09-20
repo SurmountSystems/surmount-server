@@ -924,6 +924,7 @@ just dns-zone-namecheap -- set-host mail --a 203.0.113.10 --aaaa 2001:db8::10
 just dns-zone-namecheap -- set-txt 'default._bimi' 'v=BIMI1; l=https://surmount.systems/bimi.svg;'
 
 # Apply only after dry-run looks right (TEST-NET examples above; use real VPS addresses)
+# --live without MOCK_DIR is live getHosts then setHosts (laptop ClientIp). Default stays dry-run.
 just dns-zone-namecheap -- --live set-a services 203.0.113.10
 
 # Other registered zones (one SLD/TLD per credentials file; laptop ClientIp):

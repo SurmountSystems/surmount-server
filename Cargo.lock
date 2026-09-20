@@ -3646,6 +3646,7 @@ name = "surmount-dns-zone"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "surmount-acme-namecheap",
 ]
 
 [[package]]

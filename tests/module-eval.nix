@@ -2854,6 +2854,7 @@ let
     assert failedAssertions e == [ ];
     assert e.config.surmount.sploraProxy.enable == false;
     assert !(builtins.any (x: lib.hasPrefix "SURMOUNT_SPLORA_PROXY=1" x) envList);
+    assert !(builtins.any (x: lib.hasPrefix "SURMOUNT_SPLORA_PORTAL_HOST=" x) envList);
     "t50-splora-proxy-default-off-ok";
 
   t51-splora-proxy-enable-env-and-udp-https =
@@ -2877,6 +2878,7 @@ let
     in
     assert failedAssertions e == [ ];
     assert builtins.any (x: x == "SURMOUNT_SPLORA_PROXY=1") envList;
+    assert builtins.any (x: x == "SURMOUNT_SPLORA_PORTAL_HOST=splora.surmount.systems") envList;
     assert lib.hasInfix "SURMOUNT_SPLORA_INSTANCES=" envBlob;
     assert lib.hasInfix ''"mainnet"'' envBlob;
     assert lib.hasInfix ''"hosts"'' envBlob;
@@ -3093,6 +3095,48 @@ let
     ) failed;
     "t60-splora-remote-enable-needs-cookie-path-ok";
 
+  # Portal Host is one DNS name (not a fifth indexer). Extra onion Hosts
+  # include the portal and live indexer Hosts. Mainnet instance is not required.
+  t61-splora-portal-host-and-onion-extras =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          testnet3.hosts = [ "testnet3.esplora.surmount.systems" ];
+          testnet4.hosts = [ "testnet4.esplora.surmount.systems" ];
+          mutinynet.hosts = [ "mutinynet.esplora.surmount.systems" ];
+          liquid.hosts = [ "liquid.esplora.surmount.systems" ];
+        };
+      };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      nickEtc = e.config.environment.etc."surmount/onion-site-nicknames.json" or { };
+      nickJson =
+        if nickEtc ? text && nickEtc.text != null && nickEtc.text != "" then
+          builtins.unsafeDiscardStringContext nickEtc.text
+        else if nickEtc ? source && nickEtc.source != null then
+          builtins.unsafeDiscardStringContext (builtins.readFile nickEtc.source)
+        else
+          "";
+      nickMap = if nickJson == "" then { } else builtins.fromJSON nickJson;
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+      portalNick = nickMap."splora.surmount.systems" or "";
+    in
+    assert failedAssertions e == [ ];
+    assert builtins.any (x: x == "SURMOUNT_SPLORA_PORTAL_HOST=splora.surmount.systems") envList;
+    assert nickMap ? "splora.surmount.systems";
+    assert nickMap ? "testnet3.esplora.surmount.systems";
+    assert nickMap ? "testnet4.esplora.surmount.systems";
+    assert nickMap ? "mutinynet.esplora.surmount.systems";
+    assert nickMap ? "liquid.esplora.surmount.systems";
+    assert !(nickMap ? "esplora.surmount.systems");
+    assert portalNick != "";
+    assert lib.hasInfix "[onion_services.\"${portalNick}\"]" toml;
+    "t61-splora-portal-host-and-onion-extras-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -3209,6 +3253,7 @@ let
     t58-splora-remote-public-health-extra-arg
     t59-splora-remote-ui-extra-groups-when-proxy-on
     t60-splora-remote-enable-needs-cookie-path
+    t61-splora-portal-host-and-onion-extras
   ];
 in
 {

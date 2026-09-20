@@ -1422,6 +1422,7 @@ pub(crate) mod http3 {
                 queue_socket: PathBuf::from("/tmp/splora-h3-queue-unused.sock"),
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             };
             let http3_cfg = Http3Config {
                 enable: true,

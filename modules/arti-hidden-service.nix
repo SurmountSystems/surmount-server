@@ -65,11 +65,25 @@ let
   localCleartext = import ./lib/local-cleartext.nix { inherit lib; };
   publicOnion = import ./lib/public-onion-sites.nix { inherit lib; };
 
+  sploraProxy = cfg.sploraProxy;
+  sploraPortalHost =
+    if sploraProxy.portalHost != "" then
+      sploraProxy.portalHost
+    else
+      "splora.${cfg.primaryDomain}";
+  sploraExtraOnionHosts =
+    if sploraProxy.enable then
+      lib.unique (
+        (lib.concatMap (inst: inst.hosts or [ ]) (lib.attrValues sploraProxy.instances))
+        ++ [ sploraPortalHost ]
+      )
+    else
+      [ ];
   publicOnionSites = publicOnion.publicOnionSites {
     primaryDomain = cfg.primaryDomain;
     servicesHostname = cfg.servicesHostname;
     mailHostname = cfg.mailHostname;
-    extraStaticHosts = lib.attrNames ui.staticVhosts;
+    extraStaticHosts = lib.unique ((lib.attrNames ui.staticVhosts) ++ sploraExtraOnionHosts);
     extraMailHostnames = ui.extraMailHostnames;
     consoleNickname = hs.nickname;
   };

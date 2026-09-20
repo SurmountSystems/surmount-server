@@ -389,10 +389,11 @@ Host-local `mtaStsMode` may already be `enforce`. Live
 `https://mta-sts.surmount.systems/.well-known/mta-sts.txt` stays
 `testing` until a real switch. After switch, confirm that file shows
 `mode: enforce`. The DNS TXT `_mta-sts.surmount.systems` id should
-change when the policy changes so senders refetch. `surmount-dns-zone`
-without `SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR` does not call live
-Namecheap; bump that TXT with a live Namecheap path when that tool
-supports it.
+change when the policy changes so senders refetch. `surmount-dns-zone --live` without
+`SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR` calls live Namecheap getHosts
+then setHosts from the laptop (ClientIp required). Default without
+`--live` is dry-run (getHosts plan, no setHosts). Tests override the
+API base to a local HTTP listener. Never live Namecheap as CI green.
 
 ### 6.6 Certificate hostnames
 

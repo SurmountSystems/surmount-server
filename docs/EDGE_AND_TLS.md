@@ -4,7 +4,10 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-09-11 (each public HTTP Host gets its own v3 onion;
+**Last updated:** 2026-09-20 (`splora.surmount.systems` is a portal Host:
+GET / lists the live non-mainnet indexer Hosts as https links; that Host
+is on the :80 allowlist and gets a per-site onion. Not a fifth indexer.
+Not mainnet.) Prior 2026-09-11 (each public HTTP Host gets its own v3 onion;
 Onion-Location is `http://{that-host-onion}{path}`; mail Hosts stay
 unmapped). Prior 2026-09-07 (intended production leaf is **one** Let's
 Encrypt PEM pair (`with_single_cert`) covering **20** certificate
@@ -324,7 +327,8 @@ speak HTTP/3. Splora does not listen on UDP.
 
 | Network | Public Host | Unix socket | Notes |
 |---------|-------------|-------------|-------|
-| mainnet | `esplora.surmount.systems` | `/run/splora/mainnet.http.sock` | Indexer HTTP + `GET /api/v1/ws` |
+| portal | `splora.surmount.systems` | (none) | GET / HTML lists live non-mainnet Hosts as https links. Not an indexer. |
+| mainnet | `esplora.surmount.systems` | `/run/splora/mainnet.http.sock` | Indexer HTTP + `GET /api/v1/ws`. Stays off unless host-local turns it on. |
 | testnet3 | `testnet3.esplora.surmount.systems` | `/run/splora/testnet3.http.sock` | Same |
 | testnet4 | `testnet4.esplora.surmount.systems` | `/run/splora/testnet4.http.sock` | Same |
 | mutinynet | `mutinynet.esplora.surmount.systems` | `/run/splora/mutinynet.http.sock` | Same |
@@ -466,12 +470,16 @@ speak HTTP/3. Splora does not listen on UDP.
   and public https listen are real. See [SECURITY.md](SECURITY.md).
 - **Splora Unix proxy (optional, default off):** `surmount.sploraProxy.enable`
   maps public Hosts to HTTP/1.1 Unix sockets on the **edge host**. Documented
-  Hosts (optional edge, not a REST requirement):
+  Hosts (optional edge, not a REST requirement): portal
+  `splora.surmount.systems` (GET / lists live non-mainnet Hosts; env
+  `SURMOUNT_SPLORA_PORTAL_HOST`; not an indexer),
   `esplora.surmount.systems` to `/run/splora/mainnet.http.sock`,
   `testnet3.esplora.surmount.systems` to `/run/splora/testnet3.http.sock`,
   `testnet4.esplora.surmount.systems` to `/run/splora/testnet4.http.sock`,
   `mutinynet.esplora.surmount.systems` to `/run/splora/mutinynet.http.sock`,
   `liquid.esplora.surmount.systems` to `/run/splora/liquid.http.sock`. The
+  portal Host and indexer Hosts join the :80 allowlist and Arti extra onion
+  Hosts when the proxy is on. The
   public sample stays proxy off. Private host-local enables the proxy.
   Indexer sockets exist only when those units run. Unix socket or one
   existing Host is enough for mempool REST. Do not map REST onto the

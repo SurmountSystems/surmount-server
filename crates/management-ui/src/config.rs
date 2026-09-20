@@ -554,7 +554,15 @@ impl AppConfig {
         let extra_mail_hostnames = extra_mail_hostnames_from_env();
         let redirect_allowed_hosts =
             union_static_vhost_hosts(redirect_allowed_hosts, &static_vhosts);
-        let extra_onion_hosts: Vec<String> = static_vhosts.keys().cloned().collect();
+        // Vaultwarden: operator-published URL only. Never invent; no admin token.
+        let vaultwarden_url = resolve_vaultwarden_url_from_env();
+        // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
+        let vaultwarden_proxy = VaultwardenProxyConfig::from_env()?;
+        // Load splora before onion discovery so extra onion Hosts include
+        // indexer Hosts and the portal Host (not only static vhost keys).
+        let splora_proxy = SploraProxyConfig::from_env()?;
+        let redirect_allowed_hosts = union_splora_hosts(redirect_allowed_hosts, &splora_proxy);
+        let extra_onion_hosts = extra_onion_hosts_union(&static_vhosts, &splora_proxy);
 
         // Onion: structured surface from env + host HS paths. Never invent.
         let onion_surface = resolve_onion_surface_from_env();
@@ -566,13 +574,7 @@ impl AppConfig {
             onion_url.as_deref(),
             &extra_onion_hosts,
         );
-        // Vaultwarden: operator-published URL only. Never invent; no admin token.
-        let vaultwarden_url = resolve_vaultwarden_url_from_env();
-        // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
-        let vaultwarden_proxy = VaultwardenProxyConfig::from_env()?;
-        let splora_proxy = SploraProxyConfig::from_env()?;
         let http3 = Http3Config::from_env_map(|k| env::var(k).ok(), listen_mode.is_https())?;
-        let redirect_allowed_hosts = union_splora_hosts(redirect_allowed_hosts, &splora_proxy);
 
         // Public apex/www document root. Empty/unset = coming-soon fallback.
         let apex_public_root = match env::var("SURMOUNT_APEX_PUBLIC_ROOT") {
@@ -870,17 +872,32 @@ pub fn union_splora_hosts(mut allowed: Vec<String>, splora: &SploraProxyConfig) 
     if !splora.enable {
         return allowed;
     }
-    for inst in &splora.instances {
-        for host in &inst.hosts {
-            if !allowed
-                .iter()
-                .any(|a| crate::redirect::host_is_allowlisted(host, std::slice::from_ref(a)))
-            {
-                allowed.push(host.to_string());
-            }
+    for host in splora.extra_onion_and_redirect_hosts() {
+        if !allowed
+            .iter()
+            .any(|a| crate::redirect::host_is_allowlisted(&host, std::slice::from_ref(a)))
+        {
+            allowed.push(host);
         }
     }
     allowed
+}
+
+/// Extra onion Hosts: static vhost keys plus splora indexer Hosts and portal.
+pub fn extra_onion_hosts_union(
+    vhosts: &BTreeMap<String, PathBuf>,
+    splora: &SploraProxyConfig,
+) -> Vec<String> {
+    let mut hosts: Vec<String> = vhosts.keys().cloned().collect();
+    if !splora.enable {
+        return hosts;
+    }
+    for host in splora.extra_onion_and_redirect_hosts() {
+        if !hosts.iter().any(|h| h == &host) {
+            hosts.push(host);
+        }
+    }
+    hosts
 }
 
 pub fn union_static_vhost_hosts(
@@ -1036,6 +1053,10 @@ mod tests {
             "SURMOUNT_SPLORA_QUEUE_SOCKET",
             "SURMOUNT_SPLORA_QUEUE_PATH",
             "SURMOUNT_SPLORA_ELECTRUM_SOCKET",
+            "SURMOUNT_SPLORA_PORTAL_HOST",
+            "SURMOUNT_ONION_SITES_DIR",
+            "SURMOUNT_ONION_SITE_NICKNAMES_FILE",
+            "SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR",
             "SURMOUNT_HTTP3",
             "SURMOUNT_RATE_LIMIT_MAX",
             "SURMOUNT_RATE_LIMIT_WINDOW_SECS",
@@ -1074,8 +1095,101 @@ mod tests {
         let _g = EnvGuard::acquire();
         let cfg = AppConfig::from_env().unwrap();
         assert!(!cfg.splora_proxy.enable);
+        assert!(cfg.splora_proxy.portal_host.is_none());
         assert!(!cfg.http3.enable);
         assert!(!cfg.http3.listener_bound());
+        assert!(
+            !cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "splora.surmount.systems")
+        );
+    }
+
+    /// Named contract: portal Host is on the :80 allowlist; extra onion Hosts
+    /// include the portal and live indexer Hosts. Not a fifth indexer.
+    #[test]
+    fn splora_portal_unions_redirect_allowlist_and_onion_extra_hosts() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_SPLORA_PROXY", "1");
+        set_env("SURMOUNT_SPLORA_PORTAL_HOST", "splora.surmount.systems");
+        set_env(
+            "SURMOUNT_SPLORA_INSTANCES",
+            r#"{"testnet3":{"hosts":["testnet3.esplora.surmount.systems"]},"testnet4":{"hosts":["testnet4.esplora.surmount.systems"]},"mutinynet":{"hosts":["mutinynet.esplora.surmount.systems"]},"liquid":{"hosts":["liquid.esplora.surmount.systems"]},"mainnet":{"hosts":["esplora.surmount.systems"]}}"#,
+        );
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(cfg.splora_proxy.enable);
+        assert_eq!(
+            cfg.splora_proxy.portal_host.as_deref(),
+            Some("splora.surmount.systems")
+        );
+        for host in [
+            "splora.surmount.systems",
+            "testnet3.esplora.surmount.systems",
+            "testnet4.esplora.surmount.systems",
+            "mutinynet.esplora.surmount.systems",
+            "liquid.esplora.surmount.systems",
+        ] {
+            assert!(
+                cfg.redirect_allowed_hosts.iter().any(|h| h == host),
+                ":80 allowlist must include {host}: {:?}",
+                cfg.redirect_allowed_hosts
+            );
+        }
+        let extra = extra_onion_hosts_union(&cfg.static_vhosts, &cfg.splora_proxy);
+        assert!(
+            extra.iter().any(|h| h == "splora.surmount.systems"),
+            "onion extra hosts must include the portal: {extra:?}"
+        );
+        for host in [
+            "testnet3.esplora.surmount.systems",
+            "testnet4.esplora.surmount.systems",
+            "mutinynet.esplora.surmount.systems",
+            "liquid.esplora.surmount.systems",
+        ] {
+            assert!(
+                extra.iter().any(|h| h == host),
+                "onion extra hosts must include {host}: {extra:?}"
+            );
+        }
+        assert!(
+            crate::redirect::redirect_http_to_https(
+                true,
+                "splora.surmount.systems",
+                "/",
+                None,
+                &cfg.redirect_allowed_hosts,
+                &cfg.primary_domain,
+                &cfg.services_hostname,
+            ) == crate::redirect::HttpToHttps::Redirect {
+                location: "https://splora.surmount.systems/".into()
+            }
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "surmount-splora-portal-onion-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let portal_onion = crate::onion_discovery::unique_v3_onion_host(21);
+        std::fs::write(
+            dir.join("splora.surmount.systems"),
+            format!("{portal_onion}\n"),
+        )
+        .unwrap();
+        set_env(
+            "SURMOUNT_ONION_SITES_DIR",
+            dir.to_str().expect("utf8 temp path"),
+        );
+        let cfg2 = AppConfig::from_env().unwrap();
+        let mapped = cfg2
+            .onion_discovery
+            .lookup("splora.surmount.systems")
+            .expect("portal Host must be in onion extra hosts / sites dir");
+        assert_eq!(mapped.onion_host, portal_onion);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

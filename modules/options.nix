@@ -1869,6 +1869,18 @@ in
         '';
       };
 
+      portalHost = mkOption {
+        type = types.str;
+        default = "";
+        example = "splora.surmount.systems";
+        description = ''
+          Public portal Host (one DNS name for the product). Not an indexer
+          and not mainnet. Empty = splora.<primaryDomain>. Emitted as
+          SURMOUNT_SPLORA_PORTAL_HOST when sploraProxy.enable. GET / lists
+          live non-mainnet indexer Hosts as https links.
+        '';
+      };
+
       # The imported services.splora module does not set MemoryMax. Host-local
       # may cap indexer/queue units from this tree without editing splora.
       unitsMemoryMax = mkOption {
