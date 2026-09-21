@@ -53,10 +53,16 @@ libraries are out of this lockfile. Full method and leftovers:
 input `advisory-db` (RustSec; `--no-fetch --stale`). `just deny` is
 `cargo-deny` bans (no sha1/md5 crates) and **is** in `checks.*.ci`.
 `just audit` is in `checks.*.ci`. `h2` is 0.4.16 (RUSTSEC-2026-0258
-cleared). Workspace `age` is 0.12 (drops the rekey path of
-RUSTSEC-2026-0173). Three unmaintained warnings remain and are **not**
-cargo-audit-ignored so `just audit` still prints them: instant via
-nostr 0.44.8 (RUSTSEC-2024-0384), paste via leptos 0.8.20
+cleared). Workspace rustls is **0.23.45** (RUSTSEC-2026-0285 TLS 1.3
+handshake messages across encryption-level boundaries). menhera 10d/7d
+still stop at 0.23.44; 3d already lists 0.23.45. The lock uses git
+`[patch.crates-io]` of rustls tag `v/0.23.45` (rev
+`2976d90fd1c2db6b518700dd101b714069cfcb17`), same class as the chacha20
+git patch, until 10d lists 0.23.45. Do not ignore that advisory. Do not
+fetch crates.io to skip menhera. Workspace `age` is 0.12 (drops the
+rekey path of RUSTSEC-2026-0173). Three unmaintained warnings remain
+and are **not** cargo-audit-ignored so `just audit` still prints them:
+instant via nostr 0.44.8 (RUSTSEC-2024-0384), paste via leptos 0.8.20
 (RUSTSEC-2024-0436), proc-macro-error2 via leptos_macro / rstml
 (RUSTSEC-2026-0173). See
 [research/cargo-audit-2026-08-26.md](research/cargo-audit-2026-08-26.md).

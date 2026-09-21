@@ -19,6 +19,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Fix publicHttpHosts eval fail
     - L3 specialists (when spawned)
+  - L2 Green just check-remote
+    - L3 specialists (when spawned)
   - L2 Honor hook and issue cert
     - L3 specialists (when spawned)
   - L2 Implement Splora portal Host
@@ -79,6 +81,18 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 goal plan writer
     - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 goal plan writer
+    - L3 specialists (when spawned)
+  - L2 rustls audit then check-remote
+    - L3 specialists (when spawned)
   - L2 splora.surmount.systems Host
     - L3 specialists (when spawned)
 
@@ -93,6 +107,7 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Finish per-site onion code | nested L2 session usage | L2 | 199929 | estimate | exited |
 | Finish per-site onions | nested L2 session usage | L2 | 78308 | estimate | exited |
 | Fix publicHttpHosts eval fail | nested L2 session usage | L2 | 73876 | estimate | exited |
+| Green just check-remote | nested L2 session usage | L2 | 69322 | estimate | exited |
 | Honor hook and issue cert | nested L2 session usage | L2 | 196300 | estimate | exited |
 | Implement Splora portal Host | nested L2 session usage | L2 | 182109 | estimate | exited |
 | Implement domains inventory union | nested L2 session usage | L2 | 156192 | estimate | exited |
@@ -123,5 +138,11 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | goal plan writer | nested L2 session usage | L2 | 224310 | estimate | exited |
 | goal plan writer | nested L2 session usage | L2 | 224310 | estimate | exited |
 | goal plan writer | nested L2 session usage | L2 | 224310 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 87889 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 88582 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 89472 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 89644 | estimate | exited |
+| goal plan writer | nested L2 session usage | L2 | 88643 | estimate | exited |
+| rustls audit then check-remote | nested L2 session usage | L2 | 144854 | estimate | exited |
 | splora.surmount.systems Host | nested L2 session usage | L2 | 71509 | estimate | exited |
 

@@ -4,7 +4,7 @@ Plain English. No assumption that the reader already knows Fix ladder codes.
 Ladder detail still lives in [fix-and-fixos.md](fix-and-fixos.md) if you
 want depth.
 
-**Last updated:** 2026-09-19 (`surmount.sploraIndexer` is the host-local single-knob wrap over imported `nixosModules.splora`; flake input `splora` on the `surmount` branch, locked rev `22d6dcf7f76c1cacc23220d80203099018cde3aa`; prior lock `9481e4cb87273aa99b0357be48503765beadb919`; instance options already include cookieFile, daemonRpcAddr, jsonrpcImport, daemonDir = null, publicHealth, db cache 24, httpSocketFile default `/run/splora/${name}.http.sock`; this repo does not wrap crane src). Prior 2026-09-01 (this tree briefly wrapped crane src; that wrap is deleted). Prior 2026-09-01 (flake input `splora` from `github:SurmountSystems/splora` on the `surmount` branch; not in-tree). Prior 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
+**Last updated:** 2026-09-19 (`surmount.sploraIndexer` is the host-local single-knob wrap over imported `nixosModules.splora`; flake input `splora` on the `surmount` branch, locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`; prior lock `22d6dcf7f76c1cacc23220d80203099018cde3aa`; instance options already include cookieFile, daemonRpcAddr, jsonrpcImport, daemonDir = null, publicHealth, db cache 24, httpSocketFile default `/run/splora/${name}.http.sock`; this repo does not wrap crane src). Prior 2026-09-01 (this tree briefly wrapped crane src; that wrap is deleted). Prior 2026-09-01 (flake input `splora` from `github:SurmountSystems/splora` on the `surmount` branch; not in-tree). Prior 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
 ---
@@ -71,7 +71,7 @@ package bumps in this repo.
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
 
 **Flake input, not in-tree:** `splora` is `github:SurmountSystems/splora` on
-the `surmount` branch (locked rev `22d6dcf7f76c1cacc23220d80203099018cde3aa`).
+the `surmount` branch (locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`).
 This repo imports `nixosModules.splora` and overlays `pkgs.splora` /
 `pkgs.splora-liquid` from the input packages. Operator bumps with
 `nix flake update splora`. Do not copy the splora tree into this repo.

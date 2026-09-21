@@ -498,7 +498,7 @@ speak HTTP/3. Splora does not listen on UDP.
   and `services.splora.enable` are both true, `users.users.surmount-ui.extraGroups`
   includes the `splora` group so the edge can connect to 0750 sockets.
   Flake input `splora` (`github:SurmountSystems/splora` on the `surmount`
-  branch, locked rev `22d6dcf7f76c1cacc23220d80203099018cde3aa`) supplies
+  branch, locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`) supplies
   `pkgs.splora`, `pkgs.splora-liquid`, and `nixosModules.splora`.
   Upstream crane omits `.cargo/config.toml` from Nix src (laptop cargo
   still uses Menhera). This overlay does not wrap that src again. Do
@@ -532,7 +532,8 @@ speak HTTP/3. Splora does not listen on UDP.
   `networking.firewall.allowedUDPPorts` includes 443 when the UI HTTPS
   listener is on (not the cleartext https-escape). Keep the workspace
   `[patch.crates-io]` for `chacha20` if quinn pulls that crate (menhera
-  yank of 0.10.0/0.10.1).
+  yank of 0.10.0/0.10.1) and for `rustls` 0.23.45 until menhera 10d lists
+  that version (RUSTSEC-2026-0285; do not ignore; do not fetch crates.io).
 - **Ban layer (first path):** `crates/management-ui/src/ban.rs` decisions
   (Allow / Whitelisted / RateLimited / Banned / BanCandidate). Whitelist never
   banned; last-used touched on allowed requests from a whitelist match.

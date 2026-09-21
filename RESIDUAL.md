@@ -20,8 +20,8 @@ peer into `ConnectInfo` so HTTP/3 bans and rate-limit keys are per-client
 absent). NWC is not that 500; it is the `/mail` wallet store after login.
 Live switch still operator-owned. Flake input `splora` is
 `github:SurmountSystems/splora` on the `surmount` branch, locked rev
-`22d6dcf7f76c1cacc23220d80203099018cde3aa` (previous lock
-`9481e4cb87273aa99b0357be48503765beadb919`). Imported
+`be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b` (previous lock
+`22d6dcf7f76c1cacc23220d80203099018cde3aa`). Imported
 `nixosModules.splora` instance options now include `cookieFile`,
 `daemonRpcAddr`, `jsonrpcImport`, `daemonDir` (null is remote JSON-RPC),
 `publicHealth`, db cache default 24, and `httpSocketFile` default

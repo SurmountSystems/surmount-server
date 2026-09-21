@@ -9,6 +9,32 @@ Loaded 1226 advisories. Operator command: `just audit` (or
 after nostr 0.44.8, time 0.3.55, and `h2` 0.4.16 (RUSTSEC-2026-0258
 cleared on cargo update 2026-08-27). `just deny` stays in `checks.ci`.
 
+## 2026-09-21 rustls RUSTSEC-2026-0285
+
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+(accessed: 2026-09-21): rustls 0.23.13 through 0.23.44 accepted TLS 1.3
+handshake messages across encryption-level boundaries. Patched
+`>=0.23.45`. crates.io and menhera **3d** list 0.23.45 (published
+2026-09-14T15:11:17Z, checksum
+`0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634`).
+Laptop `replace-with` is menhera **10d**; named registry is **7d**. Both
+still stop at 0.23.44.
+
+`cargo update -p rustls --precise 0.23.45` against that replacement:
+
+```
+error: no matching package named `rustls` found
+location searched: `menhera-cooldown` index (which is replacing registry `crates-io`)
+```
+
+Do **not** ignore the advisory. Do **not** fetch crates.io to skip
+menhera. Git `[patch.crates-io]` of
+https://github.com/rustls/rustls rev
+`2976d90fd1c2db6b518700dd101b714069cfcb17` (tag `v/0.23.45`) is the
+same escape as chacha20. Workspace pin is `0.23.45`. When menhera 10d
+lists 0.23.45, drop the rustls patch line and
+`cargo update -p rustls --precise 0.23.45`.
+
 ## 2026-08-27 unmaintained warnings
 
 Operator `cargo audit` paste and hermetic `just audit` (same three IDs,
