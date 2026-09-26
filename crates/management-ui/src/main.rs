@@ -725,11 +725,9 @@ async fn security_headers_middleware(
     // Discovery eligibility stays on the original onion Host / URI so
     // Onion-Location is not emitted on `.onion` or CleartextSocket.
     let (csp_host, vault_path) = if crate::onion_discovery::host_is_onion(&host) {
-        match crate::onion_discovery::match_onion_vhost_rewrite(
-            &path,
-            &state.config.onion_discovery,
-        ) {
-            Some((clearnet, new_path)) => (clearnet, new_path),
+        match crate::onion_discovery::match_onion_host_rewrite(&host, &state.config.onion_discovery)
+        {
+            Some(clearnet) => (clearnet, path.clone()),
             None => (host.clone(), path.clone()),
         }
     } else {
@@ -1629,8 +1627,8 @@ async fn apex_public_host_middleware(
     let services = state.config.services_hostname.as_str();
     let path_only = path.split('?').next().unwrap_or(path);
 
-    // Router::layer runs after routing. Onion `/_o/{host}/.well-known/mta-sts.txt`
-    // does not match the policy route; serve here after Host rewrite.
+    // Router::layer runs after routing. Onion Host rewrite sets the mapped
+    // clearnet Host; serve MTA-STS here when that Host is the policy name.
     if path_only == "/.well-known/mta-sts.txt"
         && should_serve_mta_sts_policy(
             state.config.mta_sts_mode,
@@ -1683,11 +1681,10 @@ async fn apex_public_host_middleware(
     next.run(request).await
 }
 
-/// Onion Host + `/_o/{mapped-clearnet-host}` selects that Host's surface.
+/// Onion request Host selects that site's clearnet surface (per-site v3).
 ///
-/// Strips the discriminator and rewrites Host so extra vhosts and MTA-STS
-/// policy serve on the shared v3. Unmatched `/_o/{host}` stays unrewritten
-/// (404 unless that path is already a console route). `{onion}/` stays console.
+/// Rewrites Host to the mapped clearnet name and keeps the path. There is no
+/// shared `/_o/{host}` discriminator (that correlated sites on one onion).
 async fn onion_vhost_rewrite_middleware(
     State(state): State<Arc<AppState>>,
     mut request: Request,
@@ -1697,18 +1694,13 @@ async fn onion_vhost_rewrite_middleware(
     if !crate::onion_discovery::host_is_onion(&host) {
         return next.run(request).await;
     }
-    let Some((clearnet, new_path)) = crate::onion_discovery::match_onion_vhost_rewrite(
-        request.uri().path(),
-        &state.config.onion_discovery,
-    ) else {
+    let Some(clearnet) =
+        crate::onion_discovery::match_onion_host_rewrite(&host, &state.config.onion_discovery)
+    else {
         return next.run(request).await;
     };
     if let Ok(hv) = HeaderValue::from_str(&clearnet) {
         request.headers_mut().insert(header::HOST, hv);
-    }
-    if let Some(uri) = crate::onion_discovery::rewrite_uri_path_keep_query(request.uri(), &new_path)
-    {
-        *request.uri_mut() = uri;
     }
     next.run(request).await
 }
@@ -2196,31 +2188,60 @@ mod edge_wire_tests {
         format!("http://{FIXTURE_ONION_HOST}")
     }
 
+    fn onion_location_for(
+        cfg: &crate::onion_discovery::OnionDiscoveryConfig,
+        host: &str,
+        path: &str,
+    ) -> String {
+        let mapping = cfg
+            .lookup(host)
+            .unwrap_or_else(|| panic!("expected onion mapping for {host}"));
+        let uri: axum::http::Uri = path.parse().unwrap_or_else(|_| panic!("uri {path}"));
+        crate::onion_discovery::onion_location_value(mapping, &uri)
+            .unwrap_or_else(|| panic!("Onion-Location for {host}"))
+    }
+
     fn fixture_onion_discovery() -> crate::onion_discovery::OnionDiscoveryConfig {
+        let extra: Vec<_> = crate::onion_discovery::per_site_mappings(
+            "example.test",
+            "services.example.test",
+            &[] as &[&str],
+        )
+        .into_iter()
+        .filter(|m| m.clearnet_host != "services.example.test")
+        .collect();
         crate::onion_discovery::build_onion_discovery(
             "example.test",
             "services.example.test",
             Some(&fixture_onion_url()),
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             &[] as &[&str],
         )
     }
 
-    /// Auto-derive plus extra static Hosts (same path as process-start map).
+    /// Per-site onions plus extra static Hosts. Services keep the fixture v3.
     fn onion_discovery_with_extra_hosts(
         extra_hosts: &[&str],
     ) -> crate::onion_discovery::OnionDiscoveryConfig {
+        let extra: Vec<_> = crate::onion_discovery::per_site_mappings(
+            "example.test",
+            "services.example.test",
+            extra_hosts,
+        )
+        .into_iter()
+        .filter(|m| m.clearnet_host != "services.example.test")
+        .collect();
         crate::onion_discovery::build_onion_discovery(
             "example.test",
             "services.example.test",
             Some(&fixture_onion_url()),
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             extra_hosts,
@@ -2272,13 +2293,23 @@ mod edge_wire_tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert_eq!(ol, onion_location, "Onion-Location");
+        assert!(
+            !ol.contains("/_o/"),
+            "Onion-Location must not use a shared /_o/{{host}} prefix: {ol}"
+        );
+        let onion_host = onion_location
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .unwrap_or("");
         let alt = headers
             .get("alt-svc")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert_eq!(
             alt,
-            format!("h2=\"{FIXTURE_ONION_HOST}:443\"; ma=86400; persist=1"),
+            format!("h2=\"{onion_host}:443\"; ma=86400; persist=1"),
             "Alt-Svc"
         );
     }
@@ -3565,7 +3596,7 @@ mod edge_wire_tests {
     /// Named contract: extra Host serves its own document root; www alias same
     /// root; apex stays Surmount public site; services stays console; unknown
     /// Host does not leak extra files; path traversal 404; extra static Hosts
-    /// auto-map dual onion discovery with a Host discriminator prefix.
+    /// emit Onion-Location at that Host's own onion root (not a shared prefix).
     #[tokio::test]
     async fn primary_edge_extra_static_vhost_serves_own_root() {
         let testdata = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata");
@@ -3600,6 +3631,23 @@ mod edge_wire_tests {
         );
         config.onion_discovery =
             onion_discovery_with_extra_hosts(&["extra.test", "www.extra.test", "other.test"]);
+        let extra_loc = onion_location_for(&config.onion_discovery, "extra.test", "/");
+        let extra_onion = config
+            .onion_discovery
+            .lookup("extra.test")
+            .expect("extra mapped")
+            .onion_host
+            .clone();
+        let other_onion = config
+            .onion_discovery
+            .lookup("other.test")
+            .expect("other mapped")
+            .onion_host
+            .clone();
+        assert_ne!(
+            extra_onion, other_onion,
+            "two extra Hosts must not share a v3 onion"
+        );
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3626,10 +3674,7 @@ mod edge_wire_tests {
             .await
             .unwrap();
         assert_eq!(extra.status(), reqwest::StatusCode::OK);
-        assert_both_onion_discovery(
-            extra.headers(),
-            &format!("http://{FIXTURE_ONION_HOST}/_o/extra.test/"),
-        );
+        assert_both_onion_discovery(extra.headers(), &extra_loc);
         let extra_body = extra.text().await.unwrap();
         assert!(
             extra_body.contains("EXTRA-VHOST-MARKER"),
@@ -5294,10 +5339,30 @@ mod edge_wire_tests {
         let _ = serve.await;
     }
 
-    /// Named contract: apex and www convenience mapping both emit.
+    /// Named contract: two public Hosts emit two different Onion-Location
+    /// onion hostnames at each Host's onion root (not `/_o/{host}`).
     #[tokio::test]
-    async fn onion_discovery_apex_and_www_convenience() {
+    async fn two_hosts_emit_distinct_onion_location_headers() {
         let state = test_state_onion_https();
+        let cfg = state.config.onion_discovery.clone();
+        let apex_onion = cfg
+            .lookup("example.test")
+            .expect("apex mapped")
+            .onion_host
+            .clone();
+        let www_onion = cfg
+            .lookup("www.example.test")
+            .expect("www mapped")
+            .onion_host
+            .clone();
+        assert_ne!(
+            apex_onion, www_onion,
+            "each public Host must have its own v3 onion"
+        );
+        let apex_loc = onion_location_for(&cfg, "example.test", "/");
+        let www_loc = onion_location_for(&cfg, "www.example.test", "/");
+        assert_eq!(apex_loc, format!("http://{apex_onion}/"));
+        assert_eq!(www_loc, format!("http://{www_onion}/"));
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -5310,19 +5375,22 @@ mod edge_wire_tests {
             .ok();
         });
         let client = reqwest::Client::new();
-        for host in ["example.test", "www.example.test"] {
-            let res = client
-                .get(format!("http://{addr}/"))
-                .header("Host", host)
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(res.status(), reqwest::StatusCode::OK, "host {host}");
-            assert_both_onion_discovery(
-                res.headers(),
-                &format!("http://{FIXTURE_ONION_HOST}/_o/{host}/"),
-            );
-        }
+        let apex = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(apex.status(), reqwest::StatusCode::OK);
+        assert_both_onion_discovery(apex.headers(), &apex_loc);
+        let www = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "www.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(www.status(), reqwest::StatusCode::OK);
+        assert_both_onion_discovery(www.headers(), &www_loc);
         serve.abort();
         let _ = serve.await;
     }
@@ -5382,11 +5450,19 @@ mod edge_wire_tests {
             Some(&fixture_onion_url()),
             true,
             true,
-            Vec::new(),
+            crate::onion_discovery::per_site_mappings(
+                "example.test",
+                "services.example.test",
+                &[] as &[&str],
+            )
+            .into_iter()
+            .filter(|m| m.clearnet_host != "services.example.test")
+            .collect::<Vec<_>>(),
             &["services.example.test".into()],
             &["services.example.test".into()],
             &[] as &[&str],
         );
+        let expected_apex = onion_location_for(&config.onion_discovery, "example.test", "/");
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5414,10 +5490,7 @@ mod edge_wire_tests {
             .await
             .unwrap();
         assert_eq!(apex.status(), reqwest::StatusCode::OK);
-        assert_both_onion_discovery(
-            apex.headers(),
-            &format!("http://{FIXTURE_ONION_HOST}/_o/example.test/"),
-        );
+        assert_both_onion_discovery(apex.headers(), &expected_apex);
         serve.abort();
         let _ = serve.await;
     }
@@ -5590,6 +5663,11 @@ mod edge_wire_tests {
         let base = test_state_onion_https();
         let mut config = base.config.clone();
         config.mta_sts_mode = crate::mta_sts::MtaStsMode::Testing;
+        let expected = onion_location_for(
+            &config.onion_discovery,
+            "mta-sts.example.test",
+            "/.well-known/mta-sts.txt",
+        );
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5610,10 +5688,7 @@ mod edge_wire_tests {
             .await
             .unwrap();
         assert_eq!(res.status(), reqwest::StatusCode::OK);
-        assert_both_onion_discovery(
-            res.headers(),
-            &format!("http://{FIXTURE_ONION_HOST}/_o/mta-sts.example.test/.well-known/mta-sts.txt"),
-        );
+        assert_both_onion_discovery(res.headers(), &expected);
         serve.abort();
         let _ = serve.await;
     }
@@ -5676,10 +5751,10 @@ mod edge_wire_tests {
         let _ = serve.await;
     }
 
-    /// Named contract: onion Host plus extra-vhost discriminator serves that
-    /// vhost root, not the services console.
+    /// Named contract: that extra Host's own onion serves that vhost root,
+    /// not the services console.
     #[tokio::test]
-    async fn onion_host_discriminator_serves_extra_vhost_not_console() {
+    async fn onion_host_per_site_serves_extra_vhost_not_console() {
         let testdata = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata");
         let extra_root = testdata.join("static-vhosts").join("extra.test");
         let apex_root = testdata.join("public-site");
@@ -5688,6 +5763,13 @@ mod edge_wire_tests {
         config.apex_public_root = Some(apex_root);
         config.static_vhosts.insert("extra.test".into(), extra_root);
         config.onion_discovery = onion_discovery_with_extra_hosts(&["extra.test"]);
+        let extra_onion = config
+            .onion_discovery
+            .lookup("extra.test")
+            .expect("extra mapped")
+            .onion_host
+            .clone();
+        let unknown_onion = crate::onion_discovery::unique_v3_onion_host(99);
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5702,8 +5784,8 @@ mod edge_wire_tests {
         });
         let client = reqwest::Client::new();
         let extra = client
-            .get(format!("http://{addr}/_o/extra.test/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", extra_onion.as_str())
             .send()
             .await
             .unwrap();
@@ -5712,23 +5794,23 @@ mod edge_wire_tests {
         let extra_body = extra.text().await.unwrap();
         assert!(
             extra_body.contains("EXTRA-VHOST-MARKER"),
-            "onion discriminator must serve extra.test root: {extra_body}"
+            "that Host's onion must serve extra.test root: {extra_body}"
         );
         assert!(
             !extra_body.contains("Operator console") && !extra_body.contains("Overview"),
-            "onion discriminator must not serve console: {extra_body}"
+            "that Host's onion must not serve console: {extra_body}"
         );
 
         let unknown = client
-            .get(format!("http://{addr}/_o/unknown.example/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", unknown_onion.as_str())
             .send()
             .await
             .unwrap();
         let unknown_body = unknown.text().await.unwrap();
         assert!(
             !unknown_body.contains("EXTRA-VHOST-MARKER"),
-            "unknown discriminator must not leak extra files: {unknown_body}"
+            "unknown onion must not leak extra files: {unknown_body}"
         );
 
         let root = client
@@ -5742,21 +5824,21 @@ mod edge_wire_tests {
         let root_body = root.text().await.unwrap();
         assert!(
             root_body.contains("Operator console") || root_body.contains("Overview"),
-            "onion root must stay the services console: {root_body}"
+            "services onion root must stay the services console: {root_body}"
         );
         assert!(
             !root_body.contains("EXTRA-VHOST-MARKER"),
-            "onion root must not serve extra vhost: {root_body}"
+            "services onion root must not serve extra vhost: {root_body}"
         );
         serve.abort();
         let _ = serve.await;
     }
 
-    /// Named contract: onion Host plus extra/apex discriminator uses public-site
-    /// CSP (`script-src 'self' 'unsafe-inline'`), not the console nonce CSP.
+    /// Named contract: extra/apex per-site onions use public-site CSP
+    /// (`script-src 'self' 'unsafe-inline'`), not the console nonce CSP.
     /// Discovery headers stay off on `.onion` Host.
     #[tokio::test]
-    async fn onion_host_discriminator_extra_vhost_uses_public_site_csp() {
+    async fn onion_host_per_site_extra_vhost_uses_public_site_csp() {
         let testdata = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata");
         let extra_root = testdata.join("static-vhosts").join("extra.test");
         let apex_root = testdata.join("public-site");
@@ -5765,6 +5847,18 @@ mod edge_wire_tests {
         config.apex_public_root = Some(apex_root);
         config.static_vhosts.insert("extra.test".into(), extra_root);
         config.onion_discovery = onion_discovery_with_extra_hosts(&["extra.test"]);
+        let extra_onion = config
+            .onion_discovery
+            .lookup("extra.test")
+            .expect("extra mapped")
+            .onion_host
+            .clone();
+        let apex_onion = config
+            .onion_discovery
+            .lookup("example.test")
+            .expect("apex mapped")
+            .onion_host
+            .clone();
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5779,8 +5873,8 @@ mod edge_wire_tests {
         });
         let client = reqwest::Client::new();
         let extra = client
-            .get(format!("http://{addr}/_o/extra.test/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", extra_onion.as_str())
             .send()
             .await
             .unwrap();
@@ -5794,25 +5888,25 @@ mod edge_wire_tests {
             .to_string();
         assert!(
             extra_csp.contains("script-src 'self' 'unsafe-inline'"),
-            "onion extra discriminator must use public-site CSP: {extra_csp}"
+            "extra Host onion must use public-site CSP: {extra_csp}"
         );
         assert!(
             !extra_csp.contains("nonce-"),
-            "onion extra discriminator must not use console nonce CSP: {extra_csp}"
+            "extra Host onion must not use console nonce CSP: {extra_csp}"
         );
         let extra_body = extra.text().await.unwrap();
         assert!(
             extra_body.contains("EXTRA-VHOST-MARKER"),
-            "onion discriminator must still serve extra.test root: {extra_body}"
+            "extra Host onion must still serve extra.test root: {extra_body}"
         );
         assert!(
             !extra_body.contains("Operator console") && !extra_body.contains("Overview"),
-            "onion discriminator must not serve console: {extra_body}"
+            "extra Host onion must not serve console: {extra_body}"
         );
 
         let apex = client
-            .get(format!("http://{addr}/_o/example.test/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", apex_onion.as_str())
             .send()
             .await
             .unwrap();
@@ -5826,11 +5920,11 @@ mod edge_wire_tests {
             .to_string();
         assert!(
             apex_csp.contains("script-src 'self' 'unsafe-inline'"),
-            "onion apex discriminator must use public-site CSP: {apex_csp}"
+            "apex onion must use public-site CSP: {apex_csp}"
         );
         assert!(
             !apex_csp.contains("nonce-"),
-            "onion apex discriminator must not use console nonce CSP: {apex_csp}"
+            "apex onion must not use console nonce CSP: {apex_csp}"
         );
 
         let root = client
@@ -5849,40 +5943,40 @@ mod edge_wire_tests {
             .to_string();
         assert!(
             root_csp.contains("nonce-"),
-            "onion root console must keep nonce CSP: {root_csp}"
+            "services onion console must keep nonce CSP: {root_csp}"
         );
         assert!(
             !root_csp.contains("script-src 'self' 'unsafe-inline'"),
-            "onion root console must not use public-site script-src: {root_csp}"
+            "services onion console must not use public-site script-src: {root_csp}"
         );
         serve.abort();
         let _ = serve.await;
     }
 
-    /// Named contract: onion Host plus MTA-STS discriminator serves the policy
-    /// body, not a console 404.
+    /// Named contract: the MTA-STS Host's own onion serves the policy body,
+    /// not a console 404.
     #[tokio::test]
-    async fn onion_host_discriminator_serves_mta_sts_policy() {
+    async fn onion_host_per_site_serves_mta_sts_policy() {
         let base = test_state_onion_https();
         let mut config = base.config.clone();
         config.mta_sts_mode = crate::mta_sts::MtaStsMode::Testing;
         config.onion_discovery = onion_discovery_with_extra_hosts(&[]);
-        assert!(
-            config
-                .onion_discovery
-                .lookup("mta-sts.example.test")
-                .is_some(),
-            "mta-sts Host must auto-map for onion rewrite"
+        let mta_map = config
+            .onion_discovery
+            .lookup("mta-sts.example.test")
+            .expect("mta-sts Host must map for onion rewrite");
+        let mta_onion = mta_map.onion_host.clone();
+        assert_eq!(
+            crate::onion_discovery::match_onion_host_rewrite(&mta_onion, &config.onion_discovery),
+            Some("mta-sts.example.test".into())
         );
         assert_eq!(
             crate::onion_discovery::match_onion_vhost_rewrite(
                 "/_o/mta-sts.example.test/.well-known/mta-sts.txt",
                 &config.onion_discovery,
             ),
-            Some((
-                "mta-sts.example.test".into(),
-                "/.well-known/mta-sts.txt".into()
-            ))
+            None,
+            "shared /_o/{{host}} is not a discovery path"
         );
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
@@ -5902,10 +5996,8 @@ mod edge_wire_tests {
             .build()
             .unwrap();
         let res = client
-            .get(format!(
-                "http://{addr}/_o/mta-sts.example.test/.well-known/mta-sts.txt"
-            ))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/.well-known/mta-sts.txt"))
+            .header("Host", mta_onion.as_str())
             .send()
             .await
             .unwrap();

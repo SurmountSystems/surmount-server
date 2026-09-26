@@ -554,7 +554,15 @@ impl AppConfig {
         let extra_mail_hostnames = extra_mail_hostnames_from_env();
         let redirect_allowed_hosts =
             union_static_vhost_hosts(redirect_allowed_hosts, &static_vhosts);
-        let extra_onion_hosts: Vec<String> = static_vhosts.keys().cloned().collect();
+        // Vaultwarden: operator-published URL only. Never invent; no admin token.
+        let vaultwarden_url = resolve_vaultwarden_url_from_env();
+        // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
+        let vaultwarden_proxy = VaultwardenProxyConfig::from_env()?;
+        // Load splora before onion discovery so extra onion Hosts include
+        // indexer Hosts and the portal Host (not only static vhost keys).
+        let splora_proxy = SploraProxyConfig::from_env()?;
+        let redirect_allowed_hosts = union_splora_hosts(redirect_allowed_hosts, &splora_proxy);
+        let extra_onion_hosts = extra_onion_hosts_union(&static_vhosts, &splora_proxy);
 
         // Onion: structured surface from env + host HS paths. Never invent.
         let onion_surface = resolve_onion_surface_from_env();
@@ -566,13 +574,7 @@ impl AppConfig {
             onion_url.as_deref(),
             &extra_onion_hosts,
         );
-        // Vaultwarden: operator-published URL only. Never invent; no admin token.
-        let vaultwarden_url = resolve_vaultwarden_url_from_env();
-        // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
-        let vaultwarden_proxy = VaultwardenProxyConfig::from_env()?;
-        let splora_proxy = SploraProxyConfig::from_env()?;
         let http3 = Http3Config::from_env_map(|k| env::var(k).ok(), listen_mode.is_https())?;
-        let redirect_allowed_hosts = union_splora_hosts(redirect_allowed_hosts, &splora_proxy);
 
         // Public apex/www document root. Empty/unset = coming-soon fallback.
         let apex_public_root = match env::var("SURMOUNT_APEX_PUBLIC_ROOT") {
@@ -870,17 +872,32 @@ pub fn union_splora_hosts(mut allowed: Vec<String>, splora: &SploraProxyConfig) 
     if !splora.enable {
         return allowed;
     }
-    for inst in &splora.instances {
-        for host in &inst.hosts {
-            if !allowed
-                .iter()
-                .any(|a| crate::redirect::host_is_allowlisted(host, std::slice::from_ref(a)))
-            {
-                allowed.push(host.to_string());
-            }
+    for host in splora.extra_onion_and_redirect_hosts() {
+        if !allowed
+            .iter()
+            .any(|a| crate::redirect::host_is_allowlisted(&host, std::slice::from_ref(a)))
+        {
+            allowed.push(host);
         }
     }
     allowed
+}
+
+/// Extra onion Hosts: static vhost keys plus splora indexer Hosts and portal.
+pub fn extra_onion_hosts_union(
+    vhosts: &BTreeMap<String, PathBuf>,
+    splora: &SploraProxyConfig,
+) -> Vec<String> {
+    let mut hosts: Vec<String> = vhosts.keys().cloned().collect();
+    if !splora.enable {
+        return hosts;
+    }
+    for host in splora.extra_onion_and_redirect_hosts() {
+        if !hosts.iter().any(|h| h == &host) {
+            hosts.push(host);
+        }
+    }
+    hosts
 }
 
 pub fn union_static_vhost_hosts(
@@ -1036,6 +1053,10 @@ mod tests {
             "SURMOUNT_SPLORA_QUEUE_SOCKET",
             "SURMOUNT_SPLORA_QUEUE_PATH",
             "SURMOUNT_SPLORA_ELECTRUM_SOCKET",
+            "SURMOUNT_SPLORA_PORTAL_HOST",
+            "SURMOUNT_ONION_SITES_DIR",
+            "SURMOUNT_ONION_SITE_NICKNAMES_FILE",
+            "SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR",
             "SURMOUNT_HTTP3",
             "SURMOUNT_RATE_LIMIT_MAX",
             "SURMOUNT_RATE_LIMIT_WINDOW_SECS",
@@ -1074,8 +1095,122 @@ mod tests {
         let _g = EnvGuard::acquire();
         let cfg = AppConfig::from_env().unwrap();
         assert!(!cfg.splora_proxy.enable);
+        assert!(cfg.splora_proxy.portal_host.is_none());
         assert!(!cfg.http3.enable);
         assert!(!cfg.http3.listener_bound());
+        assert!(
+            !cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "splora.surmount.systems")
+        );
+    }
+
+    /// Named contract: the one public Host is on the :80 allowlist and is the
+    /// only Splora onion extra. Esplora Hosts are not in the proxy map.
+    #[test]
+    fn splora_portal_unions_redirect_allowlist_and_onion_extra_hosts() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_SPLORA_PROXY", "1");
+        set_env("SURMOUNT_SPLORA_PORTAL_HOST", "splora.surmount.systems");
+        set_env(
+            "SURMOUNT_SPLORA_INSTANCES",
+            r#"{"testnet3":{"hosts":[]},"testnet4":{"hosts":[]},"mutinynet":{"hosts":[]},"liquid":{"hosts":[]}}"#,
+        );
+        let cfg = AppConfig::from_env().unwrap();
+        assert!(cfg.splora_proxy.enable);
+        assert_eq!(
+            cfg.splora_proxy.portal_host.as_deref(),
+            Some("splora.surmount.systems")
+        );
+        assert!(
+            cfg.splora_proxy
+                .instances
+                .iter()
+                .all(|inst| inst.hosts.is_empty())
+        );
+        assert!(
+            cfg.splora_proxy
+                .instances
+                .iter()
+                .all(|inst| inst.name != "mainnet"),
+            "mainnet stays off when it is absent from the instance map"
+        );
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "splora.surmount.systems"),
+            ":80 allowlist must include the portal: {:?}",
+            cfg.redirect_allowed_hosts
+        );
+        for host in [
+            "esplora.surmount.systems",
+            "testnet3.esplora.surmount.systems",
+            "testnet4.esplora.surmount.systems",
+            "mutinynet.esplora.surmount.systems",
+            "liquid.esplora.surmount.systems",
+        ] {
+            assert!(
+                !cfg.redirect_allowed_hosts.iter().any(|h| h == host),
+                ":80 allowlist must not include {host}: {:?}",
+                cfg.redirect_allowed_hosts
+            );
+        }
+        let extra = extra_onion_hosts_union(&cfg.static_vhosts, &cfg.splora_proxy);
+        assert!(
+            extra.iter().any(|h| h == "splora.surmount.systems"),
+            "onion extra hosts must include the portal: {extra:?}"
+        );
+        for host in [
+            "esplora.surmount.systems",
+            "testnet3.esplora.surmount.systems",
+            "testnet4.esplora.surmount.systems",
+            "mutinynet.esplora.surmount.systems",
+            "liquid.esplora.surmount.systems",
+        ] {
+            assert!(
+                !extra.iter().any(|h| h == host),
+                "onion extra hosts must not include {host}: {extra:?}"
+            );
+        }
+        assert!(
+            crate::redirect::redirect_http_to_https(
+                true,
+                "splora.surmount.systems",
+                "/",
+                None,
+                &cfg.redirect_allowed_hosts,
+                &cfg.primary_domain,
+                &cfg.services_hostname,
+            ) == crate::redirect::HttpToHttps::Redirect {
+                location: "https://splora.surmount.systems/".into()
+            }
+        );
+        let dir = std::env::temp_dir().join(format!(
+            "surmount-splora-portal-onion-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let portal_onion = crate::onion_discovery::unique_v3_onion_host(21);
+        std::fs::write(
+            dir.join("splora.surmount.systems"),
+            format!("{portal_onion}\n"),
+        )
+        .unwrap();
+        set_env(
+            "SURMOUNT_ONION_SITES_DIR",
+            dir.to_str().expect("utf8 temp path"),
+        );
+        let cfg2 = AppConfig::from_env().unwrap();
+        let mapped = cfg2
+            .onion_discovery
+            .lookup("splora.surmount.systems")
+            .expect("portal Host must be in onion extra hosts / sites dir");
+        assert_eq!(mapped.onion_host, portal_onion);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1655,7 +1790,8 @@ mod tests {
         assert_eq!(cfg.onion_discovery.mappings().count(), 0);
     }
 
-    /// Named contract: configured onion auto-derives apex, www, services, and mta-sts mappings.
+    /// Named contract: SURMOUNT_ONION_URL maps the services Host only.
+    /// Sharing that v3 onto apex/www would correlate sites.
     #[test]
     fn onion_discovery_auto_derive_from_onion_url() {
         let _g = EnvGuard::acquire();
@@ -1668,25 +1804,24 @@ mod tests {
             .mappings()
             .map(|m| m.clearnet_host.as_str())
             .collect();
-        assert!(hosts.contains(&"example.test"));
-        assert!(hosts.contains(&"www.example.test"));
         assert!(hosts.contains(&"services.example.test"));
-        assert!(hosts.contains(&"mta-sts.example.test"));
-        assert!(!hosts.contains(&"mail.example.test"));
-        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
-        assert_eq!(apex.onion_port, 443);
-        assert_eq!(apex.protocols, vec!["h2".to_string()]);
-        assert_eq!(apex.onion_scheme, "http");
-        assert_eq!(apex.ma_seconds, 86_400);
-        assert_eq!(apex.onion_path_prefix, "/_o/example.test");
-        let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
         assert!(
-            services.onion_path_prefix.is_empty(),
-            "services console stays onion root"
+            !hosts.contains(&"example.test"),
+            "one onion URL must not map every public Host: {hosts:?}"
         );
+        assert!(!hosts.contains(&"www.example.test"));
+        assert!(!hosts.contains(&"mta-sts.example.test"));
+        assert!(!hosts.contains(&"mail.example.test"));
+        let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
+        assert_eq!(services.onion_port, 443);
+        assert_eq!(services.protocols, vec!["h2".to_string()]);
+        assert_eq!(services.onion_scheme, "http");
+        assert_eq!(services.ma_seconds, 86_400);
+        assert!(services.onion_path_prefix.is_empty());
+        assert_eq!(services.onion_host, format!("{SAMPLE_V3}.onion"));
     }
 
-    /// Named contract: extra static Hosts auto-map; mail does not.
+    /// Named contract: extra static Hosts map only with their own onion; mail does not.
     #[test]
     fn onion_discovery_auto_maps_extra_static_vhosts() {
         let _g = EnvGuard::acquire();
@@ -1697,13 +1832,101 @@ mod tests {
             "SURMOUNT_STATIC_VHOSTS",
             r#"{"extra.test":"/tmp/extra","www.extra.test":"/tmp/extra"}"#,
         );
+        let dir = std::env::temp_dir().join(format!(
+            "surmount-onion-sites-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let extra_onion = crate::onion_discovery::unique_v3_onion_host(3);
+        let www_extra_onion = crate::onion_discovery::unique_v3_onion_host(4);
+        std::fs::write(dir.join("extra.test"), format!("{extra_onion}\n")).unwrap();
+        std::fs::write(dir.join("www.extra.test"), format!("{www_extra_onion}\n")).unwrap();
+        set_env(
+            "SURMOUNT_ONION_SITES_DIR",
+            dir.to_str().expect("utf8 temp path"),
+        );
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.onion_discovery.lookup("extra.test").is_some());
         assert!(cfg.onion_discovery.lookup("www.extra.test").is_some());
-        assert!(cfg.onion_discovery.lookup("mta-sts.example.test").is_some());
         assert!(cfg.onion_discovery.lookup("mail.example.test").is_none());
         let extra = cfg.onion_discovery.lookup("extra.test").unwrap();
-        assert_eq!(extra.onion_path_prefix, "/_o/extra.test");
+        let www_extra = cfg.onion_discovery.lookup("www.extra.test").unwrap();
+        assert_eq!(extra.onion_host, extra_onion);
+        assert_eq!(www_extra.onion_host, www_extra_onion);
+        assert_ne!(extra.onion_host, www_extra.onion_host);
+        assert!(extra.onion_path_prefix.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Named contract: nickname JSON plus published-hostnames files map two
+    /// Hosts to two different v3 onions at onion root (no `/_o/` prefix).
+    #[test]
+    fn onion_discovery_from_published_nickname_files_is_per_site() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_PRIMARY_DOMAIN", "example.test");
+        set_env("SURMOUNT_SERVICES_HOSTNAME", "services.example.test");
+        set_env("SURMOUNT_MAIL_HOSTNAME", "mail.example.test");
+        set_env("SURMOUNT_EXTRA_MAIL_HOSTNAMES", "mail.cryptoquick.com");
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "surmount-onion-published-{}-{}",
+            std::process::id(),
+            stamp
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nick_path = dir.join("nicknames.json");
+        let pub_dir = dir.join("published-hostnames");
+        std::fs::create_dir_all(&pub_dir).unwrap();
+        std::fs::write(
+            &nick_path,
+            r#"{"example.test":"site-example-test","www.example.test":"site-www-example-test","mail.example.test":"site-mail-example-test","mail.cryptoquick.com":"site-mail-cryptoquick-com"}"#,
+        )
+        .unwrap();
+        let onion_a = crate::onion_discovery::unique_v3_onion_host(11);
+        let onion_b = crate::onion_discovery::unique_v3_onion_host(12);
+        let onion_mail = crate::onion_discovery::unique_v3_onion_host(13);
+        std::fs::write(pub_dir.join("site-example-test"), format!("{onion_a}\n")).unwrap();
+        std::fs::write(
+            pub_dir.join("site-www-example-test"),
+            format!("{onion_b}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            pub_dir.join("site-mail-example-test"),
+            format!("{onion_mail}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            pub_dir.join("site-mail-cryptoquick-com"),
+            format!("{}\n", crate::onion_discovery::unique_v3_onion_host(14)),
+        )
+        .unwrap();
+        set_env(
+            "SURMOUNT_ONION_SITE_NICKNAMES_FILE",
+            nick_path.to_str().expect("utf8 nick path"),
+        );
+        set_env(
+            "SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR",
+            pub_dir.to_str().expect("utf8 published dir"),
+        );
+        let cfg = AppConfig::from_env().unwrap();
+        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
+        let www = cfg.onion_discovery.lookup("www.example.test").unwrap();
+        assert_eq!(apex.onion_host, onion_a);
+        assert_eq!(www.onion_host, onion_b);
+        assert_ne!(apex.onion_host, www.onion_host);
+        assert!(apex.onion_path_prefix.is_empty());
+        assert!(www.onion_path_prefix.is_empty());
+        assert!(cfg.onion_discovery.lookup("mail.example.test").is_none());
+        assert!(cfg.onion_discovery.lookup("mail.cryptoquick.com").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Named contract: invalid v3 onion is rejected for discovery (no panic, no map).
@@ -1730,8 +1953,8 @@ mod tests {
         let cfg = AppConfig::from_env().unwrap();
         assert!(!cfg.onion_discovery.onion_location_enabled);
         assert!(!cfg.onion_discovery.alt_svc_enabled);
-        let apex = cfg.onion_discovery.lookup("example.test").unwrap();
-        assert_eq!(apex.onion_scheme, "https");
+        let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
+        assert_eq!(services.onion_scheme, "https");
     }
 
     /// Named contract: path set but missing material => hostname_missing (not invent).

@@ -1007,11 +1007,11 @@ mod tests {
 
 /// Splora Unix-socket proxy (nested so the flake git tree sees this module).
 ///
-/// Splora (Esplora-compatible indexer) reverse proxy over Unix sockets.
-/// Public Hosts map to `/run/splora/<instance>.http.sock` on the edge host.
-/// The queue unit is a separate socket and path. NIP-98 stays in splora;
-/// this edge does not add API keys. Not nginx. Not the Electrum newline
-/// protocol socket (fail-closed if that socket is configured).
+/// One public Host. Network paths on that Host map to
+/// `/run/splora/<instance>.http.sock`. The queue is a separate socket and
+/// path. NIP-98 stays in splora. This edge does not add API keys. Not nginx.
+/// Not the Electrum newline socket (fail-closed if that socket is configured).
+/// Not an explorer: no block, transaction, or address pages.
 pub(crate) mod splora {
 
     use std::collections::BTreeMap;
@@ -1051,8 +1051,18 @@ pub(crate) mod splora {
     /// Public path for queue POST `{npub,email}` only.
     pub const DEFAULT_QUEUE_PATH: &str = "/splora/queue";
 
-    /// WebSocket path on each indexer HTTP socket.
+    /// WebSocket path on each indexer HTTP socket. Exact path only.
     pub const INDEXER_WS_PATH: &str = "/api/v1/ws";
+
+    /// `GET /` hrefs on the one public Host. Not per-network Hosts.
+    pub const PUBLIC_PATH_HREFS: &[&str] = &[
+        "/api/",
+        "/testnet/",
+        "/testnet4/",
+        "/signet/",
+        "/mutinynet/",
+        "/liquid/",
+    ];
 
     pub const DEFAULT_BODY_LIMIT_BYTES: usize = 8 * 1024 * 1024;
     pub const QUEUE_BODY_LIMIT_BYTES: usize = 64 * 1024;
@@ -1073,6 +1083,9 @@ pub(crate) mod splora {
         pub queue_socket: PathBuf,
         pub queue_path: String,
         pub body_limit_bytes: usize,
+        /// Public portal Host (one DNS name). Not an indexer. Env
+        /// `SURMOUNT_SPLORA_PORTAL_HOST`. None when the proxy is off or unset.
+        pub portal_host: Option<String>,
     }
 
     impl Default for SploraProxyConfig {
@@ -1083,6 +1096,7 @@ pub(crate) mod splora {
                 queue_socket: PathBuf::from(DEFAULT_QUEUE_SOCKET),
                 queue_path: DEFAULT_QUEUE_PATH.to_string(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             }
         }
     }
@@ -1142,26 +1156,85 @@ pub(crate) mod splora {
                 );
             }
 
+            let portal_host = parse_portal_host(get("SURMOUNT_SPLORA_PORTAL_HOST"), enable)?;
+            if let Some(ref portal) = portal_host {
+                if instances
+                    .iter()
+                    .any(|inst| inst.hosts.iter().any(|h| h == portal))
+                {
+                    return Err(format!(
+                        "SURMOUNT_SPLORA_PORTAL_HOST={portal} must not also be an indexer Host \
+                         (the portal is not a fifth indexer)"
+                    ));
+                }
+            }
+
             Ok(Self {
                 enable,
                 instances,
                 queue_socket,
                 queue_path,
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host,
             })
         }
 
-        /// True when this request is a splora Host or the queue path (skip Nostr).
+        /// True when this request is a splora Host, the portal, or the queue path (skip Nostr).
         pub fn should_bypass_auth(&self, host: &str, path: &str) -> bool {
             if !self.enable {
                 return false;
             }
-            self.is_queue_path(path) || self.instance_for_host(host).is_some()
+            self.is_queue_path(path)
+                || self.is_portal_host(host)
+                || self.instance_for_host(host).is_some()
+        }
+
+        pub fn is_portal_host(&self, host: &str) -> bool {
+            if !self.enable {
+                return false;
+            }
+            let Some(portal) = self.portal_host.as_deref() else {
+                return false;
+            };
+            let key = normalize_host(host);
+            !key.is_empty() && key == portal
+        }
+
+        /// Indexer Hosts plus the portal Host (when set). Empty when the proxy is off.
+        pub fn extra_onion_and_redirect_hosts(&self) -> Vec<String> {
+            if !self.enable {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            for inst in &self.instances {
+                for host in &inst.hosts {
+                    if !out.iter().any(|h| h == host) {
+                        out.push(host.clone());
+                    }
+                }
+            }
+            if let Some(portal) = self.portal_host.as_ref() {
+                if !portal.is_empty() && !out.iter().any(|h| h == portal) {
+                    out.push(portal.clone());
+                }
+            }
+            out
         }
 
         pub fn is_queue_path(&self, path: &str) -> bool {
-            let p = self.queue_path.trim_end_matches('/');
-            path == p || path == format!("{p}/")
+            path_is_queue(&self.queue_path, path)
+        }
+
+        pub fn instance_by_name(&self, name: &str) -> Option<&SploraInstance> {
+            self.instances.iter().find(|inst| inst.name == name)
+        }
+
+        /// Instance names present in this map. Absent `mainnet` means `/api` is off.
+        pub fn enabled_instance_names(&self) -> Vec<&str> {
+            self.instances
+                .iter()
+                .map(|inst| inst.name.as_str())
+                .collect()
         }
 
         pub fn instance_for_host(&self, host: &str) -> Option<&SploraInstance> {
@@ -1173,6 +1246,191 @@ pub(crate) mod splora {
                 .iter()
                 .find(|inst| inst.hosts.iter().any(|h| h == &key))
         }
+    }
+
+    fn parse_portal_host(raw: Option<String>, enable: bool) -> Result<Option<String>, String> {
+        if !enable {
+            return Ok(None);
+        }
+        let Some(v) = raw else {
+            return Ok(None);
+        };
+        let n = normalize_host(&v);
+        if n.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(n))
+    }
+
+    fn path_is_queue(queue_path: &str, path: &str) -> bool {
+        let p = queue_path.trim_end_matches('/');
+        !p.is_empty() && (path == p || path == format!("{p}/"))
+    }
+
+    /// Where one public path goes. No redirect arm: `/signet` and `/mutinynet`
+    /// are both proxies to the mutinynet socket.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum SploraPublicRoute {
+        Index,
+        Queue,
+        NotFound,
+        Proxy {
+            socket_name: &'static str,
+            backend_path: String,
+            query: Option<String>,
+            websocket: bool,
+        },
+    }
+
+    /// Path routing for the portal Host.
+    ///
+    /// Network prefix is stripped first. The query string is kept. A
+    /// remainder of `/api` or `/api/...` keeps the Splora REST rule: drop a
+    /// leading `/api`, except exact `/api/v1/ws`, which stays and is the
+    /// only upgrade. Any other remainder (`/block/...`, `/tx/...`,
+    /// `/address/...`, `/`, and later UI paths) is forwarded to that network
+    /// socket. This repo does not render those pages. Unprefixed `/block`,
+    /// `/tx`, and `/address` are not routes here. `/testnet3` is not
+    /// `/testnet`. The queue path is not a network prefix. `/api` with no
+    /// network prefix is mainnet, and is not proxied when mainnet is absent.
+    pub fn route_splora_public(
+        path: &str,
+        query: Option<&str>,
+        queue_path: &str,
+        enabled: &[&str],
+    ) -> SploraPublicRoute {
+        let path = path.split('?').next().unwrap_or(path);
+        if path_is_queue(queue_path, path) {
+            return SploraPublicRoute::Queue;
+        }
+        if path == "/" {
+            return SploraPublicRoute::Index;
+        }
+        let kept = match query {
+            Some(q) if !q.is_empty() => Some(q.to_string()),
+            _ => None,
+        };
+        if let Some(rest) = strip_named_prefix(path, "/testnet4") {
+            return proxy_after_network("testnet4", rest, kept, enabled);
+        }
+        if let Some(rest) = strip_named_prefix(path, "/testnet") {
+            return proxy_after_network("testnet3", rest, kept, enabled);
+        }
+        if let Some(rest) = strip_named_prefix(path, "/signet") {
+            return proxy_after_network("mutinynet", rest, kept, enabled);
+        }
+        if let Some(rest) = strip_named_prefix(path, "/mutinynet") {
+            return proxy_after_network("mutinynet", rest, kept, enabled);
+        }
+        if let Some(rest) = strip_named_prefix(path, "/liquid") {
+            return proxy_after_network("liquid", rest, kept, enabled);
+        }
+        if path == "/api" || path.starts_with("/api/") {
+            return proxy_after_network("mainnet", path, kept, enabled);
+        }
+        SploraPublicRoute::NotFound
+    }
+
+    fn strip_named_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+        if path == prefix {
+            return Some("");
+        }
+        let rest = path.strip_prefix(prefix)?;
+        if rest.starts_with('/') {
+            Some(rest)
+        } else {
+            None
+        }
+    }
+
+    fn proxy_after_network(
+        socket_name: &'static str,
+        after_network: &str,
+        query: Option<String>,
+        enabled: &[&str],
+    ) -> SploraPublicRoute {
+        if !enabled.iter().any(|name| *name == socket_name) {
+            return SploraPublicRoute::NotFound;
+        }
+        let rest_is_api = after_network == "/api" || after_network.starts_with("/api/");
+        let backend_path = if rest_is_api {
+            backend_path_for_indexer(after_network)
+        } else {
+            forward_ui_remainder(after_network)
+        };
+        SploraPublicRoute::Proxy {
+            socket_name,
+            backend_path,
+            query,
+            websocket: rest_is_api && after_network == INDEXER_WS_PATH,
+        }
+    }
+
+    /// Remainder after the network prefix, when it is not REST.
+    /// Empty is the prefix itself (`/testnet4`). Not HTML from this repo.
+    fn forward_ui_remainder(after_network: &str) -> String {
+        if after_network.is_empty() || after_network == "/" {
+            "/".to_string()
+        } else if after_network.starts_with('/') {
+            after_network.to_string()
+        } else {
+            format!("/{after_network}")
+        }
+    }
+
+    /// `/api/v1/ws` stays. Other `/api/...` loses the `/api` prefix.
+    fn backend_path_for_indexer(path_with_api: &str) -> String {
+        if path_with_api == INDEXER_WS_PATH || path_with_api.starts_with("/api/v1/ws/") {
+            return path_with_api.to_string();
+        }
+        match path_with_api.strip_prefix("/api") {
+            Some("") => "/".to_string(),
+            Some(rest) => rest.to_string(),
+            None => path_with_api.to_string(),
+        }
+    }
+
+    fn html_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+
+    /// GET / HTML for the one public Host. Same-host path list. Not an explorer.
+    pub fn portal_index_html(_cfg: &SploraProxyConfig) -> String {
+        let mut items = String::new();
+        for href in PUBLIC_PATH_HREFS {
+            let h = html_escape(href);
+            items.push_str(&format!("<li><a href=\"{h}\">{h}</a></li>\n"));
+        }
+        format!(
+            "<!DOCTYPE html>\n\
+<html lang=\"en\">\n\
+<head><meta charset=\"utf-8\"/><title>Splora</title></head>\n\
+<body>\n\
+<h1>Splora</h1>\n\
+<p>Paths on this host:</p>\n\
+<ul>\n{items}</ul>\n\
+</body>\n\
+</html>\n"
+        )
+    }
+
+    fn portal_response(cfg: &SploraProxyConfig, method: &Method, path: &str) -> Response {
+        let p = path.split('?').next().unwrap_or(path);
+        if p != "/" {
+            return (StatusCode::NOT_FOUND, "not found").into_response();
+        }
+        if *method != Method::GET {
+            return (StatusCode::METHOD_NOT_ALLOWED, "GET only").into_response();
+        }
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            portal_index_html(cfg),
+        )
+            .into_response()
     }
 
     fn refuse_electrum_path(path: &str, label: &str) -> Result<(), String> {
@@ -1277,11 +1535,8 @@ pub(crate) mod splora {
                 seen_hosts.insert(n.clone(), name.clone());
                 hosts.push(n);
             }
-            if hosts.is_empty() {
-                return Err(format!(
-                    "SURMOUNT_SPLORA_INSTANCES[{name}] must list at least one Host"
-                ));
-            }
+            // Empty hosts is the path-routing map: one portal Host, no
+            // per-network public Host. The instance name still selects the socket.
             out.push(SploraInstance {
                 name: name.clone(),
                 hosts,
@@ -1317,8 +1572,33 @@ pub(crate) mod splora {
             return proxy_queue(state, request).await;
         }
 
+        if cfg.is_portal_host(&host) {
+            let decision = {
+                let enabled = cfg.enabled_instance_names();
+                route_splora_public(&path, request.uri().query(), &cfg.queue_path, &enabled)
+            };
+            return match decision {
+                SploraPublicRoute::Queue => proxy_queue(state, request).await,
+                SploraPublicRoute::Index => portal_response(cfg, request.method(), &path),
+                SploraPublicRoute::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
+                SploraPublicRoute::Proxy {
+                    socket_name,
+                    backend_path,
+                    websocket,
+                    ..
+                } => {
+                    let Some(instance) = cfg.instance_by_name(socket_name).cloned() else {
+                        return (StatusCode::NOT_FOUND, "not found").into_response();
+                    };
+                    proxy_indexer(state, request, instance, host, backend_path, websocket).await
+                }
+            };
+        }
+
         if let Some(instance) = cfg.instance_for_host(&host).cloned() {
-            return proxy_indexer(state, request, instance, host).await;
+            let backend_path = path.clone();
+            let websocket = backend_path == INDEXER_WS_PATH;
+            return proxy_indexer(state, request, instance, host, backend_path, websocket).await;
         }
 
         next.run(request).await
@@ -1388,19 +1668,20 @@ pub(crate) mod splora {
         req: Request,
         instance: SploraInstance,
         host: String,
+        backend_path: String,
+        websocket: bool,
     ) -> Response {
-        let path = req.uri().path().to_string();
         let query = req.uri().query().map(str::to_string);
         let method = req.method().clone();
         let headers = req.headers().clone();
         let proto = forwarded_proto(state.config.listen_mode.is_https());
-        let wants_ws = path == INDEXER_WS_PATH && is_websocket_upgrade(&headers);
+        let wants_ws = websocket && is_websocket_upgrade(&headers);
 
         if wants_ws {
             return proxy_unix_websocket(
                 instance.http_socket,
                 req,
-                &path,
+                &backend_path,
                 query.as_deref(),
                 &host,
                 proto,
@@ -1419,7 +1700,7 @@ pub(crate) mod splora {
         proxy_unix_http(
             instance.http_socket.as_path(),
             method,
-            &path,
+            &backend_path,
             query.as_deref(),
             &host,
             proto,
@@ -1857,6 +2138,629 @@ pub(crate) mod splora {
             assert!(cfg.should_bypass_auth("esplora.example.test", "/api/tx/abc"));
             assert!(cfg.should_bypass_auth("services.example.test", "/splora/queue"));
             assert!(!cfg.should_bypass_auth("services.example.test", "/health"));
+            assert!(cfg.portal_host.is_none());
+        }
+
+        fn four_live_mainnet_off_cfg(portal: &str) -> SploraProxyConfig {
+            SploraProxyConfig {
+                enable: true,
+                instances: vec![
+                    SploraInstance {
+                        name: "testnet3".into(),
+                        hosts: vec![],
+                        http_socket: PathBuf::from("/run/splora/testnet3.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "testnet4".into(),
+                        hosts: vec![],
+                        http_socket: PathBuf::from("/run/splora/testnet4.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "mutinynet".into(),
+                        hosts: vec![],
+                        http_socket: PathBuf::from("/run/splora/mutinynet.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "liquid".into(),
+                        hosts: vec![],
+                        http_socket: PathBuf::from("/run/splora/liquid.http.sock"),
+                    },
+                ],
+                queue_socket: PathBuf::from(DEFAULT_QUEUE_SOCKET),
+                queue_path: DEFAULT_QUEUE_PATH.into(),
+                body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: Some(portal.to_string()),
+            }
+        }
+
+        const FOUR_LIVE: &[&str] = &["testnet3", "testnet4", "mutinynet", "liquid"];
+
+        fn route_four(path: &str, query: Option<&str>) -> SploraPublicRoute {
+            route_splora_public(path, query, DEFAULT_QUEUE_PATH, FOUR_LIVE)
+        }
+
+        fn expect_proxy(
+            route: SploraPublicRoute,
+            socket: &str,
+            backend: &str,
+            query: Option<&str>,
+            websocket: bool,
+        ) {
+            match route {
+                SploraPublicRoute::Proxy {
+                    socket_name,
+                    backend_path,
+                    query: got_q,
+                    websocket: got_ws,
+                } => {
+                    assert_eq!(socket_name, socket);
+                    assert_eq!(backend_path, backend);
+                    assert_eq!(got_q.as_deref(), query);
+                    assert_eq!(got_ws, websocket);
+                }
+                other => panic!("expected proxy to {socket} {backend}, got {other:?}"),
+            }
+        }
+
+        /// Named contract: each public prefix selects that network socket.
+        /// REST drops `/api` (Splora http_front). Mainnet is absent here.
+        #[test]
+        fn splora_public_prefix_forwards_to_named_socket() {
+            expect_proxy(
+                route_four("/testnet/api/tx/x", None),
+                "testnet3",
+                "/tx/x",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/testnet4/api/v1/blocks/tip/height", None),
+                "testnet4",
+                "/v1/blocks/tip/height",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/signet/api/tx/x", None),
+                "mutinynet",
+                "/tx/x",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/mutinynet/api/tx/x", None),
+                "mutinynet",
+                "/tx/x",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/liquid/api/tx/x", None),
+                "liquid",
+                "/tx/x",
+                None,
+                false,
+            );
+            assert!(matches!(
+                route_four("/api/tx/x", None),
+                SploraPublicRoute::NotFound
+            ));
+        }
+
+        /// Named contract: public `/testnet3/...` is not the testnet prefix.
+        #[test]
+        fn splora_testnet_is_not_testnet3_prefix() {
+            assert!(matches!(
+                route_four("/testnet3/api/tx/x", None),
+                SploraPublicRoute::NotFound
+            ));
+            assert!(matches!(
+                route_four("/testnet3", None),
+                SploraPublicRoute::NotFound
+            ));
+            assert!(matches!(
+                route_four("/testnet30/api/x", None),
+                SploraPublicRoute::NotFound
+            ));
+            expect_proxy(
+                route_four("/testnet/api/tx/x", None),
+                "testnet3",
+                "/tx/x",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/testnet4/api/tx/x", None),
+                "testnet4",
+                "/tx/x",
+                None,
+                false,
+            );
+        }
+
+        /// Named contract: `/signet` and `/mutinynet` share mutinynet. No redirect.
+        #[test]
+        fn splora_signet_and_mutinynet_share_socket_without_redirect() {
+            let signet = route_four("/signet/api/v1/blocks/tip/height", Some("n=1"));
+            let mutiny = route_four("/mutinynet/api/v1/blocks/tip/height", Some("n=1"));
+            expect_proxy(
+                signet.clone(),
+                "mutinynet",
+                "/v1/blocks/tip/height",
+                Some("n=1"),
+                false,
+            );
+            expect_proxy(
+                mutiny.clone(),
+                "mutinynet",
+                "/v1/blocks/tip/height",
+                Some("n=1"),
+                false,
+            );
+            assert_eq!(signet, mutiny);
+            assert!(!matches!(signet, SploraPublicRoute::NotFound));
+        }
+
+        /// Named contract: network prefix strip keeps the query string.
+        /// `/testnet/api/v1/tx/abc?x=1` is testnet3, path `/v1/tx/abc`, query `x=1`
+        /// (same `/api` strip as Splora `http_front::backend_path`).
+        #[test]
+        fn splora_query_string_kept_after_prefix_strip() {
+            expect_proxy(
+                route_four("/testnet/api/v1/tx/abc", Some("x=1")),
+                "testnet3",
+                "/v1/tx/abc",
+                Some("x=1"),
+                false,
+            );
+            expect_proxy(
+                route_four("/liquid/api/tx/x", Some("verbose=1&limit=2")),
+                "liquid",
+                "/tx/x",
+                Some("verbose=1&limit=2"),
+                false,
+            );
+            expect_proxy(
+                route_four("/testnet4/api/v1/blocks/tip/height", Some("x=1")),
+                "testnet4",
+                "/v1/blocks/tip/height",
+                Some("x=1"),
+                false,
+            );
+        }
+
+        /// Named contract: block, tx, and address paths are forwarded to the
+        /// network socket. This repo does not render that HTML. Unprefixed
+        /// `/block`, `/tx`, and `/address` stay unmatched so another app on
+        /// this router keeps those paths on other hosts.
+        #[tokio::test]
+        async fn splora_ui_paths_forward_without_html() {
+            expect_proxy(
+                route_four("/testnet4/tx/abc", Some("x=1")),
+                "testnet4",
+                "/tx/abc",
+                Some("x=1"),
+                false,
+            );
+            assert!(!matches!(
+                route_four("/testnet4/tx/abc", Some("x=1")),
+                SploraPublicRoute::Index
+            ));
+            expect_proxy(
+                route_four("/testnet4/block/abc", None),
+                "testnet4",
+                "/block/abc",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/testnet/address/abc", None),
+                "testnet3",
+                "/address/abc",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/liquid/block/abc", None),
+                "liquid",
+                "/block/abc",
+                None,
+                false,
+            );
+            let signet = route_four("/signet/tx/abc", None);
+            let mutiny = route_four("/mutinynet/tx/abc", None);
+            expect_proxy(signet.clone(), "mutinynet", "/tx/abc", None, false);
+            expect_proxy(mutiny.clone(), "mutinynet", "/tx/abc", None, false);
+            assert_eq!(signet, mutiny);
+            assert!(!matches!(signet, SploraPublicRoute::NotFound));
+            expect_proxy(route_four("/testnet4", None), "testnet4", "/", None, false);
+            expect_proxy(route_four("/testnet4/", None), "testnet4", "/", None, false);
+
+            for path in [
+                "/block/abc",
+                "/tx/abc",
+                "/address/abc",
+                "/block",
+                "/tx",
+                "/address",
+            ] {
+                assert!(
+                    matches!(route_four(path, None), SploraPublicRoute::NotFound),
+                    "{path} must stay unmatched"
+                );
+                assert!(
+                    matches!(
+                        route_splora_public(path, None, DEFAULT_QUEUE_PATH, &["mainnet"]),
+                        SploraPublicRoute::NotFound
+                    ),
+                    "{path} must stay unmatched even when mainnet is on"
+                );
+            }
+
+            let sock = tmp_sock("splora-ui");
+            let seen = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+            let seen_c = seen.clone();
+            let mock = Router::new().fallback(any(move |req: AxumRequest| {
+                let seen_c = seen_c.clone();
+                async move {
+                    let path = req.uri().path().to_string();
+                    let query = req.uri().query().unwrap_or("").to_string();
+                    seen_c.lock().unwrap().push((path, query));
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                        "upstream-bytes",
+                    )
+                }
+            }));
+            let mock_serve = serve_uds(sock.clone(), mock).await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+
+            let cfg = SploraProxyConfig {
+                enable: true,
+                instances: vec![
+                    SploraInstance {
+                        name: "testnet3".into(),
+                        hosts: vec![],
+                        http_socket: PathBuf::from("/run/splora/testnet3.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "testnet4".into(),
+                        hosts: vec![],
+                        http_socket: sock.clone(),
+                    },
+                    SploraInstance {
+                        name: "mutinynet".into(),
+                        hosts: vec![],
+                        http_socket: PathBuf::from("/run/splora/mutinynet.http.sock"),
+                    },
+                    SploraInstance {
+                        name: "liquid".into(),
+                        hosts: vec![],
+                        http_socket: PathBuf::from("/run/splora/liquid.http.sock"),
+                    },
+                ],
+                queue_socket: PathBuf::from(DEFAULT_QUEUE_SOCKET),
+                queue_path: DEFAULT_QUEUE_PATH.into(),
+                body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: Some("splora.surmount.systems".into()),
+            };
+            let state = test_state_for(cfg, false);
+            let app = Router::new()
+                .route("/tx/abc", get(|| async { "console-tx" }))
+                .fallback(axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    splora_proxy_middleware,
+                ))
+                .with_state(state);
+            let lis = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = lis.local_addr().unwrap();
+            let serve = tokio::spawn(async move {
+                axum::serve(lis, app).await.ok();
+            });
+            let client = reqwest::Client::new();
+
+            let tx = client
+                .get(format!("http://{addr}/testnet4/tx/abc?x=1"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(tx.status(), reqwest::StatusCode::OK);
+            let tx_type = tx
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            assert!(
+                !tx_type.contains("text/html"),
+                "UI forward must not be local HTML, content-type={tx_type}"
+            );
+            let tx_body = tx.text().await.unwrap();
+            assert_eq!(tx_body, "upstream-bytes");
+            assert!(!tx_body.contains("<!DOCTYPE html"));
+            assert!(!tx_body.contains("esplora.surmount.systems"));
+            let hits = seen.lock().unwrap().clone();
+            assert_eq!(hits, vec![("/tx/abc".to_string(), "x=1".to_string())]);
+
+            let root = client
+                .get(format!("http://{addr}/"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(root.status(), reqwest::StatusCode::OK);
+            let root_body = root.text().await.unwrap();
+            for href in PUBLIC_PATH_HREFS {
+                assert!(
+                    root_body.contains(&format!("href=\"{href}\"")),
+                    "missing {href}: {root_body}"
+                );
+            }
+            assert!(
+                !root_body.contains("esplora.surmount.systems"),
+                "GET / must not name an esplora Host: {root_body}"
+            );
+            assert!(!root_body.contains("/block"));
+            assert!(!root_body.contains("/tx/"));
+            assert!(!root_body.contains("/address"));
+
+            let blocked = client
+                .get(format!("http://{addr}/tx/abc"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(blocked.status(), reqwest::StatusCode::NOT_FOUND);
+            assert_eq!(blocked.text().await.unwrap(), "not found");
+
+            let other = client
+                .get(format!("http://{addr}/tx/abc"))
+                .header("Host", "services.example.test")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(other.status(), reqwest::StatusCode::OK);
+            assert_eq!(other.text().await.unwrap(), "console-tx");
+
+            serve.abort();
+            mock_serve.abort();
+            let _ = std::fs::remove_file(&sock);
+        }
+
+        /// Named contract: only `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is an upgrade.
+        #[test]
+        fn splora_websocket_path_is_upgrade() {
+            expect_proxy(
+                route_four("/testnet4/api/v1/ws", Some("x=1")),
+                "testnet4",
+                "/api/v1/ws",
+                Some("x=1"),
+                true,
+            );
+            expect_proxy(
+                route_four("/signet/api/v1/ws", None),
+                "mutinynet",
+                "/api/v1/ws",
+                None,
+                true,
+            );
+            expect_proxy(
+                route_four("/mutinynet/api/v1/ws", None),
+                "mutinynet",
+                "/api/v1/ws",
+                None,
+                true,
+            );
+            expect_proxy(
+                route_four("/testnet4/api/v1/ws/extra", None),
+                "testnet4",
+                "/api/v1/ws/extra",
+                None,
+                false,
+            );
+            expect_proxy(
+                route_four("/testnet4/api/tx/x", None),
+                "testnet4",
+                "/tx/x",
+                None,
+                false,
+            );
+            assert!(matches!(
+                route_four("/api/v1/ws", None),
+                SploraPublicRoute::NotFound
+            ));
+            expect_proxy(
+                route_splora_public("/api/v1/ws", None, DEFAULT_QUEUE_PATH, &["mainnet"]),
+                "mainnet",
+                "/api/v1/ws",
+                None,
+                true,
+            );
+        }
+
+        /// Named contract: POST `/splora/queue` is the queue, not a network prefix.
+        #[test]
+        fn splora_queue_is_not_a_network_prefix() {
+            assert!(matches!(
+                route_four("/splora/queue", None),
+                SploraPublicRoute::Queue
+            ));
+            assert!(matches!(
+                route_four("/splora/queue/", Some("a=1")),
+                SploraPublicRoute::Queue
+            ));
+            assert!(matches!(
+                route_four("/splora/queue/api/tx/x", None),
+                SploraPublicRoute::NotFound
+            ));
+            assert!(!matches!(
+                route_four("/splora/queue", None),
+                SploraPublicRoute::Proxy { .. }
+            ));
+        }
+
+        /// Named contract: mainnet absent from the instance map => `/api` is 404.
+        #[test]
+        fn splora_mainnet_api_is_404_when_indexer_disabled() {
+            for path in [
+                "/api",
+                "/api/",
+                "/api/tx/x",
+                "/api/v1/blocks/tip/height",
+                "/api/v1/ws",
+            ] {
+                assert!(
+                    matches!(route_four(path, Some("q=1")), SploraPublicRoute::NotFound),
+                    "{path} must be 404 while mainnet is off"
+                );
+            }
+            expect_proxy(
+                route_splora_public(
+                    "/api/tx/x",
+                    Some("q=1"),
+                    DEFAULT_QUEUE_PATH,
+                    &["mainnet", "testnet4"],
+                ),
+                "mainnet",
+                "/tx/x",
+                Some("q=1"),
+                false,
+            );
+            let parsed = parse_instances_json(
+                r#"{"testnet4":{"hosts":[]},"liquid":{"hosts":[]}}"#,
+                "/run/splora",
+            )
+            .expect("empty hosts still enable path routing");
+            assert!(parsed.iter().all(|inst| inst.hosts.is_empty()));
+            assert!(parsed.iter().all(|inst| inst.name != "mainnet"));
+        }
+
+        /// Named contract: GET / lists same-host paths and not esplora Hosts.
+        #[test]
+        fn splora_root_lists_same_host_paths_without_esplora_host() {
+            let cfg = four_live_mainnet_off_cfg("splora.surmount.systems");
+            let html = portal_index_html(&cfg);
+            for href in PUBLIC_PATH_HREFS {
+                assert!(
+                    html.contains(&format!("href=\"{href}\"")),
+                    "missing {href} in {html}"
+                );
+            }
+            assert!(html.contains("href=\"/testnet4/\""));
+            assert!(
+                !html.contains("esplora.surmount.systems"),
+                "path list must not name an esplora Host: {html}"
+            );
+            assert!(!html.contains("/block"));
+            assert!(!html.contains("/tx/"));
+            assert!(!html.contains("/address"));
+            assert!(cfg.should_bypass_auth("splora.surmount.systems", "/testnet4/api/tx/x"));
+            assert!(cfg.instance_for_host("splora.surmount.systems").is_none());
+            let extra = cfg.extra_onion_and_redirect_hosts();
+            assert_eq!(extra, vec!["splora.surmount.systems".to_string()]);
+        }
+
+        /// Named contract: portal GET / is 200 HTML, a same-host path list.
+        #[test]
+        fn portal_html_lists_same_host_paths_not_esplora_hosts() {
+            let cfg = four_live_mainnet_off_cfg("splora.surmount.systems");
+            let html = portal_index_html(&cfg);
+            assert!(html.contains("href=\"/testnet4/\""));
+            assert!(!html.contains("esplora.surmount.systems"), "{html}");
+            assert!(cfg.should_bypass_auth("splora.surmount.systems", "/"));
+            assert!(cfg.is_portal_host("Splora.surmount.systems"));
+            assert!(cfg.instance_for_host("splora.surmount.systems").is_none());
+            let extra = cfg.extra_onion_and_redirect_hosts();
+            assert!(extra.iter().any(|h| h == "splora.surmount.systems"));
+            assert!(
+                extra
+                    .iter()
+                    .all(|h| !h.contains("esplora.surmount.systems")),
+                "{extra:?}"
+            );
+        }
+
+        #[test]
+        fn portal_host_colliding_with_indexer_fails_closed() {
+            let err = SploraProxyConfig::from_env_map(|k| match k {
+                "SURMOUNT_SPLORA_PROXY" => Some("1".into()),
+                "SURMOUNT_SPLORA_PORTAL_HOST" => Some("testnet3.esplora.surmount.systems".into()),
+                "SURMOUNT_SPLORA_INSTANCES" => {
+                    Some(r#"{"testnet3":{"hosts":["testnet3.esplora.surmount.systems"]}}"#.into())
+                }
+                _ => None,
+            })
+            .unwrap_err();
+            assert!(err.contains("PORTAL_HOST"), "{err}");
+            assert!(
+                err.contains("fifth indexer") || err.contains("not also"),
+                "{err}"
+            );
+        }
+
+        #[test]
+        fn portal_env_ignored_when_proxy_off() {
+            let cfg = SploraProxyConfig::from_env_map(|k| match k {
+                "SURMOUNT_SPLORA_PORTAL_HOST" => Some("splora.surmount.systems".into()),
+                _ => None,
+            })
+            .unwrap();
+            assert!(!cfg.enable);
+            assert!(cfg.portal_host.is_none());
+            assert!(!cfg.is_portal_host("splora.surmount.systems"));
+        }
+
+        /// Named contract: GET / on Host splora.surmount.systems is 200 HTML.
+        #[tokio::test]
+        async fn splora_portal_get_root_is_200_html_listing_live_hosts() {
+            let cfg = four_live_mainnet_off_cfg("splora.surmount.systems");
+            let state = test_state_for(cfg, false);
+            let app = Router::new()
+                .fallback(axum::routing::any(|| async { StatusCode::NOT_FOUND }))
+                .layer(axum::middleware::from_fn_with_state(
+                    state.clone(),
+                    splora_proxy_middleware,
+                ))
+                .with_state(state);
+            let lis = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = lis.local_addr().unwrap();
+            let serve = tokio::spawn(async move {
+                axum::serve(lis, app).await.ok();
+            });
+            let client = reqwest::Client::new();
+            let resp = client
+                .get(format!("http://{addr}/"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), reqwest::StatusCode::OK);
+            let ctype = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            assert!(
+                ctype.contains("text/html"),
+                "portal GET / must be HTML, content-type={ctype}"
+            );
+            let body = resp.text().await.unwrap();
+            for href in PUBLIC_PATH_HREFS {
+                assert!(
+                    body.contains(&format!("href=\"{href}\"")),
+                    "missing {href}: {body}"
+                );
+            }
+            assert!(
+                !body.contains("esplora.surmount.systems"),
+                "portal GET / must not name an esplora Host: {body}"
+            );
+            assert!(!body.contains("/block"));
+            assert!(!body.contains("/tx/"));
+            assert!(!body.contains("/address"));
+            serve.abort();
         }
 
         fn test_state_for(cfg: SploraProxyConfig, https: bool) -> Arc<AppState> {
@@ -1999,6 +2903,7 @@ pub(crate) mod splora {
                 queue_socket: PathBuf::from("/tmp/splora-queue-unused.sock"),
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             };
             let state = test_state_for(cfg, true);
             let app = Router::new()
@@ -2105,6 +3010,7 @@ pub(crate) mod splora {
                 queue_socket: q_sock.clone(),
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             };
             let state = test_state_for(cfg, false);
             let app = Router::new()
@@ -2189,6 +3095,7 @@ pub(crate) mod splora {
                 queue_socket: PathBuf::from("/tmp/splora-queue-unused.sock"),
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+                portal_host: None,
             };
             let state = test_state_for(cfg, true);
             let app = Router::new()

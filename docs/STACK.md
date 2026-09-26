@@ -5,7 +5,7 @@ survive compaction live here, in [operator-direction.md](operator-direction.md),
 and in [open-choices.md](open-choices.md). Implementation detail stays in Nix
 modules and Rust crates.
 
-**Last updated:** 2026-08-17 (Onion-Location + Alt-Svc on Axum edge; live Arti unit)
+**Last updated:** 2026-09-11 (per-site v3 onions; Onion-Location is each Host's onion root plus path). Prior 2026-08-17 (Onion-Location + Alt-Svc on Axum edge; live Arti unit)
 
 Operator direction 2026-07-30 is working product direction (dated, not eternal
 law). Scaffold defaults still describe what code does today when they differ.
@@ -257,8 +257,9 @@ See [EDGE_AND_TLS.md](EDGE_AND_TLS.md), [hygiene.md](hygiene.md),
 - **Arti hidden services (REQUIRED):** onion HS reachability for Surmount
   services; first-class next to clearnet; not a clearnet edge replacement.
   Clearnet HTTPS advertises the onion with **Onion-Location** and **Alt-Svc**
-  (apex, www, services, extra static Hosts, MTA-STS policy Host; same v3;
-  `/_o/{host}` for non-console surfaces). Live unit
+  (apex, www, services, extra static Hosts, MTA-STS policy Host; one v3
+  per public HTTP Host; Onion-Location is that Host's onion root plus
+  path). Live unit
   `surmount-arti-hidden-service` is active; Tor Browser verify remains residual.
   [research/arti-and-secrets-manager.md](research/arti-and-secrets-manager.md),
   [COMPACTION-PIN.md](COMPACTION-PIN.md) section 7,

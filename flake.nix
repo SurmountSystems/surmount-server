@@ -21,13 +21,10 @@
   # ./host-local is auto-imported when present (path flake / remote rsync
   # without .git); never committed.
 
-  # Mild discoverability only; host nix.settings already prefer cache.nixos.org.
-  nixConfig = {
-    extra-substituters = [ "https://cache.nixos.org" ];
-    extra-trusted-public-keys = [
-      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-    ];
-  };
+  # Do not set nixConfig extra-substituters here. cache.nixos.org is already
+  # the default cache. Guest nixos-rebuild is not a trusted flake-config
+  # context, so extra-substituters / extra-trusted-public-keys only printed
+  # "ignoring untrusted flake configuration" on the switch (2026-09-20).
 
   inputs = {
     # Prefer stable for a mail host. Bump deliberately after reading release notes.
