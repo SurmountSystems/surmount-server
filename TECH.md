@@ -11,13 +11,23 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Diagnose Nostr login 500
     - L3 specialists (when spawned)
+  - L2 Document Splora UI forward
+    - L3 specialists (when spawned)
+  - L2 Finish Splora path proxy
+    - L3 specialists (when spawned)
   - L2 Finish issue and report
     - L3 specialists (when spawned)
   - L2 Finish per-site onion code
     - L3 specialists (when spawned)
   - L2 Finish per-site onions
     - L3 specialists (when spawned)
+  - L2 Fix Splora doc contradiction
+    - L3 specialists (when spawned)
+  - L2 Fix nft helper ETXTBSY
+    - L3 specialists (when spawned)
   - L2 Fix publicHttpHosts eval fail
+    - L3 specialists (when spawned)
+  - L2 Forward Splora UI paths
     - L3 specialists (when spawned)
   - L2 Green just check-remote
     - L3 specialists (when spawned)
@@ -39,6 +49,12 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Map UI domains page
     - L3 specialists (when spawned)
+  - L2 Map mempool URL model
+    - L3 specialists (when spawned)
+  - L2 Map remote CI check scope
+    - L3 specialists (when spawned)
+  - L2 Map splora proxy paths
+    - L3 specialists (when spawned)
   - L2 Named flake eval onion tests
     - L3 specialists (when spawned)
   - L2 Per-site onion implementer
@@ -57,6 +73,14 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
     - L3 specialists (when spawned)
   - L2 Run laptop-renew-cert now
     - L3 specialists (when spawned)
+  - L2 Splora hosts and docs
+    - L3 specialists (when spawned)
+  - L2 Splora path proxy
+    - L3 specialists (when spawned)
+  - L2 Splora path proxy forward
+    - L3 specialists (when spawned)
+  - L2 Splora router and tests
+    - L3 specialists (when spawned)
   - L2 Sync stale splora module file
     - L3 specialists (when spawned)
   - L2 Union domains inventory
@@ -68,6 +92,8 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
   - L2 Write L3 onion report file
     - L3 specialists (when spawned)
   - L2 Write per-site onion report
+    - L3 specialists (when spawned)
+  - L2 check-remote path proxy
     - L3 specialists (when spawned)
   - L2 dns-zone live Namecheap
     - L3 specialists (when spawned)
@@ -103,10 +129,15 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Complete wrap and issue | nested L2 session usage | L2 | 200076 | estimate | exited |
 | DNS zone live setHosts | nested L2 session usage | L2 | 132747 | estimate | exited |
 | Diagnose Nostr login 500 | nested L2 session usage | L2 | 163200 | estimate | exited |
+| Document Splora UI forward | nested L2 session usage | L2 | 69357 | estimate | exited |
+| Finish Splora path proxy | nested L2 session usage | L2 | 199368 | estimate | exited |
 | Finish issue and report | nested L2 session usage | L2 | 198052 | estimate | exited |
 | Finish per-site onion code | nested L2 session usage | L2 | 199929 | estimate | exited |
 | Finish per-site onions | nested L2 session usage | L2 | 78308 | estimate | exited |
+| Fix Splora doc contradiction | nested L2 session usage | L2 | 0 | estimate | exited |
+| Fix nft helper ETXTBSY | nested L2 session usage | L2 | 111677 | estimate | exited |
 | Fix publicHttpHosts eval fail | nested L2 session usage | L2 | 73876 | estimate | exited |
+| Forward Splora UI paths | nested L2 session usage | L2 | 139874 | estimate | exited |
 | Green just check-remote | nested L2 session usage | L2 | 69322 | estimate | exited |
 | Honor hook and issue cert | nested L2 session usage | L2 | 196300 | estimate | exited |
 | Implement Splora portal Host | nested L2 session usage | L2 | 182109 | estimate | exited |
@@ -117,6 +148,9 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | List Namecheap-updated zones | nested L2 session usage | L2 | 95675 | estimate | exited |
 | Map TLS cert names | nested L2 session usage | L2 | 120448 | estimate | exited |
 | Map UI domains page | nested L2 session usage | L2 | 95426 | estimate | exited |
+| Map mempool URL model | nested L2 session usage | L2 | 108899 | estimate | exited |
+| Map remote CI check scope | nested L2 session usage | L2 | 109497 | estimate | exited |
+| Map splora proxy paths | nested L2 session usage | L2 | 117311 | estimate | exited |
 | Named flake eval onion tests | nested L2 session usage | L2 | 69731 | estimate | exited |
 | Per-site onion implementer | nested L2 session usage | L2 | 198871 | estimate | exited |
 | Per-site onion services | nested L2 session usage | L2 | 0 | estimate | exited |
@@ -126,12 +160,17 @@ Measured nested L2 tokens are session usage counts, not included SuperGrok perio
 | Restore exophiles on cert | nested L2 session usage | L2 | 54981 | estimate | exited |
 | Review Splora portal Host | nested L2 session usage | L2 | 96589 | estimate | exited |
 | Run laptop-renew-cert now | nested L2 session usage | L2 | 157441 | estimate | exited |
+| Splora hosts and docs | nested L2 session usage | L2 | 153029 | estimate | exited |
+| Splora path proxy | nested L2 session usage | L2 | 120653 | estimate | exited |
+| Splora path proxy forward | nested L2 session usage | L2 | 199175 | estimate | exited |
+| Splora router and tests | nested L2 session usage | L2 | 0 | estimate | exited |
 | Sync stale splora module file | nested L2 session usage | L2 | 87731 | estimate | exited |
 | Union domains inventory | nested L2 session usage | L2 | 54616 | estimate | exited |
 | Update living leaf docs | nested L2 session usage | L2 | 126253 | estimate | exited |
 | Wait for cert issue | nested L2 session usage | L2 | 201989 | estimate | exited |
 | Write L3 onion report file | nested L2 session usage | L2 | 203671 | estimate | exited |
 | Write per-site onion report | nested L2 session usage | L2 | 201035 | estimate | exited |
+| check-remote path proxy | nested L2 session usage | L2 | 111826 | estimate | exited |
 | dns-zone live Namecheap | nested L2 session usage | L2 | 66876 | estimate | exited |
 | goal plan writer | nested L2 session usage | L2 | 224310 | estimate | exited |
 | goal plan writer | nested L2 session usage | L2 | 224310 | estimate | exited |

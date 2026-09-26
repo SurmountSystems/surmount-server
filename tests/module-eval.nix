@@ -448,16 +448,17 @@ let
     # Console keeps the existing HS nickname so the live identity stays that site.
     assert servicesNick == nick;
     assert lib.hasInfix "[onion_services.\"${nick}\"]" toml;
-    # Two different public Hosts -> two different onion service nicknames.
+    # Apex and an extra site each get an onion. www does not.
     assert apexNick != "";
-    assert wwwNick != "";
+    assert wwwNick == "";
     assert extraNick != "";
-    assert apexNick != wwwNick;
     assert extraNick != apexNick;
-    assert extraNick != wwwNick;
     assert extraNick != nick;
+    assert !(nickMap ? ${www});
+    assert !(nickMap ? "mta-sts.${apex}");
     assert lib.hasInfix "[onion_services.\"${apexNick}\"]" toml;
-    assert lib.hasInfix "[onion_services.\"${wwwNick}\"]" toml;
+    assert !(lib.hasInfix "[onion_services.\"site-www-" toml);
+    assert !(lib.hasInfix "site-mta-sts-" toml);
     assert lib.hasInfix "[onion_services.\"${extraNick}\"]" toml;
     # Mail Hosts stay unmapped (primary MX and extra mail hostname).
     assert !(nickMap ? ${mail});
@@ -2867,7 +2868,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2879,6 +2879,12 @@ let
     assert failedAssertions e == [ ];
     assert builtins.any (x: x == "SURMOUNT_SPLORA_PROXY=1") envList;
     assert builtins.any (x: x == "SURMOUNT_SPLORA_PORTAL_HOST=splora.surmount.systems") envList;
+    assert !(lib.hasInfix "esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "testnet3.esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "testnet4.esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "mutinynet.esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "liquid.esplora.surmount.systems" envBlob);
+    assert lib.all (inst: inst.hosts == [ ]) (lib.attrValues e.config.surmount.sploraProxy.instances);
     assert lib.hasInfix "SURMOUNT_SPLORA_INSTANCES=" envBlob;
     assert lib.hasInfix ''"mainnet"'' envBlob;
     assert lib.hasInfix ''"hosts"'' envBlob;
@@ -2896,7 +2902,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.electrum.sock";
           };
         };
@@ -2919,7 +2924,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2940,7 +2944,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2959,7 +2962,6 @@ let
         sploraProxy.unitsMemoryMax = "2G";
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2979,7 +2981,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -3065,7 +3066,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -3095,8 +3095,8 @@ let
     ) failed;
     "t60-splora-remote-enable-needs-cookie-path-ok";
 
-  # Portal Host is one DNS name (not a fifth indexer). Extra onion Hosts
-  # include the portal and live indexer Hosts. Mainnet instance is not required.
+  # One public Host. Extra onion Hosts are that Host only when instance
+  # hosts are empty. Esplora Hosts are not in the sample map. Mainnet is absent.
   t61-splora-portal-host-and-onion-extras =
     let
       e = evalSurmount {
@@ -3105,10 +3105,10 @@ let
         artiHiddenService.startDaemon = false;
         sploraProxy.enable = true;
         sploraProxy.instances = {
-          testnet3.hosts = [ "testnet3.esplora.surmount.systems" ];
-          testnet4.hosts = [ "testnet4.esplora.surmount.systems" ];
-          mutinynet.hosts = [ "mutinynet.esplora.surmount.systems" ];
-          liquid.hosts = [ "liquid.esplora.surmount.systems" ];
+          testnet3 = { };
+          testnet4 = { };
+          mutinynet = { };
+          liquid = { };
         };
       };
       env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
@@ -3128,13 +3128,22 @@ let
     assert failedAssertions e == [ ];
     assert builtins.any (x: x == "SURMOUNT_SPLORA_PORTAL_HOST=splora.surmount.systems") envList;
     assert nickMap ? "splora.surmount.systems";
-    assert nickMap ? "testnet3.esplora.surmount.systems";
-    assert nickMap ? "testnet4.esplora.surmount.systems";
-    assert nickMap ? "mutinynet.esplora.surmount.systems";
-    assert nickMap ? "liquid.esplora.surmount.systems";
+    assert !(nickMap ? "testnet3.esplora.surmount.systems");
+    assert !(nickMap ? "testnet4.esplora.surmount.systems");
+    assert !(nickMap ? "mutinynet.esplora.surmount.systems");
+    assert !(nickMap ? "liquid.esplora.surmount.systems");
     assert !(nickMap ? "esplora.surmount.systems");
+    assert lib.all (inst: inst.hosts == [ ]) (lib.attrValues e.config.surmount.sploraProxy.instances);
+    assert !(builtins.any (x: lib.hasInfix "esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "testnet3.esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "testnet4.esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "mutinynet.esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "liquid.esplora.surmount.systems" x) envList);
     assert portalNick != "";
+    assert !(nickMap ? "www.surmount.systems");
     assert lib.hasInfix "[onion_services.\"${portalNick}\"]" toml;
+    assert !(lib.hasInfix "site-www-" toml);
+    assert !(lib.hasInfix "esplora-surmount-systems" toml);
     "t61-splora-portal-host-and-onion-extras-ok";
 
   results = [

@@ -1105,8 +1105,8 @@ mod tests {
         );
     }
 
-    /// Named contract: portal Host is on the :80 allowlist; extra onion Hosts
-    /// include the portal and live indexer Hosts. Not a fifth indexer.
+    /// Named contract: the one public Host is on the :80 allowlist and is the
+    /// only Splora onion extra. Esplora Hosts are not in the proxy map.
     #[test]
     fn splora_portal_unions_redirect_allowlist_and_onion_extra_hosts() {
         let _g = EnvGuard::acquire();
@@ -1114,7 +1114,7 @@ mod tests {
         set_env("SURMOUNT_SPLORA_PORTAL_HOST", "splora.surmount.systems");
         set_env(
             "SURMOUNT_SPLORA_INSTANCES",
-            r#"{"testnet3":{"hosts":["testnet3.esplora.surmount.systems"]},"testnet4":{"hosts":["testnet4.esplora.surmount.systems"]},"mutinynet":{"hosts":["mutinynet.esplora.surmount.systems"]},"liquid":{"hosts":["liquid.esplora.surmount.systems"]},"mainnet":{"hosts":["esplora.surmount.systems"]}}"#,
+            r#"{"testnet3":{"hosts":[]},"testnet4":{"hosts":[]},"mutinynet":{"hosts":[]},"liquid":{"hosts":[]}}"#,
         );
         let cfg = AppConfig::from_env().unwrap();
         assert!(cfg.splora_proxy.enable);
@@ -1122,16 +1122,36 @@ mod tests {
             cfg.splora_proxy.portal_host.as_deref(),
             Some("splora.surmount.systems")
         );
+        assert!(
+            cfg.splora_proxy
+                .instances
+                .iter()
+                .all(|inst| inst.hosts.is_empty())
+        );
+        assert!(
+            cfg.splora_proxy
+                .instances
+                .iter()
+                .all(|inst| inst.name != "mainnet"),
+            "mainnet stays off when it is absent from the instance map"
+        );
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "splora.surmount.systems"),
+            ":80 allowlist must include the portal: {:?}",
+            cfg.redirect_allowed_hosts
+        );
         for host in [
-            "splora.surmount.systems",
+            "esplora.surmount.systems",
             "testnet3.esplora.surmount.systems",
             "testnet4.esplora.surmount.systems",
             "mutinynet.esplora.surmount.systems",
             "liquid.esplora.surmount.systems",
         ] {
             assert!(
-                cfg.redirect_allowed_hosts.iter().any(|h| h == host),
-                ":80 allowlist must include {host}: {:?}",
+                !cfg.redirect_allowed_hosts.iter().any(|h| h == host),
+                ":80 allowlist must not include {host}: {:?}",
                 cfg.redirect_allowed_hosts
             );
         }
@@ -1141,14 +1161,15 @@ mod tests {
             "onion extra hosts must include the portal: {extra:?}"
         );
         for host in [
+            "esplora.surmount.systems",
             "testnet3.esplora.surmount.systems",
             "testnet4.esplora.surmount.systems",
             "mutinynet.esplora.surmount.systems",
             "liquid.esplora.surmount.systems",
         ] {
             assert!(
-                extra.iter().any(|h| h == host),
-                "onion extra hosts must include {host}: {extra:?}"
+                !extra.iter().any(|h| h == host),
+                "onion extra hosts must not include {host}: {extra:?}"
             );
         }
         assert!(

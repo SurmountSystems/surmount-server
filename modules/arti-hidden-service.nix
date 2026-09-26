@@ -171,9 +171,10 @@ let
     # nixpkgs 1.4.x lag. Keys: socks_listen, onion_services, proxy_ports.
     # Command: arti proxy -c /etc/surmount/arti.toml
     #
-    # One [onion_services] table per public HTTP Host. Same cleartext
-    # backend. Mail Hosts are not listed. Console nickname stays
-    # artiHiddenService.nickname.
+    # One [onion_services] table per public site. Not per www Host,
+    # not per esplora subdomain, and not for mta-sts.<apex>. Same
+    # cleartext backend. Mail Hosts are not listed. Console nickname
+    # stays artiHiddenService.nickname.
     #
     # NOTE: systemd unit active does not prove an onion is published.
     # Prefer pkgs.artiOnionService (Surmount overlay). Stock pkgs.arti is

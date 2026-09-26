@@ -762,8 +762,9 @@ in
         assertion = !splora.enable || splora.instances != { };
         message = ''
           surmount.sploraProxy.enable is true but instances is empty.
-          Configure Host -> /run/splora/<instance>.http.sock (mainnet,
-          testnet3, testnet4, mutinynet, liquid). Fail-closed.
+          Configure mainnet, testnet3, testnet4, mutinynet, and/or liquid
+          sockets under /run/splora/<instance>.http.sock. Paths are on the
+          portal Host. Fail-closed.
         '';
       }
       {

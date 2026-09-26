@@ -1,5 +1,7 @@
-# Public HTTP Hosts that each get a distinct Arti v3 onion.
-# Mail Hosts stay unmapped. HS private keys never appear here.
+# Public sites that each get one Arti v3 onion.
+# Mail Hosts stay unmapped. www Hosts do not get a second onion.
+# Esplora subdomain Hosts do not get an onion. Networks are paths
+# on splora.<primary>. HS private keys never appear here.
 #
 # Console (servicesHostname) keeps artiHiddenService.nickname so the
 # already-published management onion identity stays that site.
@@ -42,8 +44,11 @@ let
       mail = toLower mailHostname;
       extraMail = map toLower extraMailHostnames;
       isMail = h: h == mail || builtins.elem h extraMail;
-      extras = lib.filter (h: h != "" && !isMail h) (map toLower extraStaticHosts);
-      base = lib.filter (h: h != "" && !isMail h) [
+      # www is the same site as the apex. Esplora names are not sites.
+      # mta-sts.<apex> is mail policy. It does not belong on Tor.
+      skipOnion = h: isMail h || h == mta || lib.hasPrefix "www." h || lib.hasInfix ".esplora." h;
+      extras = lib.filter (h: h != "" && !skipOnion h) (map toLower extraStaticHosts);
+      base = lib.filter (h: h != "" && !skipOnion h) [
         apex
         www
         services
