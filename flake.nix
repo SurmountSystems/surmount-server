@@ -32,21 +32,21 @@
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.5.1 source build).
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.6.0 source build).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     # Rustc/cargo only for engines whose MSRV exceeds the host channel default.
-    # Arti 2.5.1 MSRV is 1.91. Keep a separate input so we can pin newer rustc
+    # Arti 2.6.0 MSRV is 1.91. Keep a separate input so we can pin newer rustc
     # without waiting on every host-channel package set. Bump when Arti needs it.
     nixpkgs-rust.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
-    crane.url = "github:ipetkov/crane/756d6d07c3818ea95d1e2cdac63fa7d02fe3e61b";
+    crane.url = "github:ipetkov/crane/47b6b27ed9a3a9181415e4367d0c30ab2a0e0250";
     # crane follows its own nixpkgs; we pass pkgs from our nixpkgs in outputs.
 
     sops-nix = {
-      url = "github:Mic92/sops-nix/f1406619a3884cd5c47992a70b8b35c9c0fcb4c9";
+      url = "github:Mic92/sops-nix/5efb5a6f4f5ab192817d28557dd4d650fa14d866";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -64,9 +64,11 @@
       flake = false;
     };
 
-    # Grok OSS TUI (bin/grok-oss). Product tip is still branch remote-1
-    # (open PR 51; default branch main is #50 and is not this tip).
-    # Operator bumps: nix flake update grok-oss.
+    # Grok OSS TUI (bin/grok-oss). Locked rev 6edf5fda (2026-09-02).
+    # Branch remote-1 was deleted after PR 51 merged. nix flake update of
+    # this input fails (GitHub 422, no commit for ref remote-1). main has
+    # diverged from this rev, so this wave did not retarget the URL.
+    # Operator bumps: nix flake update grok-oss, after the ref exists.
     # Default-off NixOS module; package is fail-closed when enable=true.
     grok-oss.url = "github:SurmountSystems/grok-oss/remote-1";
 
@@ -327,7 +329,7 @@
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.5.1 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.6.0 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
           # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
           # vendor handoff avoids crates.io 403). C deps from host pkgs.
@@ -856,6 +858,10 @@
             pkgs.writeText "arti-onion-package-contract" (builtins.toJSON r.ok);
 
           # Offline RustSec audit of Cargo.lock (no crates.io).
+          # 2026-09-26: ignore RUSTSEC-2024-0436 (paste) and
+          # RUSTSEC-2026-0173 (proc-macro-error2) only.
+          # See docs/SECURITY.md and .cargo/audit.toml.
+          # --deny warnings stays. Do not ignore any other advisory.
           cargo-audit =
             pkgs.runCommand "surmount-cargo-audit"
               {
@@ -863,7 +869,9 @@
               }
               ''
                 set -euo pipefail
-                cargo-audit audit --no-fetch --stale \
+                cargo-audit audit --no-fetch --stale --deny warnings \
+                  --ignore RUSTSEC-2024-0436 \
+                  --ignore RUSTSEC-2026-0173 \
                   -d ${advisory-db} \
                   -f ${./Cargo.lock}
                 mkdir -p "$out"
@@ -974,15 +982,11 @@
                 inherit pkgs;
                 inherit (pkgs) lib;
                 nixosTest = pkgs.nixosTest or pkgs.testers.runNixOSTest;
+                # runNixOSTest pins node.pkgs to this overlaid set and marks
+                # nixpkgs.overlays read-only. Do not assign that option here.
                 surmountModules = [
                   sops-nix.nixosModules.sops
                   ./modules
-                  (
-                    { ... }:
-                    {
-                      nixpkgs.overlays = [ (surmountOverlay system) ];
-                    }
-                  )
                 ];
                 managementUi = self.packages.${system}.management-ui;
               }

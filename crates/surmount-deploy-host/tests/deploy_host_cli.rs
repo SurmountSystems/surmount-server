@@ -125,11 +125,8 @@ fn dry_run_good_host_local_prints_rebuild_and_smoke() {
     );
     let low = s.to_ascii_lowercase();
     assert!(
-        low.contains("evaluated")
-            || low.contains("authorizedkeys")
-            || low.contains("not enough")
-            || low.contains("not sufficient"),
-        "{s}"
+        !s.contains("does not mention authorizedKeys"),
+        "known-name layout auto-wires keys and must not warn: {s}"
     );
     assert!(
         low.contains("post-switch smoke") || s.contains("deploy-host-post-switch-smoke"),

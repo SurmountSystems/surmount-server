@@ -410,16 +410,24 @@ pub async fn create_account_via_directory(
     let mut password_set = false;
     let mut password_note = None;
     if let Some(secret) = password {
-        let lookup_addr = result
-            .account
-            .as_ref()
+        // Stalwart 0.16 created objects have no emailAddress. The address
+        // field is then the id or the local-part, and password set refuses
+        // that string. Keep a real mailbox address for the echo, and set the
+        // credential on the created principal id so lookup is not required.
+        let created = result.account.as_ref();
+        let lookup_addr = created
             .map(|a| a.address.clone())
+            .filter(|addr| addr.contains('@'))
             .unwrap_or_else(|| address.clone());
+        let account_id = created
+            .map(|a| a.id.trim().to_string())
+            .filter(|id| !id.is_empty());
         let pw = state
             .directory
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: lookup_addr,
                 password: secret.to_string(),
+                account_id,
             })
             .await;
         password_set = pw.ok;
@@ -467,7 +475,10 @@ pub async fn create_account_via_directory(
         "source": result.source,
         "note": note,
     });
-    if let Some(acc) = result.account {
+    if let Some(mut acc) = result.account {
+        if !acc.address.contains('@') {
+            acc.address = address.clone();
+        }
         body["account"] = json!(acc);
     }
     if !console_saved || (password.is_some() && !password_set) {
@@ -744,6 +755,7 @@ pub async fn set_mailbox_password_via_directory(
         .set_mailbox_password(SetMailboxPasswordInput {
             mailbox,
             password: body.password,
+            account_id: None,
         })
         .await;
     if result.ok

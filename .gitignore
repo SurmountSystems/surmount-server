@@ -10,6 +10,8 @@ target
 .DS_Store
 *~
 *.swp
+# These are patch backups and must not be committed.
+*.orig
 
 # Local agent session reports / plans (not product). May name private
 # host work; never part of the public commit surface.

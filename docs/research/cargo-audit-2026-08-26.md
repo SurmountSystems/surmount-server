@@ -1,9 +1,9 @@
 # cargo-audit (RustSec) 2026-08-26
 
-Hermetic run: `cargo-audit audit --no-fetch --stale` against flake input
-`advisory-db` (github:rustsec/advisory-db) and root `Cargo.lock`.
-Loaded 1226 advisories. Operator command: `just audit` (or
-`just audit-remote`).
+Hermetic run: `cargo-audit audit --no-fetch --stale --deny warnings`
+against flake input `advisory-db` (github:rustsec/advisory-db) and root
+`Cargo.lock`. A warning fails that check. Loaded 1226 advisories on the
+2026-08-27 run. Operator command: `just audit` (or `just audit-remote`).
 
 `just audit` builds `checks.*.cargo-audit` and **is** in `checks.*.ci`
 after nostr 0.44.8, time 0.3.55, and `h2` 0.4.16 (RUSTSEC-2026-0258
@@ -50,6 +50,9 @@ exit 0, "3 allowed warnings"):
 silence `just audit`. Leave the IDs printing until the parent crate
 drops them.
 
+That paragraph describes the 2026-08-27 lock. The current lock is the
+2026-09-26 section.
+
 `age` 0.12.1 also pulls `kem 0.3.0-pre.0` via `ml-kem` 0.2.3 (upstream
 published graph; rand stays 0.8). chacha20 git patch unchanged.
 Accessed: 2026-08-27.
@@ -69,29 +72,85 @@ Accessed: 2026-08-27.
 | RUSTSEC-2026-0219 | nostr 0.43.1 | | NIP-04 IV DoS; >=0.44.6 |
 | RUSTSEC-2026-0009 | time 0.3.45 | rcgen/x509-parser/UI | stack DoS; >=0.3.47 |
 
-Workspace today **pins** `nostr = "0.44.7"` (lock 0.44.8) and `time`
+Workspace today pins nostr `0.45.3` (lock 0.45.5) and `time`
 `0.3.47+`. Audit **is** a CI gate. The 0.43 / exact-time-0.3.45 notes
 below are historical from 2026-08-26.
 
-## Warnings (did not fail `--deny` vulns; unmaintained/unsound)
+## Warnings
+
+`checks.*.cargo-audit` passes `--deny warnings`. A warning fails the
+derivation. As of 2026-09-26, instant is not a current lock hit. paste
+and proc-macro-error2 are in the lock and ignored. See the 2026-09-26
+section. Do not ignore any other advisory.
 
 | ID | Crate | Kind |
 |----|-------|------|
-| RUSTSEC-2024-0384 | instant 0.1.13 | unmaintained (via nostr 0.44.8; still in lock) |
-| RUSTSEC-2024-0436 | paste 1.0.15 | unmaintained (via leptos 0.8.20; still in lock) |
-| RUSTSEC-2026-0173 | proc-macro-error2 2.0.1 | unmaintained (via leptos_macro / rstml; age path dropped) |
+| RUSTSEC-2024-0384 | instant 0.1.13 | unmaintained. Not in the lock (nostr 0.45.5, universal-time). |
+| RUSTSEC-2024-0436 | paste 1.0.15 | unmaintained INFO. In the lock via Leptos. Ignored 2026-09-26. Not a CVE. |
+| RUSTSEC-2026-0173 | proc-macro-error2 2.0.1 | unmaintained INFO. In the lock via Leptos. Ignored 2026-09-26. Not age. Not a CVE. |
 | RUSTSEC-2026-0221 | event-listener 5.4.1 | unsound `!Send` (via leptos reactive_graph). **Not printed** by `just audit` 2026-08-27 (1226 advisories). |
+
+## 2026-09-26 vendor reverted, two ids ignored
+
+On 2026-09-26 the third_party Leptos fork was reverted. either_of,
+leptos, leptos_macro, reactive_graph, reactive_stores,
+reactive_stores_macro, syn_derive, and tachys come from crates.io
+again, at the same versions as before the fork (leptos 0.8.20 and the
+matching published crates). paste 1.0.15 and proc-macro-error2 2.0.1
+are back in the lock the way upstream publishes them. pastey is not in
+the lock. proc-macro-error3 3.1.1 stays because i18n-embed-fl 0.10.1
+uses it. The rustls git patch and the chacha20 git patch stay.
+
+The fork existed only so cargo-audit would stop naming
+RUSTSEC-2024-0436 and RUSTSEC-2026-0173. That was the wrong size of
+change. Do not vendor Leptos to clear these two ids.
+
+Both records are RustSec type INFO, informational "unmaintained". They
+are not CVEs. The OSV records have cvss null and no CVE alias.
+
+paste (RUSTSEC-2024-0436) pastes identifiers inside a compile-time
+macro. The dtolnay/paste repo was archived on 2024-10-06. The advisory
+text is only that the project is unmaintained. It does not describe a
+vulnerability.
+https://rustsec.org/advisories/RUSTSEC-2024-0436
+
+proc-macro-error2 (RUSTSEC-2026-0173) prints compiler errors when a
+procedural macro fails. The author confirmed it is unmaintained. The
+advisory does not describe an exploitable bug. This id is
+proc-macro-error2, not age. The age 0.12 bump is a separate change: it
+pulls i18n-embed-fl 0.10.1, which uses proc-macro-error3.
+https://rustsec.org/advisories/RUSTSEC-2026-0173
+
+Both entered this lock only through Leptos. The management UI is the
+only product crate that depends on Leptos. Its source does not call
+paste or proc-macro-error. The crates run inside rustc while the UI is
+compiled. They are not in the mail server process and not in the running
+management UI process. A lockfile pin means a later crates.io upload
+does not enter the build until someone updates the lock.
+
+`checks.*.cargo-audit` runs
+`cargo-audit audit --no-fetch --stale --deny warnings` with
+`--ignore RUSTSEC-2024-0436` and `--ignore RUSTSEC-2026-0173`.
+`--deny warnings` stays, so any other warning still fails. The ignore
+list is only those two ids. Do not ignore any other advisory. Do not
+turn off the whole unmaintained class. `.cargo/audit.toml` records the
+same two ids. The hermetic check passes the flags on the command
+because that derivation does not see the repo. `deny.toml` stays
+bans-only.
+
+Accessed: 2026-09-26.
 
 ## Operator leftovers
 
-1. Rewrite management-ui NIP-98 helpers onto nostr 0.45.3 (or later 0.45)
-   so `instant` leaves the lock. Do not enable `os-rng` without checking
-   rand 0.10 / chacha20 0.10 against menhera-cooldown.
-2. When leptos publishes a **stable** 0.9 that drops `paste` and
-   `proc-macro-error2`, bump workspace `leptos` off 0.8. Do not ship
-   0.9.0-beta as that bump.
-3. `h2` >=0.4.16, nostr 0.44.7+, `time` 0.3.47+, and `checks.*.ci`
+1. `instant` is gone from the lock (nostr 0.45.5, universal-time). Do not
+   re-add it.
+2. The Leptos `third_party/` fork was reverted on 2026-09-26. Do not
+   vendor Leptos again to clear RUSTSEC-2024-0436 or RUSTSEC-2026-0173.
+   Those two ids are ignored. Do not ignore any other advisory. Do not
+   ship 0.9.0-beta just to chase paste.
+3. `h2` >=0.4.16, nostr 0.45, `time` 0.3.47+, and `checks.*.ci`
    already landed. Do not re-do those.
 
 URLs: https://rustsec.org/advisories/<ID>
-Accessed: 2026-08-26; unmaintained re-check 2026-08-27.
+Accessed: 2026-08-26; unmaintained re-check 2026-08-27; vendor reverted
+and two INFO ids ignored 2026-09-26.

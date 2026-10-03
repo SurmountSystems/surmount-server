@@ -49,8 +49,8 @@ not prove the UI binary links ring SHA-1. Git object IDs and Nixpkgs C
 libraries are out of this lockfile. Full method and leftovers:
 [research/hash-primitives-lockfile-2026-08-26.md](research/hash-primitives-lockfile-2026-08-26.md).
 
-**Automated:** `just audit` is hermetic `cargo-audit` against flake
-input `advisory-db` (RustSec; `--no-fetch --stale`). `just deny` is
+**Automated:** `just audit` is hermetic `cargo-audit audit --no-fetch --stale --deny warnings` against flake
+input `advisory-db` (RustSec). A warning fails that check. `just deny` is
 `cargo-deny` bans (no sha1/md5 crates) and **is** in `checks.*.ci`.
 `just audit` is in `checks.*.ci`. `h2` is 0.4.16 (RUSTSEC-2026-0258
 cleared). Workspace rustls is **0.23.45** (RUSTSEC-2026-0285 TLS 1.3
@@ -59,14 +59,51 @@ still stop at 0.23.44; 3d already lists 0.23.45. The lock uses git
 `[patch.crates-io]` of rustls tag `v/0.23.45` (rev
 `2976d90fd1c2db6b518700dd101b714069cfcb17`), same class as the chacha20
 git patch, until 10d lists 0.23.45. Do not ignore that advisory. Do not
-fetch crates.io to skip menhera. Workspace `age` is 0.12 (drops the
-rekey path of RUSTSEC-2026-0173). Three unmaintained warnings remain
-and are **not** cargo-audit-ignored so `just audit` still prints them:
-instant via nostr 0.44.8 (RUSTSEC-2024-0384), paste via leptos 0.8.20
-(RUSTSEC-2024-0436), proc-macro-error2 via leptos_macro / rstml
-(RUSTSEC-2026-0173). See
+fetch crates.io to skip menhera. Workspace `age` is 0.12. That bump
+pulls i18n-embed-fl 0.10.1, which uses proc-macro-error3.
+RUSTSEC-2026-0173 is proc-macro-error2, not age. `instant`
+(RUSTSEC-2024-0384) left the lock with nostr 0.45 (universal-time, not
+instant).
+
+On 2026-09-26 the lock replaced registry faster-hex 0.10.0 with git tag
+v0.10.1 (rev `c817979830ea5be2eafe0b0c99cb83b017ae2b8f`) for
+RUSTSEC-2026-0306. `faster_hex::hex_decode_unchecked` on x86 and x86_64,
+with AVX2, loads 32 bytes from `src` and from `src[32..]` without
+requiring `src` to hold 64 bytes. menhera-cooldown 10d does not list
+0.10.1 yet (published 2026-09-23), so the lock uses that public git tag
+instead of the registry crate. Do not ignore RUSTSEC-2026-0306.
+See [RUSTSEC-2026-0306](https://rustsec.org/advisories/RUSTSEC-2026-0306)
+(accessed: 2026-09-26).
+
+On 2026-09-26 the operator ignored two RustSec records, and only those
+two. Both are type INFO, informational "unmaintained". They are not
+CVEs. The OSV records have cvss null and no CVE alias. `paste`
+(RUSTSEC-2024-0436) pastes identifiers inside a compile-time macro. The
+dtolnay/paste repo was archived on 2024-10-06. The advisory text is only
+that the project is unmaintained. It does not describe a vulnerability.
+https://rustsec.org/advisories/RUSTSEC-2024-0436
+`proc-macro-error2` (RUSTSEC-2026-0173) prints compiler errors when a
+procedural macro fails. The author confirmed it is unmaintained. The
+advisory does not describe an exploitable bug.
+https://rustsec.org/advisories/RUSTSEC-2026-0173
+Both entered this lock only through Leptos. The management UI is the
+only product crate that depends on Leptos. Its source does not call
+paste or proc-macro-error. The crates run inside rustc while the UI is
+compiled. They are not in the mail server process and not in the running
+management UI process. A lockfile pin means a later crates.io upload
+does not enter the build until someone updates the lock. Do not vendor
+Leptos to clear these two ids. Do not ignore any other advisory.
+`checks.*.cargo-audit` passes `--ignore RUSTSEC-2024-0436` and
+`--ignore RUSTSEC-2026-0173`, and it still passes `--deny warnings`.
+proc-macro-error3 stays because i18n-embed-fl 0.10.1 uses it. See
+`.cargo/audit.toml` and
 [research/cargo-audit-2026-08-26.md](research/cargo-audit-2026-08-26.md).
 Bump the DB with `nix flake update advisory-db`.
+
+On 2026-10-03 `just audit-remote` ran `checks.x86_64-linux.cargo-audit` against advisory-db rev `ef6173cbc5c50ec8166f9a5b28f07834144373ee` (locked the same day). cargo-audit 0.22.1 loaded 1290 advisories and scanned 481 crate dependencies in the existing repo-root `Cargo.lock`. The command exited 0. It printed no new RustSec id and no CVE name. The advisory files for the two ignored records still have no `aliases` field and no CVE name: RUSTSEC-2024-0436 (`paste`, informational unmaintained) and RUSTSEC-2026-0173 (`proc-macro-error2`, informational unmaintained). `--deny warnings` stayed on. No third ignore was added. This scan did not refresh `Cargo.lock`. The worktree lock later had 479 package name lines. The cargo-audit constituent inside `just check-remote` scanned those 479 dependencies and that derivation completed with no new RustSec id. The CI aggregate did not finish, because the builder SSH connection failed. A later `cargo update` needs the same check again.
+See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
+and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
+(accessed: 2026-10-03).
 
 ## Non-goals (this doc)
 
@@ -241,24 +278,27 @@ Q-AUTH-1 still open. Report: `.agents/reports/impl-auth-live-b4-switch.md`.
   OIDC provider/client. That is **not** the same as Nostr.
 - **Does not** natively verify Nostr npub signatures unless we build a bridge.
 
-### Mailbox password hashing (Stalwart 0.16.15)
+### Mailbox password hashing (Stalwart 0.16.24)
 
 The management UI does **not** hash mailbox passwords in the browser or in
 Axum. `POST /api/v1/accounts/password` sends the plaintext secret only over
 the already-authenticated operator session to loopback Stalwart
 (`x:Account/set` `credentials.0` `@type Password`). The engine hashes.
 
-Stalwart 0.16.15 (this repo pin in `nix/packages/stalwart-mail.nix`) uses
-`Authentication.passwordHashAlgorithm`. The enum and singleton default are
-**Argon2id**. Source (tag `v0.16.15`):
+Stalwart 0.16.24 (this repo pin in `nix/packages/stalwart-mail.nix`) uses
+`Authentication.passwordHashAlgorithm`. The enum default is **Argon2id**.
+Source (tag `v0.16.24`, re-checked 2026-10-03):
 
 - `crates/registry/src/schema/enums.rs`: `PasswordHashAlgorithm` `#[default]
   Argon2id`
-- `crates/registry/src/schema/structs_impl.rs`: `impl Default for
-  Authentication` sets `password_hash_algorithm:
-  PasswordHashAlgorithm::Argon2id`
+- `crates/registry/src/schema/structs.rs`: `Authentication` field
+  `password_hash_algorithm: PasswordHashAlgorithm`
 - `crates/directory/src/core/secret.rs`: `hash_secret` for `Argon2id` calls
   `Argon2::default().hash_password`
+
+Tag `v0.16.24` `structs_impl.rs` does not mention `password_hash_algorithm`.
+The 0.16.15 citation of an explicit `impl Default for Authentication` in
+that file is not in this tag.
 
 Public docs (same default; accessed: 2026-08-14):
 [Passwords](https://stalw.art/docs/auth/authentication/password/) and

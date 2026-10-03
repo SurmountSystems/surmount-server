@@ -106,17 +106,22 @@ now delegates create to the inner client (list stays empty). Gate:
 is 403. Hermetic wire-mock covers happy path + fail-closed HTTP. `/accounts`
 still has no create form.
 
-**Mailbox password shipped (2026-08-14):** `Directory::set_mailbox_password`;
-HTTP `POST /api/v1/accounts/password`; `/mail` HTML form. Lookup by
-`emailAddress`, then `x:Account/set` update with
-`credentials.0 @type Password`. Not `x:AccountPassword/set` (that singleton
-is the API-token principal). Listing may stay `unavailable`; password set
-still uses the host token + `SURMOUNT_STALWART_URL` when present
-(`StalwartPasswordOnly`). Password never in JSON responses or logs.
-Surmount sends plaintext; Stalwart 0.16.15 hashes with
-`Authentication.passwordHashAlgorithm` (default **Argon2id**; see
-[SECURITY.md](../SECURITY.md) *Mailbox password hashing*). `/mail` card
-keeps `#mailbox-password`; the password INPUT id is
+**Mailbox password shipped (2026-08-14; create id path 2026-09-30):**
+`Directory::set_mailbox_password`; HTTP `POST /api/v1/accounts/password`;
+`/mail` HTML form. The password card looks up the principal by the mailbox
+address the form sends (`local@domain`), then `x:Account/set` update with
+`credentials.0 @type Password`. Create does not post the address preview.
+The server composes `local@primary`. Stalwart 0.16 User has no
+`emailAddress`, so the create response address is the new id or the
+local-part. Create therefore sets the Password credential on that principal
+id and does not look the row up by `emailAddress`. Not
+`x:AccountPassword/set` (that singleton is the API-token principal).
+Listing may stay `unavailable`; password set still uses the host token +
+`SURMOUNT_STALWART_URL` when present (`StalwartPasswordOnly`). Password
+never in JSON responses or logs. Surmount sends plaintext; Stalwart
+0.16.15 hashes with `Authentication.passwordHashAlgorithm` (default
+**Argon2id**; see [SECURITY.md](../SECURITY.md) *Mailbox password hashing*).
+`/mail` card keeps `#mailbox-password`; the password INPUT id is
 `mailbox-password-input`.
 
 **Still residual:** full Q-AUTH-1 product answers; UDS to Stalwart.
@@ -139,6 +144,10 @@ replace that bootstrap step.
   `POST /api/v1/accounts/password` shipped (2026-08-14). Host live IMAP login
   after the operator sets a password is operator-side proof (do not invent a
   password in-tree).
+- **Not claimed:** live SMTP or IMAP delivery to a mailbox created in this
+  UI. In-tree proof is the create payload only: `@type` User (not Group),
+  `name` is the local-part with no `@`, `domainId` is the looked-up Domain
+  id (not the hostname). A live send is out of scope for these tests.
 - **Do not invent Q-AUTH-1** (key-loss, durable session store, first-operator
   bootstrap). Live directory and mutations require `authMode=nostr` unless lab
   escape (`allowDirectoryUnauthenticated` / `SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED`).

@@ -6,9 +6,12 @@
 //! plus a host token (env or file); never default-on; never invents accounts.
 //!
 //! Mutations (`create_account` / `update_account`) use management JMAP
-//! `x:Account/set` on the live backend. Mailbox password set looks up the
-//! principal by email and PATCHes a Password credential on that Account
-//! (never `x:AccountPassword/set`, which is the API-token principal).
+//! `x:Account/set` on the live backend. The password card looks up the
+//! principal by mailbox address and PATCHes a Password credential on that
+//! Account. Create sets that credential on the principal id just returned:
+//! Stalwart 0.16 User has no emailAddress, so the created object is an id
+//! or a local-part, and using that string as the mailbox address refuses.
+//! Never `x:AccountPassword/set` (that singleton is the API-token principal).
 //! HTTP API routes gate mutations behind `AUTH_MODE=nostr` (or lab
 //! `SURMOUNT_DIRECTORY_ALLOW_UNAUTHENTICATED=1`) and double-submit CSRF on
 //! cookie-authenticated POSTs. Password is never logged, never returned in
@@ -61,23 +64,37 @@ pub struct AccountMutationResult {
     pub note: String,
 }
 
-/// Set a mailbox Password credential (lookup by email; never the API-token principal).
+/// Set a mailbox Password credential (never the API-token principal).
 ///
+/// Password card: `account_id` is absent and `mailbox` is the lookup key.
+/// Create passes the principal id from `x:Account/set` and skips lookup.
 /// `password` is omitted from [`Debug`] so logs cannot echo the secret.
 pub struct SetMailboxPasswordInput {
-    /// Mailbox address (`hunter@surmount.systems`). Lookup key; not Account id.
+    /// Mailbox address (`local@domain`). Lookup key when `account_id` is absent.
     pub mailbox: String,
     /// New password. Never logged; never serialized on the response path.
     pub password: String,
+    /// Principal id from a create that just succeeded. Skips address lookup.
+    pub account_id: Option<String>,
 }
 
 impl std::fmt::Debug for SetMailboxPasswordInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SetMailboxPasswordInput")
             .field("mailbox", &self.mailbox)
+            .field("account_id", &self.account_id)
             .field("password", &"[redacted]")
             .finish()
     }
+}
+
+fn nonempty_account_id(input: &SetMailboxPasswordInput) -> Option<String> {
+    input
+        .account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Result of a mailbox password set. Never includes the password.
@@ -451,6 +468,44 @@ For tests and explicit SURMOUNT_DIRECTORY=mock only. Mutations available via API
     ) -> Pin<Box<dyn Future<Output = MailboxPasswordResult> + Send + '_>> {
         Box::pin(async move {
             let mailbox = input.mailbox.trim().to_string();
+            if let Some(id) = nonempty_account_id(&input) {
+                if input.password.is_empty() {
+                    return MailboxPasswordResult {
+                        ok: false,
+                        source: "mock",
+                        mailbox: if mailbox.contains('@') {
+                            Some(mailbox)
+                        } else {
+                            None
+                        },
+                        note: "password set refused: password required".into(),
+                    };
+                }
+                let found = {
+                    let lock = self.accounts.lock().unwrap_or_else(|e| e.into_inner());
+                    lock.iter().find(|a| a.id == id).cloned()
+                };
+                return match found {
+                    Some(entry) => MailboxPasswordResult {
+                        ok: true,
+                        source: "mock",
+                        mailbox: Some(entry.address),
+                        note: "Hermetic mock password set (not live Stalwart). \
+Use this password in your mail app."
+                            .into(),
+                    },
+                    None => MailboxPasswordResult {
+                        ok: false,
+                        source: "mock",
+                        mailbox: if mailbox.contains('@') {
+                            Some(mailbox)
+                        } else {
+                            None
+                        },
+                        note: "No mailbox with that address.".into(),
+                    },
+                };
+            }
             if mailbox.is_empty() || !mailbox.contains('@') {
                 return MailboxPasswordResult {
                     ok: false,
@@ -639,10 +694,37 @@ impl StalwartDirectory {
         if want.is_empty() || !want.contains('@') {
             return Err("mailbox address required".into());
         }
-        let accounts = self.fetch_accounts().await?;
-        accounts
-            .into_iter()
-            .find(|a| a.address.eq_ignore_ascii_case(want))
+        let value = self.post_jmap(&jmap_account_list_request()).await?;
+        let rows = account_list_rows(&value)?;
+        if let Some(row) = rows
+            .iter()
+            .find(|row| row.address.eq_ignore_ascii_case(want))
+        {
+            return Ok(row.to_entry());
+        }
+        let Some((local, domain)) = mailbox_local_and_domain(want) else {
+            return Err("No mailbox with that address.".into());
+        };
+        let needs_domain = rows.iter().any(|row| {
+            row.domain_id.is_some()
+                && !row.address.contains('@')
+                && row.address.eq_ignore_ascii_case(local)
+        });
+        if !needs_domain {
+            return Err("No mailbox with that address.".into());
+        }
+        // domainId is an id. Match the id of the domain whose name is `domain`.
+        let domain_body = self.post_jmap(&jmap_domain_list_request()).await?;
+        let Some(domain_id) = domain_id_from_jmap(&domain_body, domain)? else {
+            return Err("No mailbox with that address.".into());
+        };
+        rows.into_iter()
+            .find(|row| {
+                !row.address.contains('@')
+                    && row.address.eq_ignore_ascii_case(local)
+                    && row.domain_id.as_deref() == Some(domain_id.as_str())
+            })
+            .map(|row| row.to_entry())
             .ok_or_else(|| "No mailbox with that address.".into())
     }
 
@@ -775,6 +857,35 @@ Set the mailbox password from Mail on this console."
     ) -> Pin<Box<dyn Future<Output = MailboxPasswordResult> + Send + '_>> {
         Box::pin(async move {
             let mailbox = input.mailbox.trim().to_string();
+            if let Some(id) = nonempty_account_id(&input) {
+                let echo = if mailbox.contains('@') {
+                    Some(mailbox)
+                } else {
+                    None
+                };
+                if input.password.is_empty() {
+                    return MailboxPasswordResult {
+                        ok: false,
+                        source: "stalwart",
+                        mailbox: echo.clone(),
+                        note: "password set refused: password required".into(),
+                    };
+                }
+                return match self.set_password_credential(&id, &input.password).await {
+                    Ok(()) => MailboxPasswordResult {
+                        ok: true,
+                        source: "stalwart",
+                        mailbox: echo.clone(),
+                        note: "Password set. Use this password in your mail app.".into(),
+                    },
+                    Err(err) => MailboxPasswordResult {
+                        ok: false,
+                        source: "stalwart",
+                        mailbox: echo,
+                        note: format!("Stalwart password set failed (fail-closed). {err}"),
+                    },
+                };
+            }
             if mailbox.is_empty() || !mailbox.contains('@') {
                 return MailboxPasswordResult {
                     ok: false,
@@ -952,7 +1063,7 @@ impl Directory for StalwartPasswordOnly {
     }
 }
 
-/// JMAP request body: query all accounts then get id/name/emailAddress/@type.
+/// JMAP request body: query all accounts then get id/name/emailAddress/domainId/@type.
 pub fn jmap_account_list_request() -> Value {
     json!({
         "using": [
@@ -976,7 +1087,7 @@ pub fn jmap_account_list_request() -> Value {
                         "name": "x:Account/query",
                         "path": "/ids"
                     },
-                    "properties": ["id", "name", "emailAddress", "@type"]
+                    "properties": ["id", "name", "emailAddress", "domainId", "@type"]
                 },
                 "g1"
             ]
@@ -1319,11 +1430,52 @@ Open auth_mode=off must not mutate principals."
     Ok(())
 }
 
+/// One `x:Account/get` row. `domain_id` is Stalwart's id, not the domain name.
+struct AccountListRow {
+    id: String,
+    address: String,
+    status: String,
+    domain_id: Option<String>,
+}
+
+impl AccountListRow {
+    fn to_entry(&self) -> AccountEntry {
+        AccountEntry {
+            id: self.id.clone(),
+            address: self.address.clone(),
+            status: self.status.clone(),
+        }
+    }
+}
+
+/// `local@domain` with both sides non-empty. No `@` is not an address.
+fn mailbox_local_and_domain(mailbox: &str) -> Option<(&str, &str)> {
+    let (local, domain) = mailbox.split_once('@')?;
+    let local = local.trim();
+    let domain = domain.trim();
+    if local.is_empty() || domain.is_empty() {
+        return None;
+    }
+    Some((local, domain))
+}
+
 /// Map a successful JMAP response into account rows (no invent on missing list).
 ///
 /// Looks for the first `x:Account/get` method response with a `list` array.
 /// Each object needs at least `id`; address prefers `emailAddress`, else `name`.
 pub fn accounts_from_jmap_response(body: &Value) -> Result<Vec<AccountEntry>, String> {
+    let rows = account_list_rows(body)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| AccountEntry {
+            id: row.id,
+            address: row.address,
+            status: row.status,
+        })
+        .collect())
+}
+
+fn account_list_rows(body: &Value) -> Result<Vec<AccountListRow>, String> {
     let responses = body
         .get("methodResponses")
         .and_then(|v| v.as_array())
@@ -1380,6 +1532,12 @@ pub fn accounts_from_jmap_response(body: &Value) -> Result<Vec<AccountEntry>, St
                 (None, Some(n)) => n,
                 (None, None) => id.clone(),
             };
+            let domain_id = item
+                .get("domainId")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
             // Wire field is still `status` for JSON stability; value is principal
             // kind (@type) when present, else "active" (not a lifecycle SoT).
             let status = item
@@ -1388,10 +1546,11 @@ pub fn accounts_from_jmap_response(body: &Value) -> Result<Vec<AccountEntry>, St
                 .map(|t| t.trim().to_ascii_lowercase())
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "active".into());
-            out.push(AccountEntry {
+            out.push(AccountListRow {
                 id,
                 address,
                 status,
+                domain_id,
             });
         }
         return Ok(out);
@@ -2216,6 +2375,7 @@ mod tests {
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: "alice@example.test".into(),
                 password: concat!("unit-test-only-", "secret").into(),
+                account_id: None,
             })
             .await;
         assert!(!pw.ok);
@@ -2331,6 +2491,237 @@ mod tests {
         assert!(s.contains("desk"));
         assert!(!s.contains("password") && !s.contains("nsec") && !s.contains("secret"));
         assert!(s.contains("urn:stalwart:jmap"));
+    }
+
+    /// Named contract: a UI-created mailbox is an inbound User bound to a
+    /// Domain id. Stalwart 0.16 delivers to `name` at `domainId`. Omitting
+    /// either, sending `@` inside `name`, or using Group is not that account.
+    /// The password is a later credential update.
+    #[test]
+    fn jmap_account_create_request_is_inbound_user_bound_to_domain() {
+        let body = jmap_account_create_request(&CreateAccountInput {
+            name: "tony".into(),
+            domain_id: "dom-9".into(),
+            description: Some("Tony V (Lean)".into()),
+        });
+        let calls = body["methodCalls"].as_array().expect("methodCalls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][0], "x:Account/set");
+        let created = &calls[0][1]["create"]["new1"];
+        assert_eq!(created["@type"], "User");
+        assert_ne!(created["@type"], "Group");
+        assert_eq!(created["name"], "tony");
+        assert!(
+            !created["name"].as_str().unwrap_or("").contains('@'),
+            "local-part must not contain @"
+        );
+        assert_eq!(created["domainId"], "dom-9");
+        assert_ne!(created["domainId"], "example.test");
+        assert!(
+            created["credentials"]
+                .as_object()
+                .expect("credentials")
+                .is_empty(),
+            "create must not put the password on a different principal type"
+        );
+        assert_eq!(created["roles"]["@type"], "User");
+        assert_eq!(created["description"], "Tony V (Lean)");
+        let s = body.to_string();
+        assert!(!s.contains("password") && !s.contains("nsec") && !s.contains("secret"));
+        assert!(!s.contains("emailAddress"));
+    }
+
+    /// Named contract: password set without a created id still refuses a
+    /// mailbox string that is not an address. That is the password card.
+    #[tokio::test]
+    async fn stalwart_password_refuses_non_address_without_created_id() {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(200))
+            .build()
+            .unwrap();
+        let dir = StalwartDirectory::new(http, "http://127.0.0.1:9", "test-token");
+        let refused = dir
+            .set_mailbox_password(SetMailboxPasswordInput {
+                mailbox: "live-1".into(),
+                password: concat!("unit-test-only-", "secret").into(),
+                account_id: None,
+            })
+            .await;
+        assert!(!refused.ok);
+        assert_eq!(
+            refused.note,
+            "password set refused: mailbox address required"
+        );
+    }
+
+    /// Named contract: the password card looks up `local@domain` with no
+    /// created id. Stalwart 0.16 often lists the User as the local-part
+    /// plus a domain id and omits emailAddress. Lookup of
+    /// tony@example.test must find the User whose name is tony when that
+    /// user's domain is example.test, not the tony on other.test and not
+    /// alice on example.test. The card then sets the password on that id.
+    #[tokio::test]
+    async fn stalwart_password_card_matches_local_part_when_domain_matches() {
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen_h = seen.clone();
+        let app = Router::new().route(
+            "/jmap",
+            post(move |req: Request| {
+                let seen = seen_h.clone();
+                async move {
+                    let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024)
+                        .await
+                        .unwrap_or_default();
+                    let incoming: Value = serde_json::from_slice(&bytes).unwrap_or(json!({}));
+                    let s = incoming.to_string();
+                    seen.lock().await.push(s.clone());
+                    let is_domain = s.contains("x:Domain/");
+                    let is_set = s.contains("x:Account/set") || s.contains("Account/set");
+                    let targets_example_tony = s.contains("\"user-tony-example\"")
+                        && !s.contains("user-tony-other")
+                        && !s.contains("user-alice-example");
+                    let body = if is_domain {
+                        json!({
+                            "methodResponses": [
+                                ["x:Domain/query", {"ids": ["dom-example", "dom-other"]}, "dq1"],
+                                ["x:Domain/get", {
+                                    "list": [
+                                        {"id": "dom-example", "name": "example.test"},
+                                        {"id": "dom-other", "name": "other.test"}
+                                    ]
+                                }, "dg1"]
+                            ]
+                        })
+                    } else if is_set && targets_example_tony {
+                        json!({
+                            "methodResponses": [
+                                ["x:Account/set", {
+                                    "updated": { "user-tony-example": null },
+                                    "notUpdated": {}
+                                }, "u1"]
+                            ]
+                        })
+                    } else if is_set {
+                        json!({
+                            "methodResponses": [
+                                ["x:Account/set", {
+                                    "updated": {},
+                                    "notUpdated": {
+                                        "wrong": { "type": "notFound" }
+                                    }
+                                }, "u1"]
+                            ]
+                        })
+                    } else {
+                        json!({
+                            "methodResponses": [
+                                ["x:Account/query", {
+                                    "ids": [
+                                        "user-tony-other",
+                                        "user-alice-example",
+                                        "user-tony-example"
+                                    ]
+                                }, "q1"],
+                                ["x:Account/get", {
+                                    "list": [
+                                        {
+                                            "id": "user-tony-other",
+                                            "name": "tony",
+                                            "@type": "User",
+                                            "domainId": "dom-other"
+                                        },
+                                        {
+                                            "id": "user-alice-example",
+                                            "name": "alice",
+                                            "@type": "User",
+                                            "domainId": "dom-example"
+                                        },
+                                        {
+                                            "id": "user-tony-example",
+                                            "name": "tony",
+                                            "@type": "User",
+                                            "domainId": "dom-example"
+                                        }
+                                    ]
+                                }, "g1"]
+                            ]
+                        })
+                    };
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let dir = StalwartDirectory::new(http, format!("http://{addr}"), "test-token");
+
+        let found = dir.lookup_mailbox("tony@example.test").await;
+        assert!(
+            found.ok,
+            "tony@example.test must find the User listed as tony on example.test: {}",
+            found.note
+        );
+        let account = found.account.expect("tony on example.test");
+        assert_eq!(account.id, "user-tony-example");
+        assert_eq!(account.status, "user");
+        assert_ne!(account.id, "user-tony-other");
+        assert_ne!(account.id, "user-alice-example");
+
+        let other = dir.lookup_mailbox("tony@other.test").await;
+        assert!(
+            other.ok,
+            "tony@other.test must find the other domain, not example.test: {}",
+            other.note
+        );
+        assert_eq!(
+            other.account.as_ref().map(|a| a.id.as_str()),
+            Some("user-tony-other")
+        );
+
+        let set = dir
+            .set_mailbox_password(SetMailboxPasswordInput {
+                mailbox: "tony@example.test".into(),
+                password: concat!("unit-test-only-", "secret").into(),
+                account_id: None,
+            })
+            .await;
+        assert!(
+            set.ok,
+            "password card must set the password on user-tony-example: {}",
+            set.note
+        );
+        assert_eq!(set.source, "stalwart");
+        assert!(!set.note.contains("unit-test-only-secret"));
+        assert!(!set.note.contains("mailbox address required"));
+        assert!(!set.note.contains("No mailbox"));
+        assert!(!set.note.contains("AccountPassword"));
+
+        let calls = seen.lock().await;
+        assert!(
+            calls.iter().any(|c| {
+                (c.contains("x:Account/set") || c.contains("Account/set"))
+                    && c.contains("\"user-tony-example\"")
+                    && c.contains("Password")
+                    && c.contains("unit-test-only-secret")
+                    && !c.contains("user-tony-other")
+                    && !c.contains("user-alice-example")
+                    && !c.contains("AccountPassword")
+            }),
+            "password set must target user-tony-example; calls={calls:?}"
+        );
+        serve.abort();
+        let _ = serve.await;
     }
 
     /// Named contract: live create maps wire-mock set response (no body leak on error).
@@ -2508,6 +2899,7 @@ mod tests {
         let input = SetMailboxPasswordInput {
             mailbox: "hunter@surmount.systems".into(),
             password: concat!("unit-test-only-", "secret").into(),
+            account_id: None,
         };
         let dbg = format!("{input:?}");
         assert!(dbg.contains("hunter@surmount.systems"));
@@ -2523,6 +2915,7 @@ mod tests {
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: "fixture-operator@mock.surmount.test".into(),
                 password: concat!("unit-test-only-", "secret").into(),
+                account_id: None,
             })
             .await;
         assert!(ok.ok, "{}", ok.note);
@@ -2539,11 +2932,40 @@ mod tests {
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: "nobody@mock.surmount.test".into(),
                 password: concat!("unit-test-only-", "secret").into(),
+                account_id: None,
             })
             .await;
         assert!(!missing.ok);
         assert!(missing.note.contains("No mailbox"));
         assert!(!missing.note.contains("unit-test-only-secret"));
+    }
+
+    /// Named contract: after create, password set may target the new principal
+    /// id even when the mailbox string has no `@`.
+    #[tokio::test]
+    async fn mock_password_set_by_created_id_when_mailbox_has_no_at() {
+        let dir = MockDirectory::fixture();
+        let created = dir
+            .create_account(CreateAccountInput {
+                name: "newop".into(),
+                domain_id: "mock-domain".into(),
+                description: None,
+            })
+            .await;
+        assert!(created.ok, "{}", created.note);
+        let id = created.account.expect("created").id;
+        assert_eq!(id, "mock-newop");
+        let ok = dir
+            .set_mailbox_password(SetMailboxPasswordInput {
+                mailbox: "newop".into(),
+                password: concat!("unit-test-only-", "secret").into(),
+                account_id: Some(id),
+            })
+            .await;
+        assert!(ok.ok, "{}", ok.note);
+        assert_eq!(ok.mailbox.as_deref(), Some("newop@mock.surmount.test"));
+        assert!(!ok.note.contains("unit-test-only-secret"));
+        assert!(!ok.note.contains("mailbox address required"));
     }
 
     /// Named contract: listing unavailable + token still sets password via Stalwart.
@@ -2613,6 +3035,7 @@ mod tests {
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: "hunter@surmount.systems".into(),
                 password: concat!("unit-test-only-", "secret").into(),
+                account_id: None,
             })
             .await;
         assert!(result.ok, "{}", result.note);
@@ -2718,6 +3141,7 @@ mod tests {
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: "hunter@surmount.systems".into(),
                 password: concat!("unit-test-only-", "secret").into(),
+                account_id: None,
             })
             .await;
         assert!(

@@ -196,9 +196,13 @@ file. That check is **necessary but not sufficient** for lockout safety:
 
 With the known-name layout (no custom `default.nix`), flake auto-import sets
 `authorizedKeys.keyFiles` from `host-local/authorized_keys` on path: rebuild.
-If you ship a custom `default.nix`, you must import keys yourself; otherwise
-password auth off still means **lockout**. The driver prints this note after a
-passing key-file check.
+If you ship a custom `default.nix`, you must set `authorizedKeys` in that
+file; otherwise password auth off still means **lockout**. The driver prints
+a note only when that entry module exists and does not mention
+`authorizedKeys` or `authorized_keys`. A `default.nix` that already sets
+`users.users.root.openssh.authorizedKeys` does not print the note. The
+known-name layout with no `default.nix` auto-wires `authorized_keys` and
+does not print the note either.
 
 ---
 

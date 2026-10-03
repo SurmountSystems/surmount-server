@@ -42,12 +42,7 @@ let
     cargoExtraArgs = "-p surmount-management-ui";
   };
 
-  cargoArtifacts = craneLib'.buildDepsOnly (
-    commonArgs
-    // {
-      # deps-only still needs the lockfile present in src
-    }
-  );
+  cargoArtifacts = craneLib'.buildDepsOnly commonArgs;
 in
 craneLib'.buildPackage (
   commonArgs

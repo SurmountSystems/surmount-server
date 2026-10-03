@@ -4,7 +4,7 @@ Plain English. No assumption that the reader already knows Fix ladder codes.
 Ladder detail still lives in [fix-and-fixos.md](fix-and-fixos.md) if you
 want depth.
 
-**Last updated:** 2026-09-19 (`surmount.sploraIndexer` is the host-local single-knob wrap over imported `nixosModules.splora`; flake input `splora` on the `surmount` branch, locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`; prior lock `22d6dcf7f76c1cacc23220d80203099018cde3aa`; instance options already include cookieFile, daemonRpcAddr, jsonrpcImport, daemonDir = null, publicHealth, db cache 24, httpSocketFile default `/run/splora/${name}.http.sock`; this repo does not wrap crane src). Prior 2026-09-01 (this tree briefly wrapped crane src; that wrap is deleted). Prior 2026-09-01 (flake input `splora` from `github:SurmountSystems/splora` on the `surmount` branch; not in-tree). Prior 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
+**Last updated:** 2026-10-03 (flake lock moved: nixpkgs nixos-26.05 `774debe7a0d1b496e35677ad955a1011c6ff74f3`, nixpkgs-rust `c59305bab2065cfecc4944690d9eedbb56f3a9fa` with rustc 1.98.1 and `pkgs.arti` 2.6.0, advisory-db `ef6173cbc5c50ec8166f9a5b28f07834144373ee`, splora `32f52e8da3ae860a36d39bce334e80e7e624d5a8`, crane `47b6b27ed9a3a9181415e4367d0c30ab2a0e0250`, sops-nix `5efb5a6f4f5ab192817d28557dd4d650fa14d866`. surmount-site stayed `82e07195e6aa221efe838e652ed8d2d8535b5cac`. grok-oss stayed `6edf5fda9507c9e3c9c9f5a67871ebb3ce6cca7d` because branch `remote-1` is gone. Stalwart FODs are server 0.16.24, cli 1.0.13, webui 1.0.11, spam-filter 3.0.2, and vandelay 1.0.11. The Arti package stayed 2.6.0.) Prior 2026-09-19 (`surmount.sploraIndexer` is the host-local single-knob wrap over imported `nixosModules.splora`; flake input `splora` on the `surmount` branch, then locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`; prior lock `22d6dcf7f76c1cacc23220d80203099018cde3aa`; instance options already include cookieFile, daemonRpcAddr, jsonrpcImport, daemonDir = null, publicHealth, db cache 24, httpSocketFile default `/run/splora/${name}.http.sock`; this repo does not wrap crane src). Prior 2026-09-01 (this tree briefly wrapped crane src; that wrap is deleted). Prior 2026-09-01 (flake input `splora` from `github:SurmountSystems/splora` on the `surmount` branch; not in-tree). Prior 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
 ---
@@ -46,7 +46,7 @@ package bumps in this repo.
 | `nix/packages/stalwart-spam-filter.nix` | Spam rules FODs |
 | `nix/packages/management-ui.nix` | Surmount Axum UI (crane) |
 | `nix/packages/surmount-public-site.nix` | Apex/www static site from flake input `github:SurmountSystems/site` (no NPM; operator bumps rev) |
-| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.5.1** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti` |
+| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.6.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti`. Kept equal to nixpkgs-rust `pkgs.arti.version` |
 | `nix/packages/surmount-private-data.nix` | Private-data pattern scanner (crane). `nix run .#surmount-private-data`. Pre-commit + `just check-private-data` / `just private-data`. |
 | `nix/packages/surmount-host-logs.nix` | Host journal status/follow (crane). `nix run .#surmount-host-logs`. `just host-logs`. Journald stays source of truth. |
 | `nix/packages/surmount-shc.nix` | SHC customer user-api client (crane; rDNS PTR + tickets). `nix run .#surmount-shc`. `just rdns-shc`. No python3. |
@@ -71,7 +71,7 @@ package bumps in this repo.
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
 
 **Flake input, not in-tree:** `splora` is `github:SurmountSystems/splora` on
-the `surmount` branch (locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`).
+the `surmount` branch (locked rev `32f52e8da3ae860a36d39bce334e80e7e624d5a8`; prior `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`).
 This repo imports `nixosModules.splora` and overlays `pkgs.splora` /
 `pkgs.splora-liquid` from the input packages. Operator bumps with
 `nix flake update splora`. Do not copy the splora tree into this repo.
@@ -123,10 +123,14 @@ Do **not** wrap leftover bash in `writeShellApplication`. Do **not** grow
 thin just alias.
 
 **Arti note:** stock nixpkgs `pkgs.arti` often lags (client-default, not
-HS-capable). Surmount owns a **current** Arti pin (`2.5.1` from GitLab
-`arti-v2.5.1`) at `nix/packages/arti-onion-service.nix` with cargo feature
-`onion-service-service`, exposed as `pkgs.artiOnionService` /
-`packages.*.arti-onion-service` (does **not** replace `pkgs.arti`). rustc
+HS-capable). Surmount owns the Arti pin at
+`nix/packages/arti-onion-service.nix` (`2.6.0` from GitLab `arti-v2.6.0`).
+That version is this lock's nixpkgs-rust `pkgs.arti.version`. Upstream tag
+`arti-v2.7.0` (2026-10-01) is newer and is not in this nixpkgs-rust
+snapshot, so the cargoDeps assert stays on 2.6.0. The package enables
+cargo feature `onion-service-service` and is exposed as
+`pkgs.artiOnionService` / `packages.*.arti-onion-service` (it does **not**
+replace `pkgs.arti`). rustc
 comes from flake input `nixpkgs-rust` when Arti MSRV exceeds the host
 channel pin. Vendor crates use matching `nixpkgs-rust` `arti.cargoDeps`
 with a version assert (crates.io `fetch-cargo-vendor` 403 workaround); bump

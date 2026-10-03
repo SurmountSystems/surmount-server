@@ -1,0 +1,40 @@
+# Decision 2026-09-26.
+#
+# Ignore only RUSTSEC-2024-0436 (paste) and RUSTSEC-2026-0173
+# (proc-macro-error2). Do not ignore any other advisory. Do not turn
+# off the whole unmaintained class.
+#
+# Both records are RustSec type INFO, informational "unmaintained".
+# They are not CVEs. The OSV records have cvss null and no CVE alias.
+#
+# paste (RUSTSEC-2024-0436) pastes identifiers inside a compile-time
+# macro. The dtolnay/paste repo was archived on 2024-10-06. The advisory
+# text is only that the project is unmaintained. It does not describe a
+# vulnerability.
+# https://rustsec.org/advisories/RUSTSEC-2024-0436
+#
+# proc-macro-error2 (RUSTSEC-2026-0173) prints compiler errors when a
+# procedural macro fails. The author confirmed it is unmaintained. The
+# advisory does not describe an exploitable bug. This id is
+# proc-macro-error2, not age.
+# https://rustsec.org/advisories/RUSTSEC-2026-0173
+#
+# Both entered this lock only through Leptos. The management UI is the
+# only product crate that depends on Leptos. Its source does not call
+# paste or proc-macro-error. The crates run inside rustc while the UI is
+# compiled. They are not in the mail server process and not in the
+# running management UI process. A lockfile pin means a later crates.io
+# upload does not enter the build until someone updates the lock.
+#
+# Do not vendor Leptos to clear these two ids.
+#
+# The hermetic check is flake.nix checks.*.cargo-audit. That derivation
+# does not see this file. It passes --ignore for these two ids and still
+# passes --deny warnings. This file is the same list for a local
+# cargo-audit that reads .cargo/audit.toml.
+
+[advisories]
+ignore = [
+  "RUSTSEC-2024-0436",
+  "RUSTSEC-2026-0173",
+]

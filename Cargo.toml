@@ -72,11 +72,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 # Leptos SSR admin shell (ssr only; no csr/hydrate dual build). Current stable
-# 0.8 is 0.8.20. That graph still pulls unmaintained paste (RUSTSEC-2024-0436)
-# and proc-macro-error2 (RUSTSEC-2026-0173 via leptos_macro / rstml). 0.9 is
-# beta; not a product bump this turn.
-# https://rustsec.org/advisories/RUSTSEC-2024-0436 (accessed: 2026-08-27).
-# https://rustsec.org/advisories/RUSTSEC-2026-0173 (accessed: 2026-08-27).
+# 0.8 is 0.8.20. Upstream still names unmaintained paste (RUSTSEC-2024-0436)
+# and proc-macro-error2 (RUSTSEC-2026-0173). Both are RustSec INFO records,
+# not CVEs. Ignored on 2026-09-26. Do not vendor Leptos to clear them.
+# 0.9 is beta, not a product bump this turn.
+# https://rustsec.org/advisories/RUSTSEC-2024-0436 (accessed: 2026-09-26).
+# https://rustsec.org/advisories/RUSTSEC-2026-0173 (accessed: 2026-09-26).
 leptos = { version = "0.8", default-features = false, features = ["ssr"] }
 # Self-signed PEMs for hermetic ACME mock issuer + unit tests. Pin kept for lock stability.
 rcgen = "=0.13.2"
@@ -91,25 +92,25 @@ x509-parser = "0.18"
 # O_NOFOLLOW for ACME secret/public PEM temp opens (Linux).
 libc = "0.2"
 # Nostr NIP-98 verify (rust-nostr). 0.44.7+ for RUSTSEC-2026-0216..0230.
-# Locked 0.44.8. nostr 0.45.3 dropped instant (RUSTSEC-2024-0384) but removed
-# TagKind / TagStandard / JsonUtil / EventBuilder::sign_with_keys and gates
-# Keys::generate behind os-rng (rand 0.10 -> chacha20 0.10). That is a NIP-98
-# rewrite, not this unmaintained lockfile turn.
+# Lock is nostr 0.45.5 (pin 0.45.3). 0.45 drops instant (RUSTSEC-2024-0384).
 # Keep getrandom 0.2 workspace pin so leptos wasm-bindgen does not pull 0.1.
 # menhera-cooldown has yanked chacha20 0.10.x; cargo update then cannot keep
 # quinn-proto 0.11.16+ (needs rand 0.10 -> chacha20 0.10). Do not bypass the
 # private index. See docs/research/menhera-chacha20-yank-2026-08-27.md.
 # https://rustsec.org/advisories/RUSTSEC-2024-0384 (accessed: 2026-08-27).
-nostr = { version = "0.44.7", default-features = false, features = ["std", "nip98"] }
+# 0.45 drops unmaintained instant (RUSTSEC-2024-0384). os-rng keeps
+# Keys::generate without pulling a yanked chacha20.
+# https://rustsec.org/advisories/RUSTSEC-2024-0384 (accessed: 2026-09-26).
+nostr = { version = "0.45.3", default-features = false, features = ["std", "nip98", "os-rng"] }
 hmac = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
 # CSRF tokens + CSP nonces (already in lock via other crates; direct dep for auth).
 getrandom = "0.2"
 # rage CLI is built on this library (age-encryption.org). Used by just rekey.
-# 0.12.1+ pulls i18n-embed-fl 0.10 (proc-macro-error3), dropping the age path
-# of RUSTSEC-2026-0173. Identity::generate / to_public / to_string stay.
-# https://rustsec.org/advisories/RUSTSEC-2026-0173 (accessed: 2026-08-27).
+# 0.12.1+ pulls i18n-embed-fl 0.10.1, which uses proc-macro-error3.
+# RUSTSEC-2026-0173 is proc-macro-error2, not age. Identity::generate /
+# to_public / to_string stay.
 age = { version = "0.12", default-features = false }
 
 # menhera has yanked chacha20 0.10.0/0.10.1 (UB in SSE2) and has not listed
@@ -124,4 +125,8 @@ age = { version = "0.12", default-features = false }
 [patch.crates-io]
 chacha20 = { git = "https://github.com/RustCrypto/stream-ciphers", rev = "6b236b758a0279f64d777797514813b2cb572c8b" }
 rustls = { git = "https://github.com/rustls/rustls", rev = "2976d90fd1c2db6b518700dd101b714069cfcb17" }
+# 0.10.1 is inside the menhera 10-day window (published 2026-09-23).
+# When menhera 10d lists 0.10.1, drop this line and use the registry crate.
+# Do not ignore RUSTSEC-2026-0306.
+faster-hex = { git = "https://github.com/nervosnetwork/faster-hex", rev = "c817979830ea5be2eafe0b0c99cb83b017ae2b8f" }
 

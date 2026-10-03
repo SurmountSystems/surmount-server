@@ -1402,9 +1402,9 @@ mod tests {
         use surmount_management_ui::auth::allowlist_contains;
 
         let _g = EnvGuard::acquire();
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let file_hex = keys.public_key().to_hex();
-        let env_keys = nostr::Keys::generate();
+        let env_keys = nostr::prelude::Keys::generate();
         let env_hex = env_keys.public_key().to_hex();
         let dir =
             std::env::temp_dir().join(format!("surmount-cfg-allowlist-{}", std::process::id()));
