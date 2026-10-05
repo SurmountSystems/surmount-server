@@ -4,7 +4,11 @@ How the Surmount mail VPS should be operated, observed, and checked
 end-to-end. Aligned with [hygiene.md](hygiene.md). Architecture:
 [STACK.md](STACK.md).
 
-**Last updated:** 2026-09-20 (full test-and-deploy procedure:
+**Last updated:** 2026-10-05 (`just publish` is the static-site command
+and `just deploy` is the host switch. `just deploy-dry-run` is the
+agent dry-run. `just deploy-host` stays the explicit equivalent with
+no default target. See [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md)). Prior
+2026-09-20 (full test-and-deploy procedure:
 [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md). Agent runs named eval,
 `just check-remote`, and `just deploy-host -- --dry-run`. Operator
 runs the real switch with Eternal Terminal open). Prior 2026-09-03 (public NIP-07 login over HTTP/3 must not 500
@@ -1843,8 +1847,10 @@ exceptions*.
 |---------|---------|
 | `nix run .#e2e` / `just e2e` | Local comprehensive end-to-end (Rust flake app; hermetic cargo matrix; optional Tor). SoT |
 | `nix run .#e2e-host` / `just e2e-host` | Host end-to-end (Rust flake app; `SURMOUNT_E2E_HOST=1` or exit 2; also requires `SURMOUNT_E2E_BASE_URL`; `LAB_IP` unless `SKIP_BAN=1`). **Never** a flake check |
-| `just deploy` | Publish static sites (apex/www from locked `github:SurmountSystems/site` via `nix build .#surmount-public-site`, plus extra vhosts). Not a NixOS generation. |
-| `nix run .#surmount-deploy-host` / `just deploy-host` | Operator deploy driver: public rsync + host-local checks + `#mail-vps` rebuild (not CI). That is the NixOS generation. [deploy-host-local.md](deploy-host-local.md) |
+| `just publish` | Publish static sites (apex/www from locked `github:SurmountSystems/site` via `nix build .#surmount-public-site`, plus extra vhosts). Not a NixOS generation. |
+| `just deploy` | Operator's real mail-host switch. Defaults: `--target root@surmount-1` and `--host-local /home/hunter/.local/share/surmount/host-local`. Extra arguments append. Agents must not run this. Explicit equivalent: `just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
+| `just deploy-dry-run` | Same switch with `--dry-run` before `--target`. Agents may run this. Extra arguments append. Explicit equivalent: `just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
+| `nix run .#surmount-deploy-host` / `just deploy-host` | Flexible deploy driver with no default target: public rsync + host-local checks + `#mail-vps` rebuild (not CI). That is the NixOS generation. [deploy-host-local.md](deploy-host-local.md) |
 | `nix run .#surmount-deploy-host-post-switch-smoke` | Post-switch smoke (generation, units, loopback health, listen proof). |
 | `just fix-public-dashboard` / `nix run .#surmount-fix-public-dashboard` | Compose recovery pin + mint API key + free-443 dry-run (no operator password homework). Optional `--live-free-443` on operator host only. [SECRETS.md](SECRETS.md) |
 | `just stalwart-recovery-unlock` / `nix run .#stalwart-recovery-unlock` | Generate/install `STALWART_RECOVERY_ADMIN` EnvironmentFile + private systemd drop-in + Basic auth probe. Kind `stalwart-recovery-admin`. [SECRETS.md](SECRETS.md) |

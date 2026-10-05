@@ -116,8 +116,9 @@ is a **bootstrap fallback**, not the long-term Surmount UX.
 Legacy public sites: **static files only** at the edge. Not part of
 the Leptos app. Live apex/www serve the packaged
 `SurmountSystems/site` tree (`pkgs.surmount-public-site`; Host
-`surmount.systems` / `www.surmount.systems`). `just deploy` publishes
-static sites; `just deploy-host` is the NixOS generation.
+`surmount.systems` / `www.surmount.systems`). `just publish` publishes
+static sites; `just deploy` is the NixOS generation (the host switch).
+`just deploy-host` is that switch with no default target.
 Operator console stays on `services.surmount.systems`. COMING SOON
 leftover is closed.
 

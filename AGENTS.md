@@ -83,9 +83,11 @@ Product detail lives under `docs/`. This file is standing law only.
   loop for that.
   **Prove the operator gate (operator 2026-09-02; laptop issue 2026-09-07).** Do not list a step
   as operator residual unless you have evidence the agent cannot do it:
-  secrets custody, standing forbid of the real `just deploy-host`
-  switch and of `just check-remote` (2026-08-25; narrowed 2026-09-02:
-  `just deploy-host -- --dry-run` is required agent work), hypervisor,
+  secrets custody, standing forbid of the real `just deploy`
+  switch and of `just check-remote` (2026-08-25; narrowed 2026-09-02,
+  short names 2026-10-05: `just deploy-dry-run` is required agent work;
+  `just deploy-host` stays the explicit equivalent with no default
+  target), hypervisor,
   Namecheap **hosted DNSSEC Status** click, or the operator using a TUI they asked to sit in.
   Host-local enable is agent work when this machine already has
   host-local. Using `just grok-oss` after the guest has the package is
@@ -379,10 +381,15 @@ must have already run both of these and must report the results:
 
 1. Local Nix eval contracts that do **not** rustc on this laptop
    (`tests/module-eval.nix` / named flake eval).
-2. `just deploy-host -- --dry-run`.
+2. `just deploy-dry-run`.
+
+The explicit equivalent is `just deploy-host -- --dry-run` with the
+target and host-local flags. `just deploy-host` has no default target.
 
 This **narrows** 2026-08-25: dry-run is required agent work. The **real
-switch** stays operator-owned unless they override. Laptop cargo and
+switch** (`just deploy`) stays operator-owned unless they override.
+`just deploy-host` with those target flags and no `--dry-run` is that
+same switch. Laptop cargo and
 `BUILD_LOCAL` stay forbidden. `just check-remote` stays operator-owned.
 Prove-the-gate leftover law stays: do not list a leftover unless the
 agent cannot do it.
@@ -396,11 +403,12 @@ already exists.
 **After a guest incident, finish the named process (operator 2026-08-27;
 dry-run agent work 2026-09-02).** Do not tell the operator they need do
 nothing, or to wait, when leftover is `just check-remote`, then
-`just deploy-host -- --dry-run`, then the real switch. A reboot does
+`just deploy-dry-run`, then the real `just deploy` switch. A reboot does
 not cancel that slice. Agents never reboot. Keep the Eternal Terminal
-window. Agents run named eval and `just deploy-host -- --dry-run` and
+window. Agents run named eval and `just deploy-dry-run` and
 report those results. The real switch stays operator-owned unless they
-override. `just check-remote` stays operator-owned.
+override. `just check-remote` stays operator-owned. `just deploy-host`
+stays the explicit form with no default target.
 
 Comprehensive residual means finish the **named leftover slices**. Do **not**
 invent unlocked tracks. Do not start an MX flip, a DMARC `p=reject`

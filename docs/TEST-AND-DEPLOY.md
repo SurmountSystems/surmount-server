@@ -9,7 +9,9 @@ Those failures belong on the agent. The operator runs the real switch
 in section 5 after the agent has already reported those gates green,
 and keeps Eternal Terminal open so activation cannot strand the box.
 
-**Last updated:** 2026-09-20.
+**Last updated:** 2026-10-05. `just publish` publishes static sites.
+`just deploy` is the host switch. `just deploy-dry-run` is the agent
+dry-run. `just deploy-host` stays the explicit equivalent.
 
 Companions: [OPS.md](OPS.md), [deploy-host-local.md](deploy-host-local.md),
 [SECRETS.md](SECRETS.md), [hygiene.md](hygiene.md), [../AGENTS.md](../AGENTS.md).
@@ -19,13 +21,15 @@ Companions: [OPS.md](OPS.md), [deploy-host-local.md](deploy-host-local.md),
 ## Why the operator still types the real switch
 
 The agent can and must run the entire procedure **up to and including**
-`just deploy-host -- --dry-run`. Named eval, `just check-remote`, clippy,
+`just deploy-dry-run`. Named eval, `just check-remote`, clippy,
 nixfmt, and the dry-run plan are how errors show up. Dumping those
 commands on the operator is a broken leftover. Standing law:
 [../AGENTS.md](../AGENTS.md) *Deploy dry-run is agent work* and *Prove
-the operator gate*.
+the operator gate*. The explicit equivalent of the dry-run is
+`just deploy-host -- --dry-run` with the target and host-local flags.
+`just deploy-host` has no default target.
 
-The operator still runs the **real** `just deploy-host` (no `--dry-run`)
+The operator still runs the **real** `just deploy` (no `--dry-run`)
 because:
 
 1. Agents are forbidden from the real switch unless the operator
@@ -51,8 +55,8 @@ reason. Eval, remote CI, and dry-run are not secrets custody.
 
 | Who | Does | Does not |
 |-----|------|----------|
-| Agent | **All of sections 2, 3, and 4**, including every named `nix eval` and `just check-remote` and `just deploy-host -- --dry-run`. Report pass or fail with the store path or the named error. GitHub issues on plan Approve and on bug reports (screenshots attached). GitHub pull request after the operator has signed and pushed a git-flow feature branch. Laptop Let's Encrypt `--issue` when this laptop already has the Namecheap env files (do not print the env). | Laptop `cargo`, `rustc`, `BUILD_LOCAL=true`. Real `just deploy-host` switch unless the operator overrides. `git commit`, GPG sign, `git push`. Reboot. Invent secrets, cookie bytes, or JSON-RPC addresses. Asking the operator to run eval or `check-remote` so the operator can see the error. |
-| Operator | Eternal Terminal window before a switch. Real `just deploy-host` (no `--dry-run`) after the agent reports dry-run green. GPG-signed commit and `git push` on a git-flow `feature/` or `bugfix/` branch. Place cookie files and other Domain B secrets the agent cannot create. | Run section 2, 3, or 4 in order to discover CI or eval failures. Leave the only SSH session as the one that started `nixos-rebuild switch`. |
+| Agent | **All of sections 2, 3, and 4**, including every named `nix eval` and `just check-remote` and `just deploy-dry-run`. Report pass or fail with the store path or the named error. GitHub issues on plan Approve and on bug reports (screenshots attached). GitHub pull request after the operator has signed and pushed a git-flow feature branch. Laptop Let's Encrypt `--issue` when this laptop already has the Namecheap env files (do not print the env). | Laptop `cargo`, `rustc`, `BUILD_LOCAL=true`. Real `just deploy` switch unless the operator overrides (`just deploy-host` without `--dry-run` is the same switch). `git commit`, GPG sign, `git push`. Reboot. Invent secrets, cookie bytes, or JSON-RPC addresses. Asking the operator to run eval or `check-remote` so the operator can see the error. |
+| Operator | Eternal Terminal window before a switch. Real `just deploy` (no `--dry-run`) after the agent reports dry-run green. GPG-signed commit and `git push` on a git-flow `feature/` or `bugfix/` branch. Place cookie files and other Domain B secrets the agent cannot create. | Run section 2, 3, or 4 in order to discover CI or eval failures. Leave the only SSH session as the one that started `nixos-rebuild switch`. |
 
 Laptop = this session host. It is not the remote builder.
 
@@ -239,6 +243,17 @@ keys, rsync refuse) is an agent problem until it is green.
 From the repo root:
 
 ```bash
+just deploy-dry-run
+```
+
+That places `--dry-run` before `--target root@surmount-1` and
+`--host-local /home/hunter/.local/share/surmount/host-local`. Extra
+arguments append after those flags. Do not pass `--install-secrets`
+unless that deploy should copy secrets.
+
+Explicit equivalent (`just deploy-host` has no default target):
+
+```bash
 just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
 ```
 
@@ -249,6 +264,7 @@ nix run .#surmount-deploy-host -- --dry-run --target root@surmount-1 --host-loca
 ```
 
 The extra `--` after `just deploy-host` stops just from eating flags.
+`just deploy-dry-run` already includes those flags.
 
 What the dry-run prints (it must not rebuild the guest):
 
@@ -286,6 +302,12 @@ This is the first command in this procedure that the operator must type
 for the generation to go live. Eternal Terminal from section 1 must
 already be open. The agent has already reported section 2, 3, and 4
 green, including the exact dry-run command and exit 0.
+
+```bash
+just deploy
+```
+
+Explicit equivalent (`just deploy-host` has no default target):
 
 ```bash
 just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
@@ -360,11 +382,12 @@ just e2e
 ### 6.3 Static sites only (not a NixOS generation)
 
 ```bash
-just deploy
+just publish
 ```
 
 That publishes apex/www from locked `github:SurmountSystems/site` plus
-extra vhosts. It does not run `nixos-rebuild`.
+extra vhosts. It does not run `nixos-rebuild`. Do not treat `just publish`
+as a NixOS generation. `just deploy` is the host switch.
 
 ### 6.4 Splora indexers (host-local)
 
@@ -438,13 +461,14 @@ egress. Do not mint a second certificate.
 - Laptop `cargo test`, `cargo clippy`, `cargo build` for this repo's
   quality bar.
 - Two live `just check-remote` processes.
-- Real `just deploy-host` by an agent unless the operator overrides.
+- Real `just deploy` by an agent unless the operator overrides.
+  `just deploy-host` without `--dry-run` is the same switch.
 - Secrets, PEMs, cookie bytes, tokens, provisioned IPs in git, issues,
   or chat.
 - Reboot.
 - Starting Lake from an agent.
 - Nice on `stalwart`, `management-ui`, `sshd`, `arti`, or networking.
-- Treating `just deploy` (static sites) as a NixOS generation.
+- Treating `just publish` (static sites) as a NixOS generation.
 - Treating grok-oss `just test-remote` as this repo's gate. This repo's
   gate is `just check-remote`.
 
@@ -464,6 +488,12 @@ nix eval --raw '.#checks.x86_64-linux.splora-package-contract'
 
 just check-remote
 
+just deploy-dry-run
+```
+
+Explicit equivalent of that dry-run:
+
+```bash
 just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
 ```
 
@@ -474,8 +504,14 @@ exit 0, then asks for the switch.
 
 ```bash
 just et
-just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
+just deploy
 just status
+```
+
+Explicit equivalent of that switch:
+
+```bash
+just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
 ```
 
 Smoke already runs inside the deploy driver. Re-run only if the switch

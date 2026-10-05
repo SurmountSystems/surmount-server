@@ -157,10 +157,10 @@ e2e:
 e2e-host:
     nix run ".#e2e-host"
 
-# Publish static sites (apex/www from github:SurmountSystems/site, plus extra vhosts).
-# Docs: docs/OPS.md, docs/EDGE_AND_TLS.md
+# Apex/www from github:SurmountSystems/site, plus extra vhosts. Docs: docs/OPS.md, docs/EDGE_AND_TLS.md
+# `just publish` publishes static sites (not a NixOS generation).
 [positional-arguments]
-deploy *args:
+publish *args:
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "${1:-}" == "--" ]]; then
@@ -170,6 +170,28 @@ deploy *args:
     root="$(nice -n 19 nix build --print-build-logs --no-link --print-out-paths ".#surmount-public-site")"
     export SURMOUNT_PUBLIC_SITE_ROOT="${root}"
     exec nix run ".#surmount-deploy-static-sites" -- "$@"
+
+# Default target is root@surmount-1. Extra arguments append after the host-local flag.
+# This is the operator's real switch. Agents must not run `just deploy`. Agents run `just deploy-dry-run`.
+[positional-arguments]
+deploy *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    exec nix run ".#surmount-deploy-host" -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local "$@"
+
+# Same mail-host command as `just deploy`, with `--dry-run` before `--target`. Extra arguments append.
+# Agents may run `just deploy-dry-run`. Do not pass `--install-secrets` unless secrets should be copied.
+[positional-arguments]
+deploy-dry-run *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    exec nix run ".#surmount-deploy-host" -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local "$@"
 
 # Operator deploy driver (public tree sync + host-local checks + #mail-vps).
 # Docs: docs/deploy-host-local.md

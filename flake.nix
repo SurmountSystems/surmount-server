@@ -51,7 +51,7 @@
     };
 
     # Public static site for apex/www. Fetch the git tree (HTML/CSS/JS).
-    # Operator bumps: just deploy (nix flake update surmount-site).
+    # Operator bumps: just publish (nix flake update surmount-site).
     surmount-site = {
       url = "github:SurmountSystems/site";
       flake = false;

@@ -272,8 +272,9 @@ nginx features. Module file remains until operators no longer need dual-run.
   override. Missing root or missing `index.html` keeps the yellow
   **UNDER CONSTRUCTION** page (`#FFFF00`). **Live 2026-08-19:**
   apex and www serve the current GitHub site copy, not UNDER CONSTRUCTION.
-  `just deploy` publishes those static files (and extra vhosts); `just deploy-host`
-  is the NixOS generation. Services
+  `just publish` publishes those static files (and extra vhosts); `just deploy`
+  is the NixOS generation (the host switch). `just deploy-host` is that
+  switch with no default target. Services
   console is unchanged.
   No operator nav on apex/www. Operator console (Dashboard Overview, Stalwart
   chips) is only on **`servicesHostname`** (e.g. `services.surmount.systems`).
