@@ -64,13 +64,14 @@
       flake = false;
     };
 
-    # Grok OSS TUI (bin/grok-oss). Locked rev 6edf5fda (2026-09-02).
-    # Branch remote-1 was deleted after PR 51 merged. nix flake update of
-    # this input fails (GitHub 422, no commit for ref remote-1). main has
-    # diverged from this rev, so this wave did not retarget the URL.
-    # Operator bumps: nix flake update grok-oss, after the ref exists.
+    # Grok OSS TUI (bin/grok-oss).
+    # remote-1 was deleted after PR 51 squash-merged onto main.
+    # 6edf5fda is not an ancestor of main. remote-2 then squash-merged
+    # as PR 59, and that commit is the main tip. No live ref still
+    # points at 6edf5fda, so the URL is main.
+    # Operator bumps: nix flake update grok-oss.
     # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/remote-1";
+    grok-oss.url = "github:SurmountSystems/grok-oss/main";
 
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus

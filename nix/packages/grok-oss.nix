@@ -11,9 +11,9 @@
   runCommand,
 }:
 let
-  # The locked grok-oss tip still reads stdenv.isLinux / stdenv.isDarwin.
-  # Nixpkgs warns on that. Patch the nix files, then import the package
-  # expression. Do not evaluate grokOssFlake.packages (that is the warning).
+  # Rewrite leftover stdenv.isLinux / stdenv.isDarwin to hostPlatform
+  # before import. A tip that already uses hostPlatform is unchanged.
+  # Do not evaluate grokOssFlake.packages (the old form warns).
   patchedSrc = runCommand "grok-oss-flake-hostplatform" { } ''
     cp -a ${grokOssFlake.outPath} "$out"
     chmod -R u+w "$out"

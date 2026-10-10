@@ -107,16 +107,16 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1788392035,
-        "narHash": "sha256-cUnJ/i9xIhVkR7oDDlYvmXK0RfZZZ/9fhjn+jGo4h2k=",
+        "lastModified": 1790020248,
+        "narHash": "sha256-L3myuJ0Ahv35shcTDlyvskyR028DlxEZyMy6ryKpr8E=",
         "owner": "SurmountSystems",
         "repo": "grok-oss",
-        "rev": "6edf5fda9507c9e3c9c9f5a67871ebb3ce6cca7d",
+        "rev": "d1d3b7377e85c760caf17b74cf6d319301a77d1e",
         "type": "github"
       },
       "original": {
         "owner": "SurmountSystems",
-        "ref": "remote-1",
+        "ref": "main",
         "repo": "grok-oss",
         "type": "github"
       }

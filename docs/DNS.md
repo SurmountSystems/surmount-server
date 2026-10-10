@@ -7,7 +7,15 @@ real user mail. Validate send path with
 [mail-tester.com](https://www.mail-tester.com/) and your provider's
 blocklist checks.
 
-**Last updated:** 2026-09-07 (intended production leaf is **20**
+**Last updated:** 2026-10-10. Operator direction: Google may send as
+`surmount.systems`. Live SPF is
+`v=spf1 a:mail.surmount.systems include:_spf.google.com -all`.
+Public resolvers (including `1.1.1.1`) return that TXT. Our host
+mechanism stays. The record still ends in `-all`. DMARC stays
+`p=quarantine`. Selector `google._domainkey` is not published.
+See [Google send](#google-send-operator-direction-2026-10-10).
+
+**Prior update:** 2026-09-07 (intended production leaf is **20**
 certificate hostnames on one Let's Encrypt PEM (`with_single_cert`): the
 live 18 plus `cryptoquick.com` and `www.cryptoquick.com`. Live leaf
 still has **18** names (CT). Validating A for cryptoquick apex/www
@@ -65,6 +73,30 @@ Living companions: [EDGE_AND_TLS.md](EDGE_AND_TLS.md),
 [deploy-host-local.md](deploy-host-local.md) (B6 mail legitimacy),
 [SECURITY.md](SECURITY.md), [COMPACTION-PIN.md](COMPACTION-PIN.md),
 [../AGENTS.md](../AGENTS.md) (mail records standing law).
+
+## Google send (operator direction 2026-10-10)
+
+Operator direction **2026-10-10**: Google may send mail as
+`surmount.systems`. This decision is that domain only. Do not change
+`cryptoquick.com` for Google send.
+
+Live apex SPF:
+
+```text
+v=spf1 a:mail.surmount.systems include:_spf.google.com -all
+```
+
+`include:_spf.google.com` is the Google-documented include. Keep
+`a:mail.surmount.systems`. Do not remove our host. The record still
+ends in `-all`. Do not use `~all` or `+all`. DMARC stays
+`p=quarantine`. Do not set `p=reject`.
+
+DKIM selector `google._domainkey.surmount.systems` stays unpublished
+until Google Admin produces the TXT. Path: Apps, Google Workspace,
+Gmail, Authenticate email. Selector name `google`. Do not invent a
+`p=` value. Do not generate a keypair and publish it as Google's.
+Google's private key stays at Google. The TXT `p=` value is public
+once published. Stalwart selectors `stalwart` and `stalwart-rsa` stay.
 
 ---
 

@@ -84,9 +84,11 @@ Product detail lives under `docs/`. This file is standing law only.
   **Prove the operator gate (operator 2026-09-02; laptop issue 2026-09-07).** Do not list a step
   as operator residual unless you have evidence the agent cannot do it:
   secrets custody, standing forbid of the real `just deploy`
-  switch and of `just check-remote` (2026-08-25; narrowed 2026-09-02,
+  switch (2026-08-25; narrowed 2026-09-02,
   short names 2026-10-05: `just deploy-dry-run` is required agent work;
-  `just deploy-host` stays the explicit equivalent with no default
+  agents may run one `just check-remote` at a time; agents must not run
+  `just deploy`; `just deploy-host` without `--dry-run` is that same
+  switch and stays the explicit equivalent with no default
   target), hypervisor,
   Namecheap **hosted DNSSEC Status** click, or the operator using a TUI they asked to sit in.
   Host-local enable is agent work when this machine already has
@@ -388,11 +390,23 @@ target and host-local flags. `just deploy-host` has no default target.
 
 This **narrows** 2026-08-25: dry-run is required agent work. The **real
 switch** (`just deploy`) stays operator-owned unless they override.
-`just deploy-host` with those target flags and no `--dry-run` is that
-same switch. Laptop cargo and
-`BUILD_LOCAL` stay forbidden. `just check-remote` stays operator-owned.
-Prove-the-gate leftover law stays: do not list a leftover unless the
-agent cannot do it.
+Agents must not run `just deploy`. `just deploy-host` with those target
+flags and no `--dry-run` is that same switch. Laptop cargo and
+`BUILD_LOCAL` stay forbidden. Agents may run one `just check-remote`
+at a time. Prove-the-gate leftover law stays: do not list a leftover
+unless the agent cannot do it.
+
+## Cargo update and cargo audit are one pair (operator 2026-10-10)
+
+`cargo update` and `cargo audit` are one pass. Do not run one and skip the other.
+
+- An update that is not followed by an audit of that new lock is not done.
+- An audit of a lock that was not just updated is not done, unless a significant amount of time has passed since the last paired update and audit. Do not invent a day count. Auditing a lock that was updated a few days earlier, without a new update, is not that gap.
+- In this repo the audit command is `just audit-remote` (hermetic `cargo-audit`). It runs in the same pass, after `cargo update`.
+- Use the menhera cooldown index already configured for cargo. Do not point cargo at crates.io to skip the wait.
+- When the operator asks for either command, the agent runs the pair. Do not hand `cargo update` back because menhera is only on the laptop. The laptop-cargo forbid still covers tests, clippy, and rustc. It does not split this pair.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
 ## Mention is in scope; remote builder and niceness (operator 2026-08-17)
 
@@ -405,10 +419,11 @@ dry-run agent work 2026-09-02).** Do not tell the operator they need do
 nothing, or to wait, when leftover is `just check-remote`, then
 `just deploy-dry-run`, then the real `just deploy` switch. A reboot does
 not cancel that slice. Agents never reboot. Keep the Eternal Terminal
-window. Agents run named eval and `just deploy-dry-run` and
-report those results. The real switch stays operator-owned unless they
-override. `just check-remote` stays operator-owned. `just deploy-host`
-stays the explicit form with no default target.
+window. Agents may run one `just check-remote` at a time, then named
+eval and `just deploy-dry-run`, and report those results. The real
+switch `just deploy` stays operator-owned unless they override. Agents
+must not run `just deploy`. `just deploy-host` without `--dry-run` is
+that same switch and stays the explicit form with no default target.
 
 Comprehensive residual means finish the **named leftover slices**. Do **not**
 invent unlocked tracks. Do not start an MX flip, a DMARC `p=reject`

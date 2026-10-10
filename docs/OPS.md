@@ -4,7 +4,11 @@ How the Surmount mail VPS should be operated, observed, and checked
 end-to-end. Aligned with [hygiene.md](hygiene.md). Architecture:
 [STACK.md](STACK.md).
 
-**Last updated:** 2026-10-05 (`just publish` is the static-site command
+**Last updated:** 2026-10-10 (primary SPF is
+`v=spf1 a:mail.surmount.systems include:_spf.google.com -all`.
+DMARC stays `p=quarantine`. Detail:
+[DNS.md](DNS.md) section *Google send (operator direction 2026-10-10)*).
+Prior 2026-10-05 (`just publish` is the static-site command
 and `just deploy` is the host switch. `just deploy-dry-run` is the
 agent dry-run. `just deploy-host` stays the explicit equivalent with
 no default target. See [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md)). Prior
@@ -949,7 +953,10 @@ missing system features. `extra-` keeps NixOS auto-detected
 `surmount-remote`. After a module change, rebuild and switch this host
 (`just deploy-host` or host `nixos-rebuild switch`) so
 `/etc/nix/nix.conf` picks up the extra feature; then restart is
-implied by the switch. Do not advertise a fake high slot count. Speed factor is
+implied by the switch. `/var/cache/grok-oss-cargo-target` is an extra
+sandbox path (`nix.settings.extra-sandbox-paths` on the mail host) so
+sandboxed builds can see that cargo cache. Do not advertise a fake
+high slot count. Speed factor is
 not a substitute for `MemoryMax`. Disk refuse at `diskGuardPercent`
 (default 95). Enable from private host-local. Host-local may set a
 real `memoryMax` as the **builder budget**; never publish that number

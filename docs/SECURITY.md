@@ -105,6 +105,20 @@ See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
 and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
 (accessed: 2026-10-03).
 
+On 2026-10-09, for the lock-and-suite wave named 2026-10-05, `just audit-remote` ran `checks.x86_64-linux.cargo-audit` against the same advisory-db rev `ef6173cbc5c50ec8166f9a5b28f07834144373ee`. The derivation was already in the local store, so the Nix build was a cache hit and exited 0. `nix log` for that output was empty. The same cargo-audit 0.22.1 command line (including `--deny warnings` and the two ignores) was run from those store inputs so the text could be recorded. It loaded 1290 advisories and scanned 479 crate dependencies in the current repo-root `Cargo.lock`. Exit 0. It printed no RustSec id and no CVE name. The same command without those two ignores also exited 0 and printed no RustSec id and no CVE name. The locked advisory files still have no `aliases` field and no CVE name: RUSTSEC-2024-0436 (`paste`, informational unmaintained) and RUSTSEC-2026-0173 (`proc-macro-error2`, informational unmaintained). Both crate names are in this lock. No third ignore was added. This scan did not refresh `Cargo.lock`. The builder account has no cargo config and no menhera index. Menhera is only in the laptop cargo config, so this wave did not run `cargo update`.
+See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
+and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173).
+The text checked on 2026-10-09 is the locked advisory-db copy at that rev, not a new fetch of those pages.
+
+### Suite, 2026-10-09
+
+Lock-and-suite wave named 2026-10-05. These commands ran on 2026-10-09. `cargo update` was not run here, because menhera is only in the laptop cargo config. The builder account has no cargo config.
+
+- `just audit-remote` exited 0. Result is the paragraph above. No new RustSec id and no CVE name.
+- `just check-remote` exited 0. No ssh-ng drop. The log had 209 `test result: ok` lines and no `test result: FAILED`.
+- `just check-heavy` exited 0. The mail VM test script finished in 98.69 seconds. Forcing `max-jobs = 0` is not part of that recipe. One earlier attempt that did force it exited 1, because the VM run needs `kvm` and `nixos-test` and the remote builder does not advertise those features. That was not an ssh drop, and it was not a second loop of a failed recipe run.
+- `just deploy-dry-run` exited 0. It printed the planned copy and switch and did not connect. `just deploy` was not run. `--install-secrets` was not passed.
+
 ## Non-goals (this doc)
 
 - Live Vaultwarden unit / first admin user (S7b host residual after token;
