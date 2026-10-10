@@ -36,7 +36,7 @@ craneLib'.buildPackage (
   commonArgs
   // {
     inherit cargoArtifacts;
-    # Hermetic mock tests only. Never live Namecheap as CI green.
+    # Hermetic mock tests plus local HTTP listener. Never live Namecheap as CI green.
     cargoTestExtraArgs = "-p surmount-dns-zone";
     meta = {
       description = "Namecheap forward-zone helper (A/AAAA/TXT/CAA/MX). Dry-run default.";

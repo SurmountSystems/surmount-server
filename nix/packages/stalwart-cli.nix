@@ -17,17 +17,17 @@
 }:
 
 let
-  version = "1.0.12";
+  version = "1.0.13";
 
   sources = {
     x86_64-linux = {
       url = "https://github.com/stalwartlabs/cli/releases/download/v${version}/stalwart-cli-x86_64-unknown-linux-gnu.tar.xz";
-      hash = "sha256-4rsFRQmqrDEfE/9PngnDjGBxld4ulzXPhM/G7kd2paI=";
+      hash = "sha256-G4UJt2ft0aF2k+CStRjEFhDsS3JPTmLEYb0ozUDGafc=";
       dir = "stalwart-cli-x86_64-unknown-linux-gnu";
     };
     aarch64-linux = {
       url = "https://github.com/stalwartlabs/cli/releases/download/v${version}/stalwart-cli-aarch64-unknown-linux-gnu.tar.xz";
-      hash = "sha256-IRM0dLiAyWg2mZRkGXcoiW8X5yOpmWkOe/XQQjIyQNQ=";
+      hash = "sha256-ZfS25SjYQ4iVP8mNlGM53YJG+wO/TKqmTh2bN49S2JI=";
       dir = "stalwart-cli-aarch64-unknown-linux-gnu";
     };
   };

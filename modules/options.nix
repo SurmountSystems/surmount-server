@@ -915,6 +915,7 @@ in
     # Arti onion / hidden service (REQUIRED product surface).
     # HS private keys are deploy secrets on the host only (never in git).
     # Generated arti.toml is a management-publish config (onion + rproxy).
+    # One [onion_services] nickname per public HTTP Host. Mail Hosts unmapped.
     artiHiddenService = {
       enable = mkEnableOption "Arti onion/hidden service for Surmount backends";
 
@@ -1004,7 +1005,8 @@ in
         default = "/run/surmount-secrets/arti/onion-service";
         description = ''
           Host path for onion service identity and HS instance state
-          (arti storage.state_dir). Deploy secrets on host only; never example
+          (arti storage.state_dir). One Arti keystore root for every public
+          HTTP Host nickname. Deploy secrets on host only; never example
           private key material in repo. Daemon unit requires this directory
           to exist (ConditionPathIsDirectory) and to be writable by the
           surmount-arti service user (e.g. chown surmount-arti:surmount-arti,
@@ -1793,10 +1795,11 @@ in
         type = types.bool;
         default = false;
         description = ''
-          When true, management-ui reverse-proxies configured public Hosts to
-          Unix sockets /run/splora/<instance>.http.sock (HTTP/1.1). NIP-98
-          stays in splora. No edge API keys. SURMOUNT_SPLORA_PROXY=1.
+          When true, management-ui reverse-proxies paths on the portal Host
+          to Unix sockets /run/splora/<instance>.http.sock (HTTP/1.1).
+          NIP-98 stays in splora. No edge API keys. SURMOUNT_SPLORA_PROXY=1.
           Sample host stays off. Do not enable modules/web.nix for this.
+          One public Host. Not per-network esplora Hosts.
         '';
       };
 
@@ -1835,8 +1838,12 @@ in
               hosts = mkOption {
                 type = types.listOf types.str;
                 default = [ ];
-                example = [ "esplora.surmount.systems" ];
-                description = "Public Host names for this instance (lowercased at runtime).";
+                example = [ ];
+                description = ''
+                  Optional extra public Host names (lowercased at runtime).
+                  Leave empty. Network paths are on portalHost, not a
+                  per-network Host.
+                '';
               };
               socket = mkOption {
                 type = types.str;
@@ -1851,19 +1858,30 @@ in
         );
         default = { };
         example = {
-          mainnet = {
-            hosts = [ "esplora.surmount.systems" ];
-            socket = "/run/splora/mainnet.http.sock";
-          };
-          testnet3.hosts = [ "testnet3.esplora.surmount.systems" ];
-          testnet4.hosts = [ "testnet4.esplora.surmount.systems" ];
-          mutinynet.hosts = [ "mutinynet.esplora.surmount.systems" ];
-          liquid.hosts = [ "liquid.esplora.surmount.systems" ];
+          testnet3.socket = "/run/splora/testnet3.http.sock";
+          testnet4.socket = "/run/splora/testnet4.http.sock";
+          mutinynet.socket = "/run/splora/mutinynet.http.sock";
+          liquid.socket = "/run/splora/liquid.http.sock";
         };
         description = ''
-          Instance name -> Host list and HTTP Unix socket. Allowed names:
-          mainnet, testnet3, testnet4, mutinynet, liquid. Host-local.
-          Emitted as SURMOUNT_SPLORA_INSTANCES JSON when enable.
+          Instance name -> HTTP Unix socket. Allowed names: mainnet,
+          testnet3, testnet4, mutinynet, liquid. Empty hosts is normal:
+          paths on portalHost select the socket. Omit mainnet while that
+          indexer is off. Host-local. Emitted as SURMOUNT_SPLORA_INSTANCES
+          JSON when enable.
+        '';
+      };
+
+      portalHost = mkOption {
+        type = types.str;
+        default = "";
+        example = "splora.surmount.systems";
+        description = ''
+          One public Host (one DNS name). Not an indexer. Empty =
+          splora.<primaryDomain>. Emitted as SURMOUNT_SPLORA_PORTAL_HOST
+          when sploraProxy.enable. GET / lists same-host paths
+          (/api/, /testnet/, /testnet4/, /signet/, /mutinynet/, /liquid/).
+          Not an explorer. The Rust explorer UI is Splora's, not this repo.
         '';
       };
 

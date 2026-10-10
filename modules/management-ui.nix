@@ -87,6 +87,9 @@ let
       };
     in
     builtins.toJSON (lib.mapAttrs toEntry splora.instances);
+  # One DNS name for the product. Not a fifth indexer. Empty option = splora.<primary>.
+  sploraPortalHost =
+    if splora.portalHost != "" then splora.portalHost else "splora.${cfg.primaryDomain}";
 
   # Console link to domain C vault:
   # 1) explicit managementUi.vaultwardenUrl wins
@@ -218,6 +221,8 @@ let
   # When Arti HS module is on, expose state dir so the binary can walk for
   # hostname material (Arti layout may nest under keystore). Never invent.
   ++ optional hs.enable "SURMOUNT_ONION_HS_STATE_DIR=${hs.onionServiceStateDir}"
+  ++ optional hs.enable "SURMOUNT_ONION_SITE_NICKNAMES_FILE=/etc/surmount/onion-site-nicknames.json"
+  ++ optional hs.enable "SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR=${hs.stateDir}/published-hostnames"
   # Domain C Vaultwarden console link (operator-published, proxy public URL, or loopback).
   # Never ADMIN_TOKEN. Empty = residual not configured in UI.
   ++ optional (effectiveVaultwardenUrl != "") "SURMOUNT_VAULTWARDEN_URL=${effectiveVaultwardenUrl}"
@@ -232,6 +237,7 @@ let
     "SURMOUNT_SPLORA_SOCKET_DIR=${splora.socketDir}"
     "SURMOUNT_SPLORA_QUEUE_SOCKET=${splora.queueSocket}"
     "SURMOUNT_SPLORA_QUEUE_PATH=${splora.queuePath}"
+    "SURMOUNT_SPLORA_PORTAL_HOST=${sploraPortalHost}"
     # systemd Environment= without wrapping quotes treats inner " as syntax
     # and strips them. Single-quoted KEY=VALUE keeps JSON in process env.
     "'SURMOUNT_SPLORA_INSTANCES=${sploraInstancesJson}'"
@@ -325,7 +331,10 @@ let
     ++ staticVhostReadPaths
     # Allow reading hostname material under HS state dir when Arti is enabled
     # (nested hostname files; missing path is ignored by systemd ReadOnlyPaths).
-    ++ lib.optionals hs.enable [ hs.onionServiceStateDir ]
+    ++ lib.optionals hs.enable [
+      hs.onionServiceStateDir
+      "${hs.stateDir}/published-hostnames"
+    ]
   );
 
   # EnvironmentFile expects KEY=value lines (e.g. SURMOUNT_SESSION_SECRET=...).
@@ -753,8 +762,9 @@ in
         assertion = !splora.enable || splora.instances != { };
         message = ''
           surmount.sploraProxy.enable is true but instances is empty.
-          Configure Host -> /run/splora/<instance>.http.sock (mainnet,
-          testnet3, testnet4, mutinynet, liquid). Fail-closed.
+          Configure mainnet, testnet3, testnet4, mutinynet, and/or liquid
+          sockets under /run/splora/<instance>.http.sock. Paths are on the
+          portal Host. Fail-closed.
         '';
       }
       {
@@ -827,6 +837,7 @@ in
       extraGroups = [
         "surmount-tls"
       ]
+      ++ lib.optionals hs.enable [ "surmount-arti" ]
       ++ lib.optionals (splora.enable && sploraServiceOn) [ sploraGroupName ];
       description = "Surmount management UI";
     };

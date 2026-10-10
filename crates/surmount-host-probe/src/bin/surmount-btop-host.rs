@@ -19,8 +19,11 @@ as just et). Needs etserver on the guest (after just deploy-host).
 Mullvad stays operator-owned.
 
 Does not use a raw SSH that can freeze-paint a last frame. After btop
-exits, the Eternal Terminal session exits (not et --noexit / nested
-guest shell). stdin and stdout must be a live tty.
+exits (q or Ctrl-C), the Eternal Terminal session stays up and drops
+to a shell on the mail host (et -e / --noexit with -c btop). That
+shell is the emergency terminal. Do not start nixos-rebuild or just
+deploy from that shell. The laptop still starts the switch. stdin and
+stdout must be a live tty.
 
 If already on the mail guest (Eternal Terminal, guest hostname, or
 /etc/surmount/root-justfile), runs local btop and refuses nested et.
@@ -160,7 +163,7 @@ fn main() -> ExitCode {
         target_label(&target)
     );
     eprintln!(
-        "btop-host: If the clock in this pane stops, the pane is dead. Press q to end btop (this session exits). Then run just btop from the laptop if you need a new live tty."
+        "btop-host: If the clock in this pane stops, the pane is dead. Press q or Ctrl-C to leave btop. This Eternal Terminal session stays up and drops to a shell on the mail host. Do not start nixos-rebuild or just deploy from that shell. The laptop still starts the switch."
     );
     let mut cmd = Command::new(&argv[0]);
     if argv.len() > 1 {

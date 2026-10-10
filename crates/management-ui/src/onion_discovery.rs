@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(test)]
 use axum::http::uri::PathAndQuery;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode, Uri};
 use serde::{Deserialize, Serialize};
@@ -23,11 +24,6 @@ pub static ALT_SVC: HeaderName = HeaderName::from_static("alt-svc");
 pub const DEFAULT_MA_SECONDS: u64 = 86_400;
 /// Default onion port for auto-derived mappings.
 pub const DEFAULT_ONION_PORT: u16 = 443;
-/// Path prefix that selects a clearnet Host on the shared v3 onion.
-///
-/// Services console stays at `{onion}/` (empty prefix). Apex, www, extra
-/// static Hosts, and `mta-sts.{primary}` use `/_o/{clearnet-host}{path}`.
-pub const ONION_VHOST_PATH_PREFIX: &str = "/_o";
 
 /// Marker inserted on the local Arti / loopback cleartext socket so discovery
 /// headers are not emitted as if that bind were TLS.
@@ -47,7 +43,9 @@ pub struct OnionMapping {
     pub onion_authority: String,
     pub onion_location_enabled: bool,
     pub alt_svc_enabled: bool,
-    /// Empty for the services console. Otherwise `/_o/{clearnet_host}`.
+    /// Always empty. Each public HTTP Host has its own v3 onion, so
+    /// Onion-Location is `{scheme}://{that-host-onion}{path}` (no shared
+    /// `/_o/{host}` discriminator; that prefix correlated sites).
     pub onion_path_prefix: String,
 }
 
@@ -99,6 +97,12 @@ impl OnionDiscoveryConfig {
             return None;
         }
         self.mappings.get(&key)
+    }
+
+    /// Incoming onion Host -> mapping for that v3 (per-site onion root).
+    pub fn lookup_by_onion_host(&self, onion_host: &str) -> Option<&OnionMapping> {
+        let key = parse_v3_onion_host(onion_host)?;
+        self.mappings.values().find(|m| m.onion_host == key)
     }
 
     pub fn mappings(&self) -> impl Iterator<Item = &OnionMapping> {
@@ -158,12 +162,12 @@ impl OnionMapping {
 
     /// Auto-derive defaults: port 443, `["h2"]`, ma 86400, both headers on.
     ///
-    /// Sets `/_o/{host}` so purple-pill lands on this Host. Callers that
-    /// map the services hostname must clear `onion_path_prefix`.
+    /// Onion-Location is onion root plus the clearnet path. Prefix stays empty
+    /// (per-site v3; never `/_o/{host}`).
     pub fn auto_derived(clearnet_host: &str, onion_url: &str) -> Option<Self> {
         let onion_host = parse_v3_onion_host(onion_url)?;
         let scheme = scheme_from_onion_url(onion_url);
-        let mut mapping = Self::try_new(
+        Self::try_new(
             clearnet_host,
             &onion_host,
             DEFAULT_ONION_PORT,
@@ -172,25 +176,7 @@ impl OnionMapping {
             DEFAULT_MA_SECONDS,
             true,
             true,
-        )?;
-        mapping.onion_path_prefix = onion_vhost_path_prefix(&mapping.clearnet_host);
-        Some(mapping)
-    }
-}
-
-/// `/_o/{normalized-clearnet-host}` (no trailing slash).
-pub fn onion_vhost_path_prefix(clearnet_host: &str) -> String {
-    let host = normalize_clearnet_host(clearnet_host);
-    format!("{ONION_VHOST_PATH_PREFIX}/{host}")
-}
-
-/// Apply console-vs-vhost prefix: services hostname stays onion root.
-pub fn apply_onion_surface_prefix(mapping: &mut OnionMapping, services_hostname: &str) {
-    let services = normalize_clearnet_host(services_hostname);
-    if !services.is_empty() && mapping.clearnet_host == services {
-        mapping.onion_path_prefix.clear();
-    } else if mapping.onion_path_prefix.is_empty() {
-        mapping.onion_path_prefix = onion_vhost_path_prefix(&mapping.clearnet_host);
+        )
     }
 }
 
@@ -274,17 +260,30 @@ fn sanitize_protocols(protocols: Vec<String>) -> Vec<String> {
     out
 }
 
-/// Public Hosts that auto-map to the process-wide v3 onion.
+/// Public HTTP Hosts that may receive a per-site v3 onion.
 ///
 /// Apex, `www.{apex}`, services, `mta-sts.{apex}`, plus extra static Hosts.
 /// Never mail. Never onion names. De-duplicated, insertion order.
+#[cfg(test)]
 pub fn auto_clearnet_hosts(
     primary_domain: &str,
     services_hostname: &str,
     extra_static_hosts: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> Vec<String> {
+    auto_clearnet_hosts_excluding_mail(primary_domain, services_hostname, extra_static_hosts, &[])
+}
+
+/// Same as [`auto_clearnet_hosts`], also skipping extra mail Hosts.
+#[cfg(test)]
+pub fn auto_clearnet_hosts_excluding_mail(
+    primary_domain: &str,
+    services_hostname: &str,
+    extra_static_hosts: impl IntoIterator<Item = impl AsRef<str>>,
+    extra_mail_hosts: &[String],
+) -> Vec<String> {
     let mut out = Vec::new();
     let apex = normalize_clearnet_host(primary_domain);
+    let mail_block = mail_hosts_blocked(&apex, extra_mail_hosts);
     if !apex.is_empty() && !host_is_onion(&apex) {
         out.push(apex.clone());
         let www = format!("www.{apex}");
@@ -302,27 +301,72 @@ pub fn auto_clearnet_hosts(
             out.push(mta);
         }
     }
-    let mail = if apex.is_empty() {
-        String::new()
-    } else {
-        format!("mail.{apex}")
-    };
     for raw in extra_static_hosts {
         let host = normalize_clearnet_host(raw.as_ref());
         if host.is_empty() || host_is_onion(&host) {
             continue;
         }
-        if !mail.is_empty() && host == mail {
+        if mail_block.iter().any(|m| m == &host) {
             continue;
         }
         if !out.iter().any(|h| h == &host) {
             out.push(host);
         }
     }
+    out.into_iter()
+        .filter(|h| !mail_block.iter().any(|m| m == h))
+        .collect()
+}
+
+fn mail_hosts_blocked(apex: &str, extra_mail_hosts: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    if !apex.is_empty() {
+        out.push(format!("mail.{apex}"));
+    }
+    for raw in extra_mail_hosts {
+        let host = normalize_clearnet_host(raw);
+        if !host.is_empty() && !out.iter().any(|h| h == &host) {
+            out.push(host);
+        }
+    }
     out
 }
 
-/// Build the table from an already-resolved onion URL (tests + `from_env`).
+fn host_is_blocked_mail(host: &str, mail_block: &[String]) -> bool {
+    mail_block.iter().any(|m| m == host)
+}
+
+/// Distinct v3 onion URL for tests (56-char label; `seed` changes the host).
+#[cfg(test)]
+pub fn unique_v3_onion_host(seed: u8) -> String {
+    let alphabet = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut label = [b'2'; 56];
+    label[0] = alphabet[(seed as usize) % alphabet.len()];
+    label[1] = alphabet[((seed as usize) / alphabet.len()) % alphabet.len()];
+    format!("{}.onion", String::from_utf8_lossy(&label))
+}
+
+/// One mapping per Host, each with its own v3 onion. Mail Hosts omitted.
+#[cfg(test)]
+pub fn per_site_mappings(
+    primary_domain: &str,
+    services_hostname: &str,
+    extra_static_hosts: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Vec<OnionMapping> {
+    auto_clearnet_hosts(primary_domain, services_hostname, extra_static_hosts)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, host)| {
+            let onion = unique_v3_onion_host(i as u8);
+            OnionMapping::auto_derived(&host, &format!("http://{onion}"))
+        })
+        .collect()
+}
+
+/// Build the table. `onion_url` maps **only** the services hostname (console).
+/// Other public Hosts need their own onion in `extra` (map file / sites dir).
+/// Sharing one v3 across Hosts is a correlation leak; do not auto-copy it.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn build_onion_discovery(
     primary_domain: &str,
@@ -335,24 +379,57 @@ pub fn build_onion_discovery(
     alt_svc_disabled_hosts: &[String],
     extra_static_hosts: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> OnionDiscoveryConfig {
+    build_onion_discovery_with_mail(
+        primary_domain,
+        services_hostname,
+        onion_url,
+        onion_location_enabled,
+        alt_svc_enabled,
+        extra,
+        location_disabled_hosts,
+        alt_svc_disabled_hosts,
+        extra_static_hosts,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_onion_discovery_with_mail(
+    primary_domain: &str,
+    services_hostname: &str,
+    onion_url: Option<&str>,
+    onion_location_enabled: bool,
+    alt_svc_enabled: bool,
+    extra: impl IntoIterator<Item = OnionMapping>,
+    location_disabled_hosts: &[String],
+    alt_svc_disabled_hosts: &[String],
+    extra_static_hosts: impl IntoIterator<Item = impl AsRef<str>>,
+    extra_mail_hosts: &[String],
+) -> OnionDiscoveryConfig {
     let extra_static: Vec<String> = extra_static_hosts
         .into_iter()
         .map(|h| normalize_clearnet_host(h.as_ref()))
         .filter(|h| !h.is_empty())
         .collect();
+    let apex = normalize_clearnet_host(primary_domain);
+    let mail_block = mail_hosts_blocked(&apex, extra_mail_hosts);
+    let services = normalize_clearnet_host(services_hostname);
     let mut mappings = BTreeMap::new();
-    if let Some(url) = onion_url {
-        for host in auto_clearnet_hosts(primary_domain, services_hostname, &extra_static) {
-            if let Some(mut m) = OnionMapping::auto_derived(&host, url) {
-                apply_onion_surface_prefix(&mut m, services_hostname);
-                mappings.insert(m.clearnet_host.clone(), m);
-            }
+    for m in extra {
+        if host_is_blocked_mail(&m.clearnet_host, &mail_block) {
+            continue;
         }
-    }
-    for mut m in extra {
-        apply_onion_surface_prefix(&mut m, services_hostname);
         mappings.insert(m.clearnet_host.clone(), m);
     }
+    if let Some(url) = onion_url
+        && !services.is_empty()
+        && !host_is_blocked_mail(&services, &mail_block)
+        && !mappings.contains_key(&services)
+        && let Some(m) = OnionMapping::auto_derived(&services, url)
+    {
+        mappings.insert(m.clearnet_host.clone(), m);
+    }
+    let _ = extra_static;
     for host in location_disabled_hosts {
         let key = normalize_clearnet_host(host);
         if let Some(m) = mappings.get_mut(&key) {
@@ -384,10 +461,19 @@ pub fn onion_discovery_from_env(
 ) -> OnionDiscoveryConfig {
     let onion_location_enabled = env_flag("SURMOUNT_ONION_LOCATION_ENABLED", true);
     let alt_svc_enabled = env_flag("SURMOUNT_ONION_ALT_SVC_ENABLED", true);
-    let extra = load_map_file_extras();
+    let mut extra = load_map_file_extras();
+    extra.extend(load_sites_dir_extras());
+    extra.extend(load_nickname_published_extras());
     let location_disabled = env_host_list("SURMOUNT_ONION_LOCATION_DISABLED_HOSTS");
     let alt_disabled = env_host_list("SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS");
-    build_onion_discovery(
+    let mut mail_hosts = env_host_list("SURMOUNT_EXTRA_MAIL_HOSTNAMES");
+    if let Ok(v) = std::env::var("SURMOUNT_MAIL_HOSTNAME") {
+        let h = normalize_clearnet_host(&v);
+        if !h.is_empty() {
+            mail_hosts.push(h);
+        }
+    }
+    build_onion_discovery_with_mail(
         primary_domain,
         services_hostname,
         onion_url,
@@ -397,6 +483,7 @@ pub fn onion_discovery_from_env(
         &location_disabled,
         &alt_disabled,
         extra_static_hosts,
+        &mail_hosts,
     )
 }
 
@@ -434,6 +521,122 @@ fn load_map_file_extras() -> Vec<OnionMapping> {
     load_map_file(Path::new(&path))
 }
 
+/// Directory of `{clearnet-host}` files whose first line is a v3 onion.
+/// `SURMOUNT_ONION_SITES_DIR`. Missing dir is empty (never panics).
+fn load_sites_dir_extras() -> Vec<OnionMapping> {
+    let path = match std::env::var("SURMOUNT_ONION_SITES_DIR") {
+        Ok(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return Vec::new();
+            }
+            t.to_string()
+        }
+        Err(_) => return Vec::new(),
+    };
+    load_sites_dir(Path::new(&path))
+}
+
+fn nickname_is_safe(nick: &str) -> bool {
+    !nick.is_empty()
+        && nick
+            .bytes()
+            .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+}
+
+/// `SURMOUNT_ONION_SITE_NICKNAMES_FILE` JSON object host -> Arti nickname,
+/// plus `SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR`/{nickname} address files.
+fn load_nickname_published_extras() -> Vec<OnionMapping> {
+    let nick_path = match std::env::var("SURMOUNT_ONION_SITE_NICKNAMES_FILE") {
+        Ok(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return Vec::new();
+            }
+            t.to_string()
+        }
+        Err(_) => return Vec::new(),
+    };
+    let dir = match std::env::var("SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR") {
+        Ok(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return Vec::new();
+            }
+            t.to_string()
+        }
+        Err(_) => return Vec::new(),
+    };
+    let contents = match std::fs::read_to_string(&nick_path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let parsed: BTreeMap<String, String> = match serde_json::from_str(&contents) {
+        Ok(v) => v,
+        Err(err) => {
+            tracing::warn!(
+                path = %nick_path,
+                error = %err,
+                "SURMOUNT_ONION_SITE_NICKNAMES_FILE is not valid JSON; skipping"
+            );
+            return Vec::new();
+        }
+    };
+    let dir = Path::new(&dir);
+    let mut out = Vec::new();
+    for (host, nick) in parsed {
+        if !nickname_is_safe(&nick) {
+            continue;
+        }
+        let p = dir.join(&nick);
+        let Some(url) = crate::config::onion_url_from_file(&p) else {
+            continue;
+        };
+        if let Some(m) = OnionMapping::auto_derived(&host, &url) {
+            out.push(m);
+        }
+    }
+    out
+}
+
+fn load_sites_dir(dir: &Path) -> Vec<OnionMapping> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    let mut seen = 0usize;
+    for ent in entries.flatten() {
+        if seen >= 128 {
+            break;
+        }
+        let p = ent.path();
+        let ft = match ent.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if !ft.is_file() {
+            continue;
+        }
+        seen += 1;
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if name.starts_with('.') {
+            continue;
+        }
+        let host = normalize_clearnet_host(name);
+        if host.is_empty() || host_is_onion(&host) {
+            continue;
+        }
+        let Some(url) = crate::config::onion_url_from_file(&p) else {
+            continue;
+        };
+        if let Some(m) = OnionMapping::auto_derived(&host, &url) {
+            out.push(m);
+        }
+    }
+    out
+}
+
 #[derive(Debug, Deserialize)]
 struct OnionMapFile {
     #[serde(default = "default_true")]
@@ -452,6 +655,7 @@ fn default_true() -> Option<bool> {
 struct OnionMapFileEntry {
     clearnet_host: Option<String>,
     onion_host: Option<String>,
+    hostname_file: Option<String>,
     onion_port: Option<u16>,
     #[serde(default)]
     protocols: Option<Vec<String>>,
@@ -491,14 +695,22 @@ fn load_map_file(path: &Path) -> Vec<OnionMapping> {
         let Some(host) = entry.clearnet_host.as_deref() else {
             continue;
         };
-        let Some(onion) = entry.onion_host.as_deref() else {
-            continue;
+        let onion_from_file = entry
+            .hostname_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .and_then(|p| crate::config::onion_url_from_file(Path::new(p)));
+        let onion = match (entry.onion_host.as_deref(), onion_from_file.as_deref()) {
+            (Some(h), _) if !h.trim().is_empty() => h.to_string(),
+            (_, Some(url)) => url.to_string(),
+            _ => continue,
         };
         let protocols = entry.protocols.unwrap_or_else(|| vec!["h2".into()]);
         let scheme = entry.onion_scheme.as_deref().unwrap_or("http");
         let Some(mapping) = OnionMapping::try_new(
             host,
-            onion,
+            &onion,
             entry.onion_port.unwrap_or(DEFAULT_ONION_PORT),
             protocols,
             scheme,
@@ -535,40 +747,24 @@ pub fn onion_location_value(mapping: &OnionMapping, uri: &Uri) -> Option<String>
     Some(loc)
 }
 
-/// Match `/_o/{mapped-host}` or `/_o/{mapped-host}/{rest}` on an onion request.
-/// Longest prefix wins. Unknown hosts return None (path stays unrewritten;
-/// Axum 404 unless that path is already a console route).
+/// Shared `/_o/{host}` path rewrite is gone (it correlated sites on one onion).
+/// Kept as a named None so leftover bookmarks are not a discovery path.
+#[cfg(test)]
 pub fn match_onion_vhost_rewrite(
-    path: &str,
-    cfg: &OnionDiscoveryConfig,
+    _path: &str,
+    _cfg: &OnionDiscoveryConfig,
 ) -> Option<(String, String)> {
-    let path = path.split('?').next().unwrap_or(path);
-    let mut best: Option<(usize, String, String)> = None;
-    for mapping in cfg.mappings() {
-        let prefix = mapping.onion_path_prefix.trim_end_matches('/');
-        if prefix.is_empty() {
-            continue;
-        }
-        let (host, new_path) = if path == prefix {
-            (mapping.clearnet_host.clone(), "/".to_string())
-        } else if let Some(rest) = path.strip_prefix(prefix).filter(|r| r.starts_with('/')) {
-            let new_path = if rest.is_empty() {
-                "/".to_string()
-            } else {
-                rest.to_string()
-            };
-            (mapping.clearnet_host.clone(), new_path)
-        } else {
-            continue;
-        };
-        if best.as_ref().is_none_or(|(len, _, _)| prefix.len() > *len) {
-            best = Some((prefix.len(), host, new_path));
-        }
-    }
-    best.map(|(_, host, new_path)| (host, new_path))
+    None
+}
+
+/// Onion request Host -> that site's clearnet Host (per-site v3).
+pub fn match_onion_host_rewrite(request_host: &str, cfg: &OnionDiscoveryConfig) -> Option<String> {
+    cfg.lookup_by_onion_host(request_host)
+        .map(|m| m.clearnet_host.clone())
 }
 
 /// Replace URI path, keep query. `new_path` must start with `/`.
+#[cfg(test)]
 pub fn rewrite_uri_path_keep_query(uri: &Uri, new_path: &str) -> Option<Uri> {
     if !new_path.starts_with('/') || new_path.contains('\r') || new_path.contains('\n') {
         return None;
@@ -796,63 +992,163 @@ mod tests {
         );
     }
 
+    /// Named contract: two public Hosts emit two different Onion-Location
+    /// onion hostnames, each at that Host's onion root (not `/_o/{host}`).
     #[test]
-    fn match_onion_vhost_rewrite_longest_prefix() {
+    fn two_hosts_emit_distinct_onion_location_roots() {
+        const ONION_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.onion";
+        const ONION_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.onion";
+        let extra = vec![
+            OnionMapping::try_new(
+                "example.test",
+                ONION_A,
+                DEFAULT_ONION_PORT,
+                vec!["h2".into()],
+                "http",
+                DEFAULT_MA_SECONDS,
+                true,
+                true,
+            )
+            .unwrap(),
+            OnionMapping::try_new(
+                "www.example.test",
+                ONION_B,
+                DEFAULT_ONION_PORT,
+                vec!["h2".into()],
+                "http",
+                DEFAULT_MA_SECONDS,
+                true,
+                true,
+            )
+            .unwrap(),
+        ];
         let cfg = build_onion_discovery(
             "example.test",
             "services.example.test",
-            Some(&fixture_url()),
+            None,
             true,
             true,
-            Vec::new(),
+            extra,
+            &[],
+            &[],
+            &[] as &[&str],
+        );
+        let apex = cfg.lookup("example.test").expect("apex mapped");
+        let www = cfg.lookup("www.example.test").expect("www mapped");
+        assert_ne!(
+            apex.onion_host, www.onion_host,
+            "each public Host must have its own v3 onion, not a shared onion"
+        );
+        assert!(
+            apex.onion_path_prefix.is_empty(),
+            "Onion-Location must be this Host's onion root, not /_o/{{host}}: {:?}",
+            apex.onion_path_prefix
+        );
+        assert!(
+            www.onion_path_prefix.is_empty(),
+            "Onion-Location must be this Host's onion root, not /_o/{{host}}: {:?}",
+            www.onion_path_prefix
+        );
+        let uri: Uri = "/about".parse().unwrap();
+        let loc_a = onion_location_value(apex, &uri).unwrap();
+        let loc_b = onion_location_value(www, &uri).unwrap();
+        assert_eq!(loc_a, format!("http://{ONION_A}/about"));
+        assert_eq!(loc_b, format!("http://{ONION_B}/about"));
+        assert!(
+            !loc_a.contains("/_o/"),
+            "Onion-Location must not use a shared path prefix: {loc_a}"
+        );
+        assert!(
+            !loc_b.contains("/_o/"),
+            "Onion-Location must not use a shared path prefix: {loc_b}"
+        );
+        assert!(
+            cfg.lookup("mail.example.test").is_none(),
+            "mail Hosts stay unmapped"
+        );
+    }
+
+    /// Named contract: extra mail Hosts stay unmapped even if a mapping is supplied.
+    #[test]
+    fn extra_mail_hosts_stay_unmapped_even_if_supplied() {
+        let mail_onion = unique_v3_onion_host(7);
+        let extra_onion = unique_v3_onion_host(8);
+        let extra = vec![
+            OnionMapping::auto_derived("mail.cryptoquick.com", &format!("http://{mail_onion}"))
+                .unwrap(),
+            OnionMapping::auto_derived("extra.test", &format!("http://{extra_onion}")).unwrap(),
+        ];
+        let cfg = build_onion_discovery_with_mail(
+            "example.test",
+            "services.example.test",
+            None,
+            true,
+            true,
+            extra,
+            &[],
+            &[],
+            ["extra.test", "mail.cryptoquick.com"],
+            &["mail.cryptoquick.com".into()],
+        );
+        assert!(
+            cfg.lookup("mail.cryptoquick.com").is_none(),
+            "extra mail Hosts stay unmapped"
+        );
+        assert!(
+            cfg.lookup("mail.example.test").is_none(),
+            "primary mail Host stays unmapped"
+        );
+        let extra_map = cfg.lookup("extra.test").expect("static extra mapped");
+        assert_eq!(extra_map.onion_host, extra_onion);
+        assert!(extra_map.onion_path_prefix.is_empty());
+    }
+
+    #[test]
+    fn match_onion_host_rewrite_selects_that_sites_clearnet_host() {
+        let extra = per_site_mappings("example.test", "services.example.test", ["extra.test"]);
+        let cfg = build_onion_discovery(
+            "example.test",
+            "services.example.test",
+            None,
+            true,
+            true,
+            extra,
             &[],
             &[],
             ["extra.test"],
         );
+        let extra_map = cfg.lookup("extra.test").expect("extra mapped");
+        let apex = cfg.lookup("example.test").expect("apex mapped");
+        let mta = cfg.lookup("mta-sts.example.test").expect("mta-sts mapped");
+        assert_ne!(extra_map.onion_host, apex.onion_host);
+        assert_eq!(
+            match_onion_host_rewrite(&extra_map.onion_host, &cfg),
+            Some("extra.test".into())
+        );
+        assert_eq!(
+            match_onion_host_rewrite(&apex.onion_host, &cfg),
+            Some("example.test".into())
+        );
+        assert_eq!(
+            match_onion_host_rewrite(&mta.onion_host, &cfg),
+            Some("mta-sts.example.test".into())
+        );
         assert_eq!(
             match_onion_vhost_rewrite("/_o/extra.test/", &cfg),
-            Some(("extra.test".into(), "/".into()))
-        );
-        assert_eq!(
-            match_onion_vhost_rewrite("/_o/extra.test/about?x=1", &cfg),
-            Some(("extra.test".into(), "/about".into()))
-        );
-        assert_eq!(
-            match_onion_vhost_rewrite("/_o/example.test/", &cfg),
-            Some(("example.test".into(), "/".into()))
-        );
-        assert_eq!(
-            match_onion_vhost_rewrite("/_o/mta-sts.example.test/.well-known/mta-sts.txt", &cfg),
-            Some((
-                "mta-sts.example.test".into(),
-                "/.well-known/mta-sts.txt".into()
-            ))
+            None,
+            "shared /_o/{{host}} is not a discovery path"
         );
         let well_known = rewrite_uri_path_keep_query(
-            &"/_o/mta-sts.example.test/.well-known/mta-sts.txt"
-                .parse()
-                .unwrap(),
+            &"/.well-known/mta-sts.txt".parse().unwrap(),
             "/.well-known/mta-sts.txt",
         )
         .expect("well-known path rewrite must parse");
         assert_eq!(well_known.path(), "/.well-known/mta-sts.txt");
-        let full: Uri = "http://127.0.0.1:8090/_o/mta-sts.example.test/.well-known/mta-sts.txt"
-            .parse()
-            .unwrap();
-        assert_eq!(
-            full.path(),
-            "/_o/mta-sts.example.test/.well-known/mta-sts.txt",
-            "http Uri must keep .well-known as a path segment: {full}"
-        );
-        let full_rw = rewrite_uri_path_keep_query(&full, "/.well-known/mta-sts.txt")
-            .expect("full URI well-known rewrite must parse");
-        assert_eq!(full_rw.path(), "/.well-known/mta-sts.txt");
-        assert_eq!(match_onion_vhost_rewrite("/", &cfg), None);
-        assert_eq!(match_onion_vhost_rewrite("/_o/unknown.test/", &cfg), None);
+        assert_eq!(match_onion_host_rewrite("unknown.onion", &cfg), None);
         let services = cfg.lookup("services.example.test").unwrap();
         assert!(
             services.onion_path_prefix.is_empty(),
-            "services console stays onion root"
+            "each site including services uses onion root"
         );
     }
 
@@ -878,12 +1174,12 @@ mod tests {
         let uri: Uri = "/mail/inbox?tab=unread".parse().unwrap();
         assert_eq!(
             onion_location_value(&m, &uri).unwrap(),
-            format!("http://{FIXTURE_ONION}/_o/example.test/mail/inbox?tab=unread")
+            format!("http://{FIXTURE_ONION}/mail/inbox?tab=unread")
         );
         let root: Uri = "/".parse().unwrap();
         assert_eq!(
             onion_location_value(&m, &root).unwrap(),
-            format!("http://{FIXTURE_ONION}/_o/example.test/")
+            format!("http://{FIXTURE_ONION}/")
         );
     }
 
@@ -919,7 +1215,7 @@ mod tests {
         ));
         assert_eq!(
             headers.get(&ONION_LOCATION).and_then(|v| v.to_str().ok()),
-            Some(format!("http://{FIXTURE_ONION}/_o/example.test/health?x=1").as_str())
+            Some(format!("http://{FIXTURE_ONION}/health?x=1").as_str())
         );
         assert_eq!(
             headers.get(&ALT_SVC).and_then(|v| v.to_str().ok()),
@@ -1025,13 +1321,14 @@ mod tests {
 
     #[test]
     fn dump_reflects_loaded_map() {
+        let extra = per_site_mappings("example.test", "services.example.test", &[] as &[&str]);
         let cfg = build_onion_discovery(
             "example.test",
             "services.example.test",
-            Some(&fixture_url()),
+            None,
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             &[] as &[&str],

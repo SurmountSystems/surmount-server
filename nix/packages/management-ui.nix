@@ -3,7 +3,7 @@
 # or via the flake overlay which injects craneLib.
 #
 # Leptos 0.8 SSR MSRV is rustc 1.88+. Toolchain comes from
-# nix/rust-toolchain.nix (nixpkgs-rust; 1.97.1 until nixpkgs has 1.98).
+# nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.0).
 
 {
   lib,
@@ -42,12 +42,7 @@ let
     cargoExtraArgs = "-p surmount-management-ui";
   };
 
-  cargoArtifacts = craneLib'.buildDepsOnly (
-    commonArgs
-    // {
-      # deps-only still needs the lockfile present in src
-    }
-  );
+  cargoArtifacts = craneLib'.buildDepsOnly commonArgs;
 in
 craneLib'.buildPackage (
   commonArgs

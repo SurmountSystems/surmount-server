@@ -3,8 +3,9 @@
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -501,22 +502,29 @@ fn do_issue(cfg: &Cfg, label: &str, url: &str) -> anyhow::Result<u8> {
         child.env("SURMOUNT_ACME_EMAIL", &cfg.email);
     }
     child.env_remove("SURMOUNT_ACME_DNS_NAMECHEAP_ENV");
+    // Own group so a parked post-issue sleep dies with the shell.
+    child.process_group(0);
     let mut child = child
         .spawn()
         .map_err(|e| die("laptop-renew-cert", format!("ui-bin: {e}")))?;
     let deadline = Instant::now() + Duration::from_secs(cfg.timeout_secs);
+    // File creation is not issuance. A shell redirect creates the PEM path
+    // before later startup lines (env record, then the long sleep). Exit 0
+    // only after that child has exited with PEM bytes, or has been parked
+    // on two polls with those bytes present. A timeout is not success.
+    let mut parked_hits: u8 = 0;
     loop {
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(issue_fail(cfg, "issue timed out waiting for PEMs"));
+            stop_issuer(&mut child);
+            return Err(issue_fail(
+                cfg,
+                "issue timed out before the issuer finished",
+            ));
         }
         match child.try_wait() {
             Ok(Some(st)) => {
-                if cert.is_file() && key.is_file() {
-                    eprintln!("laptop-renew-cert: issue: directory={label} (host ACME stays off)");
-                    assert_issued_sans_cover_requested(cfg)?;
-                    return Ok(0);
+                if issued_pems_ready(&cert, &key) {
+                    return finish_issue(cfg, label);
                 }
                 if !st.success() {
                     return Err(issue_fail(
@@ -530,21 +538,73 @@ fn do_issue(cfg: &Cfg, label: &str, url: &str) -> anyhow::Result<u8> {
                 return Err(issue_fail(cfg, "ui-bin exited before PEMs"));
             }
             Ok(None) => {
-                if cert.is_file() && key.is_file() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    eprintln!("laptop-renew-cert: issue: directory={label} (host ACME stays off)");
-                    assert_issued_sans_cover_requested(cfg)?;
-                    return Ok(0);
+                if issued_pems_ready(&cert, &key) && issuer_parked(child.id()) {
+                    parked_hits = parked_hits.saturating_add(1);
+                    if parked_hits >= 2 {
+                        stop_issuer(&mut child);
+                        return finish_issue(cfg, label);
+                    }
+                } else {
+                    parked_hits = 0;
                 }
                 thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                let _ = child.kill();
+                stop_issuer(&mut child);
                 return Err(die("laptop-renew-cert", format!("ui-bin wait: {e}")));
             }
         }
     }
+}
+
+fn finish_issue(cfg: &Cfg, label: &str) -> anyhow::Result<u8> {
+    eprintln!("laptop-renew-cert: issue: directory={label} (host ACME stays off)");
+    assert_issued_sans_cover_requested(cfg)?;
+    Ok(0)
+}
+
+fn issued_pems_ready(cert: &Path, key: &Path) -> bool {
+    issued_pem_ready(cert) && issued_pem_ready(key)
+}
+
+fn issued_pem_ready(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    fs::read(path).is_ok_and(|bytes| bytes.starts_with(b"-----BEGIN "))
+}
+
+/// Interruptible sleep (`S`) or idle (`I`) in `/proc/<pid>/stat`.
+/// Disk sleep and running do not count: those are still startup.
+fn issuer_parked(pid: u32) -> bool {
+    let Ok(text) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    let Some((_, after)) = text.rsplit_once(')') else {
+        return false;
+    };
+    matches!(after.trim_start().chars().next(), Some('S' | 'I'))
+}
+
+fn stop_issuer(child: &mut Child) {
+    if let Ok(pid) = i32::try_from(child.id()) {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        const SIGKILL: i32 = 9;
+        // SAFETY: pid is this child. process_group(0) set pgid to that pid.
+        // Negative pid signals only that group.
+        let signaled = unsafe { kill(-pid, SIGKILL) };
+        if signaled != 0 {
+            let _ = child.kill();
+        }
+    } else {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
 }
 
 fn issue_fail(cfg: &Cfg, msg: impl std::fmt::Display) -> anyhow::Error {

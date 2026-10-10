@@ -21,13 +21,10 @@
   # ./host-local is auto-imported when present (path flake / remote rsync
   # without .git); never committed.
 
-  # Mild discoverability only; host nix.settings already prefer cache.nixos.org.
-  nixConfig = {
-    extra-substituters = [ "https://cache.nixos.org" ];
-    extra-trusted-public-keys = [
-      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-    ];
-  };
+  # Do not set nixConfig extra-substituters here. cache.nixos.org is already
+  # the default cache. Guest nixos-rebuild is not a trusted flake-config
+  # context, so extra-substituters / extra-trusted-public-keys only printed
+  # "ignoring untrusted flake configuration" on the switch (2026-09-20).
 
   inputs = {
     # Prefer stable for a mail host. Bump deliberately after reading release notes.
@@ -35,26 +32,32 @@
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.5.1 source build).
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.6.0 source build).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # Rustc/cargo only for engines whose MSRV exceeds the host channel default.
-    # Arti 2.5.1 MSRV is 1.91. Keep a separate input so we can pin newer rustc
-    # without waiting on every host-channel package set. Bump when Arti needs it.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # rustc/cargo for crane packages and the grok-oss build. Not host
+    # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable: on 2026-10-10 that
+    # branch still only has pkgs/development/compilers/rust/1_98.nix.
+    # Not staging HEAD: that tip has rustc 1.99.0 and pkgs.arti 2.7.0.
+    # This rev is the nixpkgs commit "rust: 1.98.1 -> 1.99.0" (c9f19b6,
+    # committed 2026-10-01). pkgs.rustc is 1.99.0 and pkgs.arti stays 2.6.0.
+    # The rustc 1.99.0 source hash matches the official tarball. Crane
+    # 47b6b27 has no nixpkgs input: mkLib keeps host pkgs and
+    # overrideToolchain supplies this rustc. Do not float this input.
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/c9f19b6be67332ce2ee7520c1630c804685df838";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
-    crane.url = "github:ipetkov/crane/756d6d07c3818ea95d1e2cdac63fa7d02fe3e61b";
+    crane.url = "github:ipetkov/crane/47b6b27ed9a3a9181415e4367d0c30ab2a0e0250";
     # crane follows its own nixpkgs; we pass pkgs from our nixpkgs in outputs.
 
     sops-nix = {
-      url = "github:Mic92/sops-nix/f1406619a3884cd5c47992a70b8b35c9c0fcb4c9";
+      url = "github:Mic92/sops-nix/5efb5a6f4f5ab192817d28557dd4d650fa14d866";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
     # Public static site for apex/www. Fetch the git tree (HTML/CSS/JS).
-    # Operator bumps: just deploy (nix flake update surmount-site).
+    # Operator bumps: just publish (nix flake update surmount-site).
     surmount-site = {
       url = "github:SurmountSystems/site";
       flake = false;
@@ -67,11 +70,14 @@
       flake = false;
     };
 
-    # Grok OSS TUI (bin/grok-oss). Product tip is still branch remote-1
-    # (open PR 51; default branch main is #50 and is not this tip).
+    # Grok OSS TUI (bin/grok-oss).
+    # remote-1 was deleted after PR 51 squash-merged onto main.
+    # 6edf5fda is not an ancestor of main. remote-2 then squash-merged
+    # as PR 59, and that commit is the main tip. No live ref still
+    # points at 6edf5fda, so the URL is main.
     # Operator bumps: nix flake update grok-oss.
     # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/remote-1";
+    grok-oss.url = "github:SurmountSystems/grok-oss/main";
 
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
@@ -176,7 +182,7 @@
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
-      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust / nixos-unstable).
+      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.0).
       mkManagementUiCrane =
         system:
         let
@@ -330,7 +336,7 @@
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.5.1 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.6.0 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
           # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
           # vendor handoff avoids crates.io 403). C deps from host pkgs.
@@ -403,9 +409,10 @@
           };
           # Grok OSS from locked github:SurmountSystems/grok-oss (operator-bump).
           # Not in checks.ci (heavy crane). Module stays default-off.
+          # rustToolchain is nixpkgs-rust 1.99.0, not host pkgs.rustc 1.95.0.
           grok-oss = pkgs.callPackage ./nix/packages/grok-oss.nix {
             grokOssFlake = grok-oss;
-            inherit system;
+            inherit system rustToolchain;
           };
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
@@ -859,6 +866,10 @@
             pkgs.writeText "arti-onion-package-contract" (builtins.toJSON r.ok);
 
           # Offline RustSec audit of Cargo.lock (no crates.io).
+          # 2026-09-26: ignore RUSTSEC-2024-0436 (paste) and
+          # RUSTSEC-2026-0173 (proc-macro-error2) only.
+          # See docs/SECURITY.md and .cargo/audit.toml.
+          # --deny warnings stays. Do not ignore any other advisory.
           cargo-audit =
             pkgs.runCommand "surmount-cargo-audit"
               {
@@ -866,7 +877,9 @@
               }
               ''
                 set -euo pipefail
-                cargo-audit audit --no-fetch --stale \
+                cargo-audit audit --no-fetch --stale --deny warnings \
+                  --ignore RUSTSEC-2024-0436 \
+                  --ignore RUSTSEC-2026-0173 \
                   -d ${advisory-db} \
                   -f ${./Cargo.lock}
                 mkdir -p "$out"
@@ -977,15 +990,11 @@
                 inherit pkgs;
                 inherit (pkgs) lib;
                 nixosTest = pkgs.nixosTest or pkgs.testers.runNixOSTest;
+                # runNixOSTest pins node.pkgs to this overlaid set and marks
+                # nixpkgs.overlays read-only. Do not assign that option here.
                 surmountModules = [
                   sops-nix.nixosModules.sops
                   ./modules
-                  (
-                    { ... }:
-                    {
-                      nixpkgs.overlays = [ (surmountOverlay system) ];
-                    }
-                  )
                 ];
                 managementUi = self.packages.${system}.management-ui;
               }
@@ -1005,7 +1014,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              # Match crane toolchain (nix/rust-toolchain.nix via nixpkgs-rust).
+              # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.99.0).
               (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
               rust-analyzer
               pkg-config

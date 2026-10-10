@@ -4,7 +4,18 @@ How the Surmount mail VPS should be operated, observed, and checked
 end-to-end. Aligned with [hygiene.md](hygiene.md). Architecture:
 [STACK.md](STACK.md).
 
-**Last updated:** 2026-09-03 (public NIP-07 login over HTTP/3 must not 500
+**Last updated:** 2026-10-10 (primary SPF is
+`v=spf1 a:mail.surmount.systems include:_spf.google.com -all`.
+DMARC stays `p=quarantine`. Detail:
+[DNS.md](DNS.md) section *Google send (operator direction 2026-10-10)*).
+Prior 2026-10-05 (`just publish` is the static-site command
+and `just deploy` is the host switch. `just deploy-dry-run` is the
+agent dry-run. `just deploy-host` stays the explicit equivalent with
+no default target. See [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md)). Prior
+2026-09-20 (full test-and-deploy procedure:
+[TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md). Agent runs named eval,
+`just check-remote`, and `just deploy-host -- --dry-run`. Operator
+runs the real switch with Eternal Terminal open). Prior 2026-09-03 (public NIP-07 login over HTTP/3 must not 500
 missing `ConnectInfo`; NWC is the `/mail` wallet store). Prior 2026-09-02 (guest grok-oss uses a machine xAI console
 API key on surmount-1, path only under `/home/grok/.grok`; guest has no
 git and no GitHub SSH; signed commits stay on the laptop). Prior same
@@ -781,8 +792,12 @@ reliability in [deploy-host-local.md](deploy-host-local.md) section 5
 
 `just btop` (`nix run .#surmount-btop-host`) uses Eternal Terminal to the same
 target as `just deploy-host` and `just et`, then runs interactive `btop`
-(`et -c btop`). It does not use a raw SSH that can freeze-paint a last frame.
-After btop exits, the Eternal Terminal session exits (not `et --noexit`).
+(`et -e -c btop`). It does not use a raw SSH that can freeze-paint a last frame.
+After btop exits, including q or Ctrl-C, the Eternal Terminal session stays
+up and drops to a shell on the mail host (`-e` / `--noexit` with `-c`).
+That shell is the emergency terminal. You do not need a second `just et`
+tunnel. Do not start `nixos-rebuild` or `just deploy` from that shell.
+The laptop still starts the switch. `just et` remains a shell-only client.
 Needs `etserver` on the guest (after `just deploy-host`). Target comes from
 `--target`, `SURMOUNT_DEPLOY_TARGET`, or
 `~/.local/share/surmount/agent-target.env`. Fails loud if those are missing,
@@ -942,7 +957,10 @@ missing system features. `extra-` keeps NixOS auto-detected
 `surmount-remote`. After a module change, rebuild and switch this host
 (`just deploy-host` or host `nixos-rebuild switch`) so
 `/etc/nix/nix.conf` picks up the extra feature; then restart is
-implied by the switch. Do not advertise a fake high slot count. Speed factor is
+implied by the switch. `/var/cache/grok-oss-cargo-target` is an extra
+sandbox path (`nix.settings.extra-sandbox-paths` on the mail host) so
+sandboxed builds can see that cargo cache. Do not advertise a fake
+high slot count. Speed factor is
 not a substitute for `MemoryMax`. Disk refuse at `diskGuardPercent`
 (default 95). Enable from private host-local. Host-local may set a
 real `memoryMax` as the **builder budget**; never publish that number
@@ -1669,8 +1687,8 @@ surmount-management-ui -g tls_handshake_failed`.
 | HS identity dir | `surmount.artiHiddenService.onionServiceStateDir` default `/run/surmount-secrets/arti/onion-service` (**ephemeral**; prefer durable Domain B). Live host uses `/var/lib/surmount/secrets/arti/onion-service`. |
 | Ownership | **Must** be owned/writable by `surmount-arti:surmount-arti` (e.g. mode **0750**). Module does **not** auto-create this dir (`ConditionPathIsDirectory` gates the daemon; missing dir => inactive, not a restart loop). Root-owned 0700 can pass the path check then fail at keystore open. Keystore stays **0700**. Live: `surmount-ui` is in group `surmount-arti` so the UI can read the hostname file (0750 dir). |
 | Process cache | `/var/lib/surmount/arti` (+ `cache/`) via tmpfiles 0750 surmount-arti. Live host-local sets unit `HOME=/var/lib/surmount/arti` so Arti can write `port_info.json` (public module does not set HOME). |
-| Hostname file | Arti 2.5.1 does **not** write `hostname`. Live host wrote it from `arti hss --nickname surmount-management onion-address`. Address is not a secret; HS keys are. Same v3 for apex, www, services. |
-| Discovery headers | Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`, `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`, `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`. Restart `surmount-management-ui` after hostname/env/map change. Dump: `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on). |
+| Hostname files | Arti 2.5.1 does **not** write `hostname`. Console: `arti hss --nickname` `artiHiddenService.nickname` `onion-address`. Per-site: ExecStartPost writes public addresses under `stateDir/published-hostnames/{nickname}`. Addresses are not secrets; HS keys are. One v3 per public HTTP Host. |
+| Discovery headers | Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Each mapped Host uses `http://{that-host-onion}{path}`. Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`, `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`, `SURMOUNT_ONION_ALT_SVC_DISABLED_HOSTS`, `SURMOUNT_ONION_MAP_FILE`, `SURMOUNT_ONION_SITE_NICKNAMES_FILE`, `SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR`. Restart `surmount-management-ui` after hostname/env/map change. Dump: `GET /api/v1/system` `onion_discovery` (admin-gated when Nostr on). |
 | Secrets | HS private keys **never in git**. Identity may be generated on first start in an empty writable dir; operator **offline backup** is still residual. |
 | Honesty | `systemctl is-active surmount-arti-hidden-service` does **not** prove an onion is published on the Tor network. Live (2026-08-17): unit **active**; hostname file present (v3 onion; do not paste the address in this public tree); headers proven on HTTPS 307/200. Tor Browser purple pill **BLOCKED**. Do **not** claim B3 fully closed. |
 
@@ -1840,8 +1858,10 @@ exceptions*.
 |---------|---------|
 | `nix run .#e2e` / `just e2e` | Local comprehensive end-to-end (Rust flake app; hermetic cargo matrix; optional Tor). SoT |
 | `nix run .#e2e-host` / `just e2e-host` | Host end-to-end (Rust flake app; `SURMOUNT_E2E_HOST=1` or exit 2; also requires `SURMOUNT_E2E_BASE_URL`; `LAB_IP` unless `SKIP_BAN=1`). **Never** a flake check |
-| `just deploy` | Publish static sites (apex/www from locked `github:SurmountSystems/site` via `nix build .#surmount-public-site`, plus extra vhosts). Not a NixOS generation. |
-| `nix run .#surmount-deploy-host` / `just deploy-host` | Operator deploy driver: public rsync + host-local checks + `#mail-vps` rebuild (not CI). That is the NixOS generation. [deploy-host-local.md](deploy-host-local.md) |
+| `just publish` | Publish static sites (apex/www from locked `github:SurmountSystems/site` via `nix build .#surmount-public-site`, plus extra vhosts). Not a NixOS generation. |
+| `just deploy` | Operator's real mail-host switch. Defaults: `--target root@surmount-1` and `--host-local /home/hunter/.local/share/surmount/host-local`. Extra arguments append. Agents must not run this. Explicit equivalent: `just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
+| `just deploy-dry-run` | Same switch with `--dry-run` before `--target`. Agents may run this. Extra arguments append. Explicit equivalent: `just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
+| `nix run .#surmount-deploy-host` / `just deploy-host` | Flexible deploy driver with no default target: public rsync + host-local checks + `#mail-vps` rebuild (not CI). That is the NixOS generation. [deploy-host-local.md](deploy-host-local.md) |
 | `nix run .#surmount-deploy-host-post-switch-smoke` | Post-switch smoke (generation, units, loopback health, listen proof). |
 | `just fix-public-dashboard` / `nix run .#surmount-fix-public-dashboard` | Compose recovery pin + mint API key + free-443 dry-run (no operator password homework). Optional `--live-free-443` on operator host only. [SECRETS.md](SECRETS.md) |
 | `just stalwart-recovery-unlock` / `nix run .#stalwart-recovery-unlock` | Generate/install `STALWART_RECOVERY_ADMIN` EnvironmentFile + private systemd drop-in + Basic auth probe. Kind `stalwart-recovery-admin`. [SECRETS.md](SECRETS.md) |

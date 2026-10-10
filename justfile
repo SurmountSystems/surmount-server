@@ -12,6 +12,12 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # Honor BUILD_LOCAL for every recipe that calls nix (including nix run).
 export NIX_CONFIG := if env_var_or_default("BUILD_LOCAL", "") == "" { env_var_or_default("NIX_CONFIG", "") } else { "builders =\nmax-jobs = auto\n" }
 
+# ssh-ng builder client. Nix 2.34 prepends NIX_SSHOPTS, and OpenSSH keeps
+# the first value of each option. Nix does not set these itself. This does
+# not retry a nixos-rebuild switch. remote-nix-build retries a dropped
+# nix build only. An operator-set NIX_SSHOPTS is left as-is.
+export NIX_SSHOPTS := env_var_or_default("NIX_SSHOPTS", "-o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o ConnectionAttempts=3")
+
 # Prefer CI_SYSTEM when set (GHA); else host flake system.
 system := env_var_or_default("CI_SYSTEM", `nix eval --impure --raw --expr 'builtins.currentSystem'`)
 
@@ -41,6 +47,9 @@ ci:
 # success so a cache hit is not a blank prompt. No --log-format raw:
 # that hid "these N derivations" / waiting-for-machine and looked dead.
 # No 20s heartbeat. No --store ssh-ng. Machines file plus max-jobs 0.
+# NIX_SSHOPTS keepalives are separate from that heartbeat. A dropped
+# ssh-ng connection retries the nix build. A derivation failure does not.
+# This is not a nixos-rebuild switch.
 check-remote:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -48,13 +57,11 @@ check-remote:
       echo "just check-remote: refuse BUILD_LOCAL (that is laptop rustc)" >&2
       exit 2
     fi
-    echo "==> just check-remote: nix build .#checks.{{system}}.ci (max-jobs 0)" >&2
-    echo "==> just check-remote: eval can take a few minutes; then remote logs or a store path" >&2
-    out="$(nix build --option max-jobs 0 --print-build-logs --print-out-paths --no-link ".#checks.{{system}}.ci")"
-    echo "==> just check-remote: ok" >&2
-    echo "${out}"
+    exec just remote-nix-build ".#checks.{{system}}.ci" "check-remote"
 
 # Same force-remote path for cargo-audit (also in checks.ci).
+# Same ssh-ng keepalive and connection retry as check-remote.
+# A derivation failure is not retried.
 audit-remote:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -62,10 +69,81 @@ audit-remote:
       echo "just audit-remote: refuse BUILD_LOCAL" >&2
       exit 2
     fi
-    echo "==> just audit-remote: nix build .#checks.{{system}}.cargo-audit (max-jobs 0)" >&2
-    out="$(nix build --option max-jobs 0 --print-build-logs --print-out-paths --no-link ".#checks.{{system}}.cargo-audit")"
-    echo "==> just audit-remote: ok" >&2
-    echo "${out}"
+    exec just remote-nix-build ".#checks.{{system}}.cargo-audit" "audit-remote"
+
+# One ssh-ng nix build. Retries a dropped connection. Does not retry a
+# derivation that actually failed, and does not run nixos-rebuild.
+remote-nix-build installable label:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${BUILD_LOCAL:-}" ]]; then
+      echo "just {{label}}: refuse BUILD_LOCAL (that is laptop rustc)" >&2
+      exit 2
+    fi
+    installable="{{installable}}"
+    label="{{label}}"
+    echo "==> just ${label}: nix build ${installable} (max-jobs 0)" >&2
+    echo "==> just ${label}: eval can take a few minutes; then remote logs or a store path" >&2
+    echo "==> just ${label}: ssh-ng keepalives via NIX_SSHOPTS; connection drops retry; derivation failures do not" >&2
+
+    is_connection_drop() {
+      local log="$1"
+      # A finished remote builder (rustc, cargo fmt, and the like) is not a drop.
+      if grep -E -q 'builder failed with exit code|Reason: builder failed' "$log"; then
+        return 1
+      fi
+      grep -E -q 'failed to start SSH connection|failed to start SSH master connection|unable to open connection to remote store|unexpected end-of-file|unexpected EOF|kex_exchange_identification|Connection reset by peer|Connection timed out|Connection refused|Broken pipe|closed by remote host|Timeout, server .+ not responding' "$log"
+    }
+
+    max=3
+    attempt=1
+    log=""
+    outf=""
+    fifo=""
+    trap 'rm -f "${log:-}" "${outf:-}" "${fifo:-}"' EXIT
+    while [[ "$attempt" -le "$max" ]]; do
+      log="$(mktemp)"
+      outf="$(mktemp)"
+      fifo="$(mktemp -u)"
+      mkfifo "$fifo"
+      tee "$log" <"$fifo" >&2 &
+      tee_pid=$!
+      set +e
+      nix build --option max-jobs 0 --print-build-logs --print-out-paths --no-link "$installable" >"$outf" 2>"$fifo"
+      rc=$?
+      set -e
+      wait "$tee_pid" || true
+      rm -f "$fifo"
+      fifo=""
+      if [[ "$rc" -eq 0 ]]; then
+        echo "==> just ${label}: ok" >&2
+        cat "$outf"
+        rm -f "$log" "$outf"
+        log=""
+        outf=""
+        exit 0
+      fi
+      if is_connection_drop "$log"; then
+        rm -f "$log" "$outf"
+        log=""
+        outf=""
+        if [[ "$attempt" -lt "$max" ]]; then
+          echo "==> just ${label}: connection failed (attempt ${attempt} of ${max}); retrying the nix build" >&2
+          attempt=$((attempt + 1))
+          sleep 2
+          continue
+        fi
+        echo "==> just ${label}: connection failed after ${max} attempts" >&2
+        exit 1
+      fi
+      rm -f "$log" "$outf"
+      log=""
+      outf=""
+      echo "==> just ${label}: build failed (not a connection drop); not retrying" >&2
+      exit "$rc"
+    done
+    echo "==> just ${label}: connection failed after ${max} attempts" >&2
+    exit 1
 
 # Offline RustSec audit of crates/Cargo.lock (advisory-db flake input).
 audit:
@@ -157,10 +235,10 @@ e2e:
 e2e-host:
     nix run ".#e2e-host"
 
-# Publish static sites (apex/www from github:SurmountSystems/site, plus extra vhosts).
-# Docs: docs/OPS.md, docs/EDGE_AND_TLS.md
+# Apex/www from github:SurmountSystems/site, plus extra vhosts. Docs: docs/OPS.md, docs/EDGE_AND_TLS.md
+# `just publish` publishes static sites (not a NixOS generation).
 [positional-arguments]
-deploy *args:
+publish *args:
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ "${1:-}" == "--" ]]; then
@@ -170,6 +248,28 @@ deploy *args:
     root="$(nice -n 19 nix build --print-build-logs --no-link --print-out-paths ".#surmount-public-site")"
     export SURMOUNT_PUBLIC_SITE_ROOT="${root}"
     exec nix run ".#surmount-deploy-static-sites" -- "$@"
+
+# Default target is root@surmount-1. Extra arguments append after the host-local flag.
+# This is the operator's real switch. Agents must not run `just deploy`. Agents run `just deploy-dry-run`.
+[positional-arguments]
+deploy *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    exec nix run ".#surmount-deploy-host" -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local "$@"
+
+# Same mail-host command as `just deploy`, with `--dry-run` before `--target`. Extra arguments append.
+# Agents may run `just deploy-dry-run`. Do not pass `--install-secrets` unless secrets should be copied.
+[positional-arguments]
+deploy-dry-run *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${1:-}" == "--" ]]; then
+      shift
+    fi
+    exec nix run ".#surmount-deploy-host" -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local "$@"
 
 # Operator deploy driver (public tree sync + host-local checks + #mail-vps).
 # Docs: docs/deploy-host-local.md

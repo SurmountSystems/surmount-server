@@ -216,8 +216,9 @@ fn cmd_wait(
 /// and [setHosts](https://www.namecheap.com/support/api/methods/domains-dns/set-hosts/)
 /// (accessed: 2026-09-07). Tests override the API base to a local HTTP
 /// listener. Never live Namecheap as CI green. Lives in this tracked file
-/// so crane git-filtered source includes it.
-mod live {
+/// so crane git-filtered source includes it. `surmount-dns-zone --live`
+/// reuses this module (same XML API, ClientIp required).
+pub mod live {
     use anyhow::Result;
 
     use crate::cred::{Credentials, die};
@@ -233,7 +234,12 @@ mod live {
     }
 
     pub fn get_hosts(cred: &Credentials) -> Result<Hosts> {
-        require_client_ip(cred)?;
+        get_hosts_with_prefix(cred, PREFIX)
+    }
+
+    /// Same getHosts path with a caller prefix (dns-zone errors).
+    pub fn get_hosts_with_prefix(cred: &Credentials, prefix: &str) -> Result<Hosts> {
+        require_client_ip(cred, prefix)?;
         let xml = api_get(
             cred,
             &[
@@ -241,21 +247,27 @@ mod live {
                 ("SLD", cred.sld.as_str()),
                 ("TLD", cred.tld.as_str()),
             ],
+            prefix,
         )?;
-        parse_get_hosts(&xml)
+        parse_get_hosts(&xml, prefix)
     }
 
     pub fn set_hosts(cred: &Credentials, hosts: &Hosts) -> Result<()> {
-        require_client_ip(cred)?;
+        set_hosts_with_prefix(cred, hosts, PREFIX)
+    }
+
+    /// Same setHosts path with a caller prefix (dns-zone errors).
+    pub fn set_hosts_with_prefix(cred: &Credentials, hosts: &Hosts, prefix: &str) -> Result<()> {
+        require_client_ip(cred, prefix)?;
         if hosts.records.is_empty() {
             return Err(die(
-                PREFIX,
+                prefix,
                 "getHosts returned no records (refuse setHosts wipe)",
             ));
         }
         if hosts.email_type.is_empty() {
             return Err(die(
-                PREFIX,
+                prefix,
                 "getHosts missing EmailType (refuse setHosts that would un-publish)",
             ));
         }
@@ -277,14 +289,14 @@ mod live {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let xml = api_get(cred, &q)?;
-        parse_set_hosts_ok(&xml)
+        let xml = api_get(cred, &q, prefix)?;
+        parse_set_hosts_ok(&xml, prefix)
     }
 
-    fn require_client_ip(cred: &Credentials) -> Result<()> {
+    fn require_client_ip(cred: &Credentials, prefix: &str) -> Result<()> {
         if cred.client_ip.trim().is_empty() {
             return Err(die(
-                PREFIX,
+                prefix,
                 "BLOCKED: live Namecheap API requires ClientIp (laptop egress whitelist)",
             ));
         }
@@ -292,20 +304,25 @@ mod live {
     }
 
     fn api_base() -> String {
-        std::env::var("SURMOUNT_ACME_DNS_NAMECHEAP_API_BASE")
+        std::env::var("SURMOUNT_DNS_ZONE_NAMECHEAP_API_BASE")
             .ok()
             .filter(|s| !s.is_empty())
+            .or_else(|| {
+                std::env::var("SURMOUNT_ACME_DNS_NAMECHEAP_API_BASE")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            })
             .unwrap_or_else(|| DEFAULT_API.to_string())
     }
 
-    fn api_get(cred: &Credentials, extra: &[(&str, &str)]) -> Result<String> {
+    fn api_get(cred: &Credentials, extra: &[(&str, &str)], prefix: &str) -> Result<String> {
         let base = api_base();
         let https_only = base.starts_with("https://");
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .https_only(https_only)
             .build()
-            .map_err(|_| die(PREFIX, "Namecheap API HTTP client failed (URL not logged)"))?;
+            .map_err(|_| die(prefix, "Namecheap API HTTP client failed (URL not logged)"))?;
         let mut q: Vec<(&str, &str)> = vec![
             ("ApiUser", cred.api_user.as_str()),
             ("ApiKey", cred.api_key.as_str()),
@@ -317,15 +334,15 @@ mod live {
             .get(&base)
             .query(&q)
             .send()
-            .map_err(|_| die(PREFIX, "Namecheap API HTTP failed (URL not logged)"))?;
+            .map_err(|_| die(prefix, "Namecheap API HTTP failed (URL not logged)"))?;
         let status = resp.status();
         let body = resp
             .text()
-            .map_err(|_| die(PREFIX, "Namecheap API body unreadable (URL not logged)"))?;
+            .map_err(|_| die(prefix, "Namecheap API body unreadable (URL not logged)"))?;
         if !status.is_success() {
-            return Err(api_xml_error(&body).unwrap_or_else(|| {
+            return Err(api_xml_error(&body, prefix).unwrap_or_else(|| {
                 die(
-                    PREFIX,
+                    prefix,
                     "Namecheap API HTTP status failed (URL and body not logged)",
                 )
             }));
@@ -333,7 +350,7 @@ mod live {
         Ok(body)
     }
 
-    fn api_xml_error(xml: &str) -> Option<anyhow::Error> {
+    fn api_xml_error(xml: &str, prefix: &str) -> Option<anyhow::Error> {
         let low = xml.to_ascii_lowercase();
         let num = xml_attr(xml, "Number").unwrap_or_default();
         let num = if num.chars().all(|c| c.is_ascii_digit()) && !num.is_empty() {
@@ -348,7 +365,7 @@ mod live {
         };
         if low.contains("invalid request ip") {
             return Some(die(
-                PREFIX,
+                prefix,
                 format!(
                     "BLOCKED: Invalid request IP (Namecheap ClientIp whitelist of laptop egress){num_note}"
                 ),
@@ -362,7 +379,7 @@ mod live {
             let msg_l = msg.to_ascii_lowercase();
             if msg_l.contains("invalid request ip") {
                 return Some(die(
-                    PREFIX,
+                    prefix,
                     format!(
                         "BLOCKED: Invalid request IP (Namecheap ClientIp whitelist of laptop egress){num_note}"
                     ),
@@ -372,39 +389,39 @@ mod live {
                 && (msg_l.contains("name server") || msg_l.contains("dns"))
             {
                 return Some(die(
-                    PREFIX,
+                    prefix,
                     format!("Namecheap API: zone is not on Namecheap hosted DNS{num_note}"),
                 ));
             }
             if msg_l.contains("domain not found") || msg_l.contains("no longer exists") {
                 return Some(die(
-                    PREFIX,
+                    prefix,
                     format!("Namecheap API: domain not found{num_note}"),
                 ));
             }
             if msg_l.contains("api key") {
                 return Some(die(
-                    PREFIX,
+                    prefix,
                     format!("Namecheap API: credentials rejected{num_note}"),
                 ));
             }
             return Some(die(
-                PREFIX,
+                prefix,
                 format!("Namecheap API error{num_note} (body not logged; check ClientIp and zone)"),
             ));
         }
         None
     }
 
-    fn parse_get_hosts(xml: &str) -> Result<Hosts> {
-        if let Some(e) = api_xml_error(xml) {
+    fn parse_get_hosts(xml: &str, prefix: &str) -> Result<Hosts> {
+        if let Some(e) = api_xml_error(xml, prefix) {
             return Err(e);
         }
         if xml_attr(xml, "Status").as_deref() != Some("OK")
             && !xml.to_ascii_lowercase().contains("status=\"ok\"")
             && !xml.to_ascii_lowercase().contains("status='ok'")
         {
-            return Err(die(PREFIX, "Namecheap getHosts XML missing Status=OK"));
+            return Err(die(prefix, "Namecheap getHosts XML missing Status=OK"));
         }
         let email_type = xml_attr(xml, "EmailType").unwrap_or_default();
         let mut records = Vec::new();
@@ -424,7 +441,7 @@ mod live {
         }
         if records.is_empty() {
             return Err(die(
-                PREFIX,
+                prefix,
                 "getHosts returned no records (refuse setHosts wipe)",
             ));
         }
@@ -434,8 +451,8 @@ mod live {
         })
     }
 
-    fn parse_set_hosts_ok(xml: &str) -> Result<()> {
-        if let Some(e) = api_xml_error(xml) {
+    fn parse_set_hosts_ok(xml: &str, prefix: &str) -> Result<()> {
+        if let Some(e) = api_xml_error(xml, prefix) {
             return Err(e);
         }
         let low = xml.to_ascii_lowercase();
@@ -446,7 +463,7 @@ mod live {
         {
             return Ok(());
         }
-        Err(die(PREFIX, "Namecheap setHosts did not report success"))
+        Err(die(prefix, "Namecheap setHosts did not report success"))
     }
 
     fn nonempty(s: String, fallback: &str) -> String {
@@ -537,7 +554,7 @@ mod live {
         #[test]
         fn parse_get_hosts_records_and_email_type() {
             let xml = r#"<?xml version="1.0"?><ApiResponse Status="OK"><CommandResponse><DomainDNSGetHostsResult EmailType="MX"><host Name="@" Type="A" Address="203.0.113.10" MXPref="10" TTL="1800" /><host Name="_acme-challenge" Type="TXT" Address="abc" MXPref="10" TTL="60" /></DomainDNSGetHostsResult></CommandResponse></ApiResponse>"#;
-            let h = parse_get_hosts(xml).unwrap();
+            let h = parse_get_hosts(xml, PREFIX).unwrap();
             assert_eq!(h.email_type, "MX");
             assert_eq!(h.records.len(), 2);
             assert_eq!(h.records[0].name, "@");
@@ -547,7 +564,7 @@ mod live {
         #[test]
         fn parse_get_hosts_invalid_request_ip() {
             let xml = r#"<ApiResponse Status="ERROR"><Errors><Error Number="1011150">Invalid request IP</Error></Errors></ApiResponse>"#;
-            let err = parse_get_hosts(xml).unwrap_err().to_string();
+            let err = parse_get_hosts(xml, PREFIX).unwrap_err().to_string();
             assert!(err.to_ascii_lowercase().contains("invalid request ip"));
             assert!(err.contains("BLOCKED"));
         }
@@ -555,7 +572,7 @@ mod live {
         #[test]
         fn parse_get_hosts_empty_refuses_wipe() {
             let xml = r#"<ApiResponse Status="OK"><DomainDNSGetHostsResult EmailType="MX"></DomainDNSGetHostsResult></ApiResponse>"#;
-            let err = parse_get_hosts(xml).unwrap_err().to_string();
+            let err = parse_get_hosts(xml, PREFIX).unwrap_err().to_string();
             assert!(err.to_ascii_lowercase().contains("no records"));
         }
     }

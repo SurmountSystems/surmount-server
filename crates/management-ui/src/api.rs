@@ -410,16 +410,24 @@ pub async fn create_account_via_directory(
     let mut password_set = false;
     let mut password_note = None;
     if let Some(secret) = password {
-        let lookup_addr = result
-            .account
-            .as_ref()
+        // Stalwart 0.16 created objects have no emailAddress. The address
+        // field is then the id or the local-part, and password set refuses
+        // that string. Keep a real mailbox address for the echo, and set the
+        // credential on the created principal id so lookup is not required.
+        let created = result.account.as_ref();
+        let lookup_addr = created
             .map(|a| a.address.clone())
+            .filter(|addr| addr.contains('@'))
             .unwrap_or_else(|| address.clone());
+        let account_id = created
+            .map(|a| a.id.trim().to_string())
+            .filter(|id| !id.is_empty());
         let pw = state
             .directory
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: lookup_addr,
                 password: secret.to_string(),
+                account_id,
             })
             .await;
         password_set = pw.ok;
@@ -467,7 +475,10 @@ pub async fn create_account_via_directory(
         "source": result.source,
         "note": note,
     });
-    if let Some(acc) = result.account {
+    if let Some(mut acc) = result.account {
+        if !acc.address.contains('@') {
+            acc.address = address.clone();
+        }
         body["account"] = json!(acc);
     }
     if !console_saved || (password.is_some() && !password_set) {
@@ -744,6 +755,7 @@ pub async fn set_mailbox_password_via_directory(
         .set_mailbox_password(SetMailboxPasswordInput {
             mailbox,
             password: body.password,
+            account_id: None,
         })
         .await;
     if result.ok
@@ -1202,13 +1214,18 @@ mod tests {
         let url = "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion";
         cfg.onion_url = Some(url.into());
         cfg.onion_surface = crate::config::OnionSurface::Configured { url: url.into() };
+        let extra = crate::onion_discovery::per_site_mappings(
+            &cfg.primary_domain,
+            &cfg.services_hostname,
+            &[] as &[&str],
+        );
         cfg.onion_discovery = crate::onion_discovery::build_onion_discovery(
             &cfg.primary_domain,
             &cfg.services_hostname,
             Some(url),
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             &[] as &[&str],
@@ -1228,6 +1245,19 @@ mod tests {
         assert!(hosts.contains(&"www.example.test"));
         assert!(hosts.contains(&"services.example.test"));
         assert!(!hosts.contains(&"mail.example.test"));
+        let apex = s
+            .onion_discovery
+            .mappings
+            .iter()
+            .find(|m| m.clearnet_host == "example.test")
+            .unwrap();
+        let www = s
+            .onion_discovery
+            .mappings
+            .iter()
+            .find(|m| m.clearnet_host == "www.example.test")
+            .unwrap();
+        assert_ne!(apex.onion_host, www.onion_host);
         let blob = serde_json::to_string(&s).unwrap();
         assert!(
             blob.contains("\"onion_discovery\""),

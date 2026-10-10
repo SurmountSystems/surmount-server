@@ -182,7 +182,7 @@ pub fn require_http3_bind(enable: bool, listen_is_https: bool) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proxy_splora::{
+    use crate::proxy_vaultwarden::splora::{
         DEFAULT_BODY_LIMIT_BYTES, DEFAULT_QUEUE_PATH, SploraInstance, SploraProxyConfig,
         splora_proxy_middleware,
     };
@@ -370,6 +370,7 @@ mod tests {
             queue_socket: PathBuf::from("/tmp/splora-h3-queue-unused.sock"),
             queue_path: DEFAULT_QUEUE_PATH.into(),
             body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
+            portal_host: None,
         };
         let http3_cfg = Http3Config {
             enable: true,

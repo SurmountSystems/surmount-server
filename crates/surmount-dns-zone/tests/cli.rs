@@ -1,5 +1,6 @@
 //! Hermetic CLI tests ported from script/test-dns-zone-namecheap.sh.
-//! Mock zone via SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR. No network.
+//! Mock zone via SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR. Live path uses a
+//! local HTTP listener (API base override). Never live Namecheap.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -541,4 +542,277 @@ fn digest_type_2_ds_may_merge() {
     let hosts = h.hosts();
     assert!(hosts.contains("www|A|203.0.113.20|"));
     assert!(hosts.contains("@|DS|370 13 2 "));
+}
+
+struct FakeNc {
+    records: Vec<(String, String, String, String, String)>,
+    email_type: String,
+    commands: Vec<String>,
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn url_decode(s: &str) -> String {
+    let mut out = Vec::new();
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < b.len() => {
+                let hex = &s[i + 1..i + 3];
+                if let Ok(v) = u8::from_str_radix(hex, 16) {
+                    out.push(v);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn parse_query(q: &str) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    for part in q.split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        let mut kv = part.splitn(2, '=');
+        let k = url_decode(kv.next().unwrap_or(""));
+        let v = url_decode(kv.next().unwrap_or(""));
+        m.insert(k, v);
+    }
+    m
+}
+
+fn spawn_namecheap_http(state: std::sync::Arc<std::sync::Mutex<FakeNc>>) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let n = match std::io::Read::read(&mut stream, &mut buf) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let first = req.lines().next().unwrap_or("");
+            let path = first.split_whitespace().nth(1).unwrap_or("/");
+            let q = path.split_once('?').map(|x| x.1).unwrap_or("");
+            let params = parse_query(q);
+            let body = {
+                let mut g = state.lock().unwrap();
+                let cmd = params.get("Command").cloned().unwrap_or_default();
+                if cmd.contains("setHosts") {
+                    g.commands.push("setHosts".into());
+                    let mut recs = Vec::new();
+                    for i in 1..64 {
+                        let name = params.get(&format!("HostName{i}")).cloned();
+                        let Some(name) = name else { break };
+                        recs.push((
+                            name,
+                            params
+                                .get(&format!("RecordType{i}"))
+                                .cloned()
+                                .unwrap_or_default(),
+                            params
+                                .get(&format!("Address{i}"))
+                                .cloned()
+                                .unwrap_or_default(),
+                            params
+                                .get(&format!("MXPref{i}"))
+                                .cloned()
+                                .unwrap_or_else(|| "10".into()),
+                            params
+                                .get(&format!("TTL{i}"))
+                                .cloned()
+                                .unwrap_or_else(|| "1800".into()),
+                        ));
+                    }
+                    if let Some(et) = params.get("EmailType") {
+                        g.email_type = et.clone();
+                    }
+                    g.records = recs;
+                    r#"<?xml version="1.0"?><ApiResponse Status="OK"><DomainDNSSetHostsResult IsSuccess="true" /></ApiResponse>"#.to_string()
+                } else {
+                    g.commands.push("getHosts".into());
+                    let mut xml = String::from(
+                        r#"<?xml version="1.0"?><ApiResponse Status="OK"><CommandResponse><DomainDNSGetHostsResult EmailType=""#,
+                    );
+                    xml.push_str(&xml_escape(&g.email_type));
+                    xml.push_str(r#"">"#);
+                    for (n, t, a, mx, ttl) in &g.records {
+                        xml.push_str(&format!(
+                            r#"<host Name="{}" Type="{}" Address="{}" MXPref="{}" TTL="{}" />"#,
+                            xml_escape(n),
+                            xml_escape(t),
+                            xml_escape(a),
+                            xml_escape(mx),
+                            xml_escape(ttl)
+                        ));
+                    }
+                    xml.push_str("</DomainDNSGetHostsResult></CommandResponse></ApiResponse>");
+                    xml
+                }
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = std::io::Write::write_all(&mut stream, resp.as_bytes());
+        }
+    });
+    format!("http://{addr}/xml.response")
+}
+
+fn live_http_cmd(cred: &std::path::Path, base: &str) -> Command {
+    let mut c = Command::new(bin());
+    c.env("SURMOUNT_DNS_ZONE_NAMECHEAP_ENV", cred);
+    c.env("SURMOUNT_DNS_ZONE_NAMECHEAP_API_BASE", base);
+    c.env_remove("SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR");
+    c.env_remove("SURMOUNT_ACME_DNS_NAMECHEAP_MOCK_DIR");
+    c
+}
+
+/// `--live set-a` without MOCK_DIR must getHosts then setHosts on the
+/// local listener, not return the mock-dir error.
+#[test]
+fn live_set_a_without_mock_dir_gethosts_then_sethosts() {
+    let h = Harness::new();
+    let state = std::sync::Arc::new(std::sync::Mutex::new(FakeNc {
+        records: vec![
+            (
+                "@".into(),
+                "A".into(),
+                "203.0.113.10".into(),
+                "10".into(),
+                "1800".into(),
+            ),
+            (
+                "mail".into(),
+                "A".into(),
+                "203.0.113.11".into(),
+                "10".into(),
+                "1800".into(),
+            ),
+        ],
+        email_type: "MX".into(),
+        commands: Vec::new(),
+    }));
+    let base = spawn_namecheap_http(state.clone());
+    let out = live_http_cmd(&h.cred, &base)
+        .args(["--live", "set-a", "splora", "192.0.2.10"])
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(!text.contains("SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR"));
+    assert!(!text.contains("live Namecheap API is not used in tests"));
+    assert!(!text.contains("surmount-test-apikey-not-real-zone-001"));
+    let g = state.lock().unwrap();
+    assert_eq!(g.commands, ["getHosts", "setHosts"]);
+    assert_eq!(g.email_type, "MX");
+    assert!(
+        g.records
+            .iter()
+            .any(|(n, t, a, _, _)| n == "splora" && t == "A" && a == "192.0.2.10"),
+        "setHosts must publish merged A: {:?}",
+        g.records
+    );
+    assert!(
+        g.records.iter().any(|(n, t, _, _, _)| n == "@" && t == "A"),
+        "setHosts must re-apply other getHosts records"
+    );
+    assert!(
+        g.records
+            .iter()
+            .any(|(n, t, _, _, _)| n == "mail" && t == "A")
+    );
+}
+
+/// Operator shape: `--live set-host HOST --a V4` without MOCK_DIR.
+#[test]
+fn live_set_host_without_mock_dir_merges_a() {
+    let h = Harness::new();
+    let state = std::sync::Arc::new(std::sync::Mutex::new(FakeNc {
+        records: vec![(
+            "@".into(),
+            "A".into(),
+            "203.0.113.10".into(),
+            "10".into(),
+            "1800".into(),
+        )],
+        email_type: "MX".into(),
+        commands: Vec::new(),
+    }));
+    let base = spawn_namecheap_http(state.clone());
+    let out = live_http_cmd(&h.cred, &base)
+        .args(["--live", "set-host", "splora", "--a", "192.0.2.10"])
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(!text.contains("SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR"));
+    let g = state.lock().unwrap();
+    assert_eq!(g.commands, ["getHosts", "setHosts"]);
+    assert!(
+        g.records
+            .iter()
+            .any(|(n, t, a, _, _)| n == "splora" && t == "A" && a == "192.0.2.10")
+    );
+}
+
+#[test]
+fn dry_run_without_mock_dir_gethosts_not_sethosts() {
+    let h = Harness::new();
+    let state = std::sync::Arc::new(std::sync::Mutex::new(FakeNc {
+        records: vec![(
+            "@".into(),
+            "A".into(),
+            "203.0.113.10".into(),
+            "10".into(),
+            "1800".into(),
+        )],
+        email_type: "MX".into(),
+        commands: Vec::new(),
+    }));
+    let base = spawn_namecheap_http(state.clone());
+    let out = live_http_cmd(&h.cred, &base)
+        .args(["set-a", "splora", "192.0.2.10"])
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(text.to_ascii_lowercase().contains("dry-run"));
+    let g = state.lock().unwrap();
+    assert_eq!(g.commands, ["getHosts"]);
+    assert!(!g.records.iter().any(|(n, _, _, _, _)| n == "splora"));
 }

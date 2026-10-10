@@ -23,7 +23,7 @@
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -274,6 +274,43 @@ enum HelperTransport {
     Process(PathBuf),
 }
 
+/// Spawn the helper. Retry only `ETXTBSY` (os error 26).
+///
+/// Tests drop the script `File`, `sync_all`, and rename before spawn. That
+/// close-first sequence still returned text-file-busy for `helper-ok` on the
+/// Nix builder (shebang exec race). Each attempt is a new [`Command`]. Any
+/// other spawn error fail-closes on the first try. The last `ETXTBSY`
+/// fail-closes too.
+fn spawn_nft_helper(bin: &Path, nft_bin: Option<&Path>) -> Result<Child, String> {
+    const ATTEMPTS: u32 = 5;
+    for attempt in 0..ATTEMPTS {
+        let mut cmd = Command::new(bin);
+        cmd.arg("apply-json")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(nft) = nft_bin {
+            cmd.env("SURMOUNT_BAN_NFT_BIN", nft);
+        }
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(err) if err.raw_os_error() == Some(26) && attempt + 1 < ATTEMPTS => {
+                std::thread::sleep(Duration::from_millis(20 * u64::from(attempt + 1)));
+            }
+            Err(err) => {
+                return Err(format!(
+                    "spawn nft helper {}: {err} (fail-closed)",
+                    bin.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "spawn nft helper {}: ETXTBSY retries exhausted (fail-closed)",
+        bin.display()
+    ))
+}
+
 /// UI-side client. Prefer [`HelperNftClient::unix_socket`] on product hosts.
 ///
 /// Does **not** hold CAP_NET_ADMIN. Fail-closed on connect/IO/timeout/protocol.
@@ -424,18 +461,7 @@ impl HelperNftClient {
         }
 
         let payload = req.to_json_line()?;
-        let mut cmd = Command::new(bin);
-        cmd.arg("apply-json")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if let Some(nft) = &self.nft_bin {
-            cmd.env("SURMOUNT_BAN_NFT_BIN", nft);
-        }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("spawn nft helper {}: {e} (fail-closed)", bin.display()))?;
+        let mut child = spawn_nft_helper(bin, self.nft_bin.as_deref())?;
 
         {
             let mut stdin = child
@@ -840,7 +866,8 @@ mod tests {
                 .as_secs()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        // Write+fsync+rename so exec is not ETXTBSY (os error 26) on overlay/tmp.
+        // Drop the writer before rename. Close-first still returned ETXTBSY
+        // on the builder; spawn_nft_helper retries only that errno.
         fn write_exec(path: &std::path::Path, body: &str) {
             use std::io::Write;
             use std::os::unix::fs::PermissionsExt;

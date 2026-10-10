@@ -1,6 +1,6 @@
-# Crane / `nix develop` rustc. Pass nixpkgs-rust (nixos-unstable), not the
-# mail-host channel: nixos-26.05 is still 1.95. Locked unstable is 1.97.1
-# (2026-08-26). Rust 1.98.0 is out (2026-08-20) but not in this nixpkgs yet.
+# Crane / `nix develop` rustc. Pass nixpkgs-rust, not the mail-host channel.
+# nixos-26.05 rustc is still 1.95.0. nixpkgs-rust is pinned to c9f19b6
+# (rustc 1.99.0, pkgs.arti 2.6.0), not floating nixos-unstable.
 { pkgs }:
 pkgs.symlinkJoin {
   name = "surmount-rust-${pkgs.rustc.version}";

@@ -846,6 +846,29 @@ fn maybe_chown_ui_secret(_kind: &str, _path: &Path) {
     // chown only when surmount-ui exists; hermetic dest-root usually lacks it.
 }
 
+/// First remote stderr line that already states a directory or other refusal.
+/// Strips one leading `secrets-install-host:` so the process prefix is added once.
+fn remote_refusal_message(stderr: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(stderr);
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_lowercase();
+        if !lower.contains("directory") && !lower.contains("refuse") {
+            continue;
+        }
+        let msg = trimmed
+            .strip_prefix("secrets-install-host:")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(trimmed);
+        return Some(msg.to_string());
+    }
+    None
+}
+
 fn install_remote(
     src: &[u8],
     hpath: &str,
@@ -953,16 +976,22 @@ if [ -L \"$final\" ] || [ ! -f \"$final\" ]; then echo \"secrets-install-host: r
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| ToolError::fail(format!("ssh failed to start: {e}")))?;
-    {
+    // A directory refusal exits before `cat`, so the mock ssh never reads
+    // stdin and this write returns EPIPE. That io error must not replace
+    // the remote refusal text.
+    let write_err = {
         let mut stdin = child
             .stdin
             .take()
             .ok_or_else(|| ToolError::fail("ssh stdin was not piped".to_string()))?;
-        stdin.write_all(src)?;
-    }
+        stdin.write_all(src).err()
+    };
     let out = child
         .wait_with_output()
         .map_err(|e| ToolError::fail(format!("ssh wait: {e}")))?;
+    if let Some(msg) = remote_refusal_message(&out.stderr) {
+        return Err(ToolError::fail(msg));
+    }
     if !out.stderr.is_empty() {
         let _ = io::stderr().write_all(&out.stderr);
     }
@@ -971,6 +1000,9 @@ if [ -L \"$final\" ] || [ ! -f \"$final\" ]; then echo \"secrets-install-host: r
             "remote install failed (rc={})",
             out.status.code().unwrap_or(1)
         )));
+    }
+    if let Some(err) = write_err {
+        return Err(ToolError::from(err));
     }
     log_line(&format!(
         "installed kind={kind} -> {host}:{hpath} (mode {mode:04o})"

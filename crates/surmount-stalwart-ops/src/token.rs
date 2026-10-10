@@ -130,3 +130,121 @@ pub fn which_or(spec: &str) -> Result<String> {
     }
     Ok(spec.to_string())
 }
+
+/// Write `token` plus a newline at `path` with mode 0600.
+///
+/// When `owner` is set, the parent directory is mode 0750 and both the parent
+/// and the file are given to that user (the lab VM uses `surmount-ui`).
+/// Success does not print the token.
+pub fn write_api_token_file(path: &Path, token: &str, owner: Option<&str>) -> Result<()> {
+    assert_safe("api token", token)?;
+    if token.len() > 4096 || token.contains('\n') || token.contains('\r') {
+        return Err(ToolError::fail(
+            "api token must be a single reasonable line".to_string(),
+        ));
+    }
+    absolute_no_dotdot(path)?;
+    refuse_symlink(path, "token file must be a regular file (symlink refused)")?;
+    let Some(parent) = path.parent() else {
+        return Err(ToolError::fail("token path has no parent".to_string()));
+    };
+    if parent.as_os_str().is_empty() {
+        return Err(ToolError::fail("token path has no parent".to_string()));
+    }
+    fs::create_dir_all(parent)?;
+    if let Some(user) = owner {
+        chown_user(parent, user)?;
+        set_mode(parent, 0o750)?;
+    }
+    let tmp = parent.join(format!(".stalwart-api-token.{}.tmp", std::process::id()));
+    refuse_symlink(
+        &tmp,
+        "token temp path must be a regular file (symlink refused)",
+    )?;
+    if fs::symlink_metadata(&tmp).is_ok() {
+        fs::remove_file(&tmp)?;
+    }
+    let write_result = (|| -> Result<()> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        writeln!(file, "{token}")?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&tmp, path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err.into());
+    }
+    set_mode(path, 0o600)?;
+    if let Some(user) = owner {
+        chown_user(path, user)?;
+        set_mode(path, 0o600)?;
+    }
+    Ok(())
+}
+
+fn absolute_no_dotdot(path: &Path) -> Result<()> {
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(ToolError::fail(
+            "path must be absolute and must not contain ..".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn refuse_symlink(path: &Path, message: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(ToolError::fail(message.to_string())),
+        Ok(meta) if !meta.is_file() && meta.file_type().is_dir() => {
+            Err(ToolError::fail(format!("{message} (path is a directory)")))
+        }
+        Ok(_) | Err(_) => Ok(()),
+    }
+}
+
+fn set_mode(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perm = fs::metadata(path)?.permissions();
+    perm.set_mode(mode);
+    fs::set_permissions(path, perm)?;
+    Ok(())
+}
+
+fn chown_user(path: &Path, user: &str) -> Result<()> {
+    if !owner_name_ok(user) {
+        return Err(ToolError::fail("token owner name refused".to_string()));
+    }
+    let status = std::process::Command::new("chown")
+        .arg("--")
+        .arg(format!("{user}:{user}"))
+        .arg(path)
+        .status()?;
+    if !status.success() {
+        return Err(ToolError::fail(
+            "chown of the token path failed (secret values not logged)".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn owner_name_ok(user: &str) -> bool {
+    !user.is_empty()
+        && user.len() <= 32
+        && !user.starts_with('-')
+        && user
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
