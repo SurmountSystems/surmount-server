@@ -278,7 +278,7 @@ prior `/home/hunter/.agents/reports/impl-lake-memory-cap-2026-08-18.md`;
 ticket thread `/home/hunter/.agents/reports/ticket-261-thread-lessons-2026-08-18.md`.
 **Host package (btop, 2026-08-17; ET 2026-08-28):** `modules/btop.nix` adds
 `pkgs.btop` when `surmount.enable`; laptop `just btop` uses Eternal
-Terminal (`et -c btop`, live tty required, nested guest runs local
+Terminal (`et -e -c btop`, session stays as a shell, live tty required, nested guest runs local
 btop). **Not** on the live box until a `deploy-host` switch.
 Hermetic `just test-btop-host`. Report:
 `.agents/reports/impl-btop-ci-deploy-2026-08-17.md` (CI/deploy leftover).
@@ -432,8 +432,9 @@ self-signed PEMs are not host ownership or public cutover.
   inventory (empty + `source: unavailable`; no fake `admin@`). Domains from
   config labeled as inventory, not Stalwart directory. Live Stalwart probe on
   overview/mail. Hermetic tests: SSR markers, DOGE palette, nav, no skeleton,
-  accounts honesty, `/health`. No NPM. Crane: nixpkgs `rustPackages_1_95`
-  (host channel nixos-26.05).
+  accounts honesty, `/health`. No NPM. Crane rustc is 1.99.0 from
+  `nixpkgs-rust`, not host-channel `rustPackages_1_95` (nixos-26.05
+  `pkgs.rustc` is still 1.95.0).
   **DOGE theme (2026-08-01):** pure 3-bit RGB eight-color palette only
   (`data-theme="doge"`, `color-scheme: only dark`); no grays / no light
   media queries. Spec SurmountSystems/specs `0001_DOGE.md` v1.0.0.
@@ -995,7 +996,7 @@ a host **stop** at docs, tree wiring, and local e2e. Ladder detail:
 
 - [x] Version currency audit vs network latest (Stalwart family at tip;
       crane rustc 1.88 vs stable 1.97.1 noted in pre-26.05 audit; living
-      crane is 1.95 via `rustPackages_1_95`, see
+      crane is 1.99.0 from `nixpkgs-rust`, not host `rustPackages_1_95`, see
       [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)). Snapshot:
       [docs/research/version-audit.md](docs/research/version-audit.md)
 - [x] **Arti packaging currency:** Surmount-owned **2.5.1** source build

@@ -35,10 +35,16 @@
     # nix/packages/arti-onion-service.nix (Surmount-owned 2.6.0 source build).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # Rustc/cargo only for engines whose MSRV exceeds the host channel default.
-    # Arti 2.6.0 MSRV is 1.91. Keep a separate input so we can pin newer rustc
-    # without waiting on every host-channel package set. Bump when Arti needs it.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # rustc/cargo for crane packages and the grok-oss build. Not host
+    # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable: on 2026-10-10 that
+    # branch still only has pkgs/development/compilers/rust/1_98.nix.
+    # Not staging HEAD: that tip has rustc 1.99.0 and pkgs.arti 2.7.0.
+    # This rev is the nixpkgs commit "rust: 1.98.1 -> 1.99.0" (c9f19b6,
+    # committed 2026-10-01). pkgs.rustc is 1.99.0 and pkgs.arti stays 2.6.0.
+    # The rustc 1.99.0 source hash matches the official tarball. Crane
+    # 47b6b27 has no nixpkgs input: mkLib keeps host pkgs and
+    # overrideToolchain supplies this rustc. Do not float this input.
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/c9f19b6be67332ce2ee7520c1630c804685df838";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
@@ -176,7 +182,7 @@
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
-      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust / nixos-unstable).
+      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.0).
       mkManagementUiCrane =
         system:
         let
@@ -403,9 +409,10 @@
           };
           # Grok OSS from locked github:SurmountSystems/grok-oss (operator-bump).
           # Not in checks.ci (heavy crane). Module stays default-off.
+          # rustToolchain is nixpkgs-rust 1.99.0, not host pkgs.rustc 1.95.0.
           grok-oss = pkgs.callPackage ./nix/packages/grok-oss.nix {
             grokOssFlake = grok-oss;
-            inherit system;
+            inherit system rustToolchain;
           };
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
@@ -1007,7 +1014,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              # Match crane toolchain (nix/rust-toolchain.nix via nixpkgs-rust).
+              # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.99.0).
               (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
               rust-analyzer
               pkg-config

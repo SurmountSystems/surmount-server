@@ -1,7 +1,9 @@
 # Consume github:SurmountSystems/grok-oss flake package (bin/grok-oss).
-# Call as: pkgs.callPackage ./grok-oss.nix { inherit grokOssFlake system; }
+# Call as: pkgs.callPackage ./grok-oss.nix { inherit grokOssFlake system rustToolchain; }
 # Fail-closed: missing packages.grok-oss throws. Do not enable the NixOS
 # module without this package.
+# pkgs stays the host channel for C libraries. rustToolchain is
+# nixpkgs-rust (rustc 1.99.0). Do not use host pkgs.rustc / pkgs.cargo.
 
 {
   grokOssFlake,
@@ -9,6 +11,7 @@
   pkgs,
   lib,
   runCommand,
+  rustToolchain,
 }:
 let
   # Rewrite leftover stdenv.isLinux / stdenv.isDarwin to hostPlatform
@@ -23,7 +26,7 @@ let
       -e 's/stdenv\.isLinux/stdenv.hostPlatform.isLinux/g' \
       -e 's/stdenv\.isDarwin/stdenv.hostPlatform.isDarwin/g'
   '';
-  craneLib = grokOssFlake.inputs.crane.mkLib pkgs;
+  craneLib = (grokOssFlake.inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
   built = import "${patchedSrc}/flake/grok-oss.nix" {
     inherit pkgs lib craneLib;
     self = grokOssFlake;

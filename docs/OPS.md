@@ -792,8 +792,12 @@ reliability in [deploy-host-local.md](deploy-host-local.md) section 5
 
 `just btop` (`nix run .#surmount-btop-host`) uses Eternal Terminal to the same
 target as `just deploy-host` and `just et`, then runs interactive `btop`
-(`et -c btop`). It does not use a raw SSH that can freeze-paint a last frame.
-After btop exits, the Eternal Terminal session exits (not `et --noexit`).
+(`et -e -c btop`). It does not use a raw SSH that can freeze-paint a last frame.
+After btop exits, including q or Ctrl-C, the Eternal Terminal session stays
+up and drops to a shell on the mail host (`-e` / `--noexit` with `-c`).
+That shell is the emergency terminal. You do not need a second `just et`
+tunnel. Do not start `nixos-rebuild` or `just deploy` from that shell.
+The laptop still starts the switch. `just et` remains a shell-only client.
 Needs `etserver` on the guest (after `just deploy-host`). Target comes from
 `--target`, `SURMOUNT_DEPLOY_TARGET`, or
 `~/.local/share/surmount/agent-target.env`. Fails loud if those are missing,

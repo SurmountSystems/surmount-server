@@ -53,9 +53,10 @@ pub fn build_et_argv(
     v
 }
 
-/// Extra et flags for `just btop`: run btop, then exit (not `--noexit` / `-e`).
+/// Extra et flags for `just btop`.
+/// Packaged et 6.2.11: `-e` / `--noexit` with `-c` leaves a shell.
 pub fn btop_et_extra() -> Vec<String> {
-    vec!["-c".into(), "btop".into()]
+    vec!["-e".into(), "-c".into(), "btop".into()]
 }
 
 #[derive(Debug, Clone, Default)]
@@ -305,10 +306,9 @@ mod tests {
     }
 
     #[test]
-    fn btop_extra_is_command_without_noexit() {
+    fn btop_extra_runs_btop_then_leaves_shell() {
         let extra = btop_et_extra();
-        assert_eq!(extra, vec!["-c".to_string(), "btop".to_string()]);
-        assert!(!extra.iter().any(|w| w == "-e"));
+        assert_eq!(extra, vec!["-e".to_string(), "-c".to_string(), "btop".to_string()]);
     }
 
     #[test]

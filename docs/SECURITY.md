@@ -119,6 +119,11 @@ Lock-and-suite wave named 2026-10-05. These commands ran on 2026-10-09. `cargo u
 - `just check-heavy` exited 0. The mail VM test script finished in 98.69 seconds. Forcing `max-jobs = 0` is not part of that recipe. One earlier attempt that did force it exited 1, because the VM run needs `kvm` and `nixos-test` and the remote builder does not advertise those features. That was not an ssh drop, and it was not a second loop of a failed recipe run.
 - `just deploy-dry-run` exited 0. It printed the planned copy and switch and did not connect. `just deploy` was not run. `--install-secrets` was not passed.
 
+On 2026-10-10, after `cargo update` (cargo 1.99.0, menhera index, 0 packages moved), `just audit-remote` ran `checks.x86_64-linux.cargo-audit`. It exited 0. The Nix build log loaded 1290 advisories and scanned 481 crate dependencies in this repo-root `Cargo.lock`. It printed no RustSec id and no CVE name. The builder log also printed `warning: couldn't open crates.io index` (os error 2) under `--no-fetch`. That is not an advisory. Replaying that same `cargo-audit` 0.22.1 command from the derivation's store inputs also exited 0, printed the same 1290 and 481 counts, and printed no RustSec id. `--deny warnings` stayed on. Ignores stayed RUSTSEC-2024-0436 (`paste`) and RUSTSEC-2026-0173 (`proc-macro-error2`). No third ignore was added. The lock hash scanned is `sha256-YvPc+++PxY6cDk8ocpI6pVe5CJpTm91I969M5Tu5Fg8=`, the same as the repo `Cargo.lock`. Ceiling crates stayed reqwest 0.12.28, tower-http 0.6.11, rustls 0.23.45, and nostr 0.45.5.
+See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
+and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
+(accessed: 2026-10-10).
+
 ## Non-goals (this doc)
 
 - Live Vaultwarden unit / first admin user (S7b host residual after token;

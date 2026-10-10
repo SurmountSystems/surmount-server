@@ -5,7 +5,7 @@
 **Scope:** every material architectural assumption the Surmount Server tree
 currently implies via modules, packages, docs, or joins.
 
-**Living host (2026-08-07):** **nixos-26.05**, crane **`rustPackages_1_95`**,
+**Living host (2026-10-10):** **nixos-26.05** `pkgs.rustc` **1.95.0**. Crane rustc is **1.99.0** from `nixpkgs-rust`, not **`rustPackages_1_95`**.
 dual stock Stalwart module disable. See section 3 and section 22.
 
 **How to read this file**

@@ -80,16 +80,24 @@ The agent does not need Eternal Terminal to run eval, `just check-remote`,
 or the dry-run. Those use the laptop Nix client and ssh-ng as
 `nixbuilder`, or a non-interactive deploy dry-run.
 
-Activation can drop the SSH that started the **real** switch. The
-operator opens a second window and leaves it logged in **before section
-5**, not before section 2.
-
-From the laptop home justfile (`~/justfile` wrapping this clone) or from
-this clone:
+Activation can drop the SSH that started the **real** switch. Before
+section 5, not before section 2, open one laptop window from the home
+justfile (`~/justfile` wrapping this clone) or from this clone:
 
 ```bash
-just et
+just btop
 ```
+
+That window is enough. It opens remote btop on Eternal Terminal. When
+btop exits, including Ctrl-C in btop or quit with q, that same
+connection stays up and drops to a shell on the mail host. That shell
+is the emergency terminal. You do not need a second idle `just et`
+tunnel.
+
+Do not start `nixos-rebuild` or `just deploy` from that shell. The
+laptop still starts the switch. `just et` can stay as a shell-only
+client when you want a shell and no btop. It is not a second tunnel
+you must keep open.
 
 On the guest, for a switch that must survive a dead laptop tunnel:
 
@@ -97,8 +105,8 @@ On the guest, for a switch that must survive a dead laptop tunnel:
 tmux new -s switch
 ```
 
-Run the later switch command inside that tmux session if you are already
-on the guest. From the laptop, still keep `just et` open.
+Run the later switch command inside that tmux session only if you are
+already on the guest.
 
 Confirm the builder answers before quality work:
 
@@ -502,8 +510,11 @@ exit 0, then asks for the switch.
 
 ### Operator (after the agent reports dry-run green)
 
+The `just btop` window from section 1 is already the emergency
+terminal. Do not open a second idle `just et`. From the laptop, not
+from the shell inside that btop session:
+
 ```bash
-just et
 just deploy
 just status
 ```
