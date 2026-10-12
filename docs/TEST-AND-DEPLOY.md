@@ -9,12 +9,52 @@ Those failures belong on the agent. The operator runs the real switch
 in section 5 after the agent has already reported those gates green,
 and keeps Eternal Terminal open so activation cannot strand the box.
 
-**Last updated:** 2026-10-05. `just publish` publishes static sites.
+**Last updated:** 2026-10-12. Update, audit, test, and switch is the
+command block below. `just publish` publishes static sites.
 `just deploy` is the host switch. `just deploy-dry-run` is the agent
 dry-run. `just deploy-host` stays the explicit equivalent.
 
 Companions: [OPS.md](OPS.md), [deploy-host-local.md](deploy-host-local.md),
 [SECRETS.md](SECRETS.md), [hygiene.md](hygiene.md), [../AGENTS.md](../AGENTS.md).
+
+---
+
+## Update, audit, test, and switch
+
+From the repo root, in this order. One Nix client at a time. There is
+no `just` recipe for the first two lines.
+
+```bash
+nix flake update
+cargo update
+just audit-remote
+just check-remote
+just check-heavy
+just deploy-dry-run
+just btop
+just deploy
+```
+
+`nix flake update` moves branch inputs: nixpkgs `nixos-26.05`,
+`advisory-db`, grok-oss `main`, Splora, and `surmount-site`. It does
+not move commit-pinned `nixpkgs-rust`, `crane`, or `sops-nix`. grok-oss
+stays on `main` until `flake.nix` names another ref. Stalwart versions
+are the fixed-output files under `nix/packages/`, not this command.
+
+`cargo update` uses the menhera index already configured on the laptop.
+`just audit-remote` is the audit of that lock and must be the next
+command. Do not update and skip it. Do not audit a lock that was not
+just updated, unless a significant amount of time has passed. A few
+days is not that gap.
+
+`just check-remote` is the test gate. It includes clippy, fmt, crate
+tests, nixfmt, cargo-deny, cargo-audit, and the module, deploy-secrets,
+Arti, and Splora contracts. `just check-heavy` is the mail VM test. It
+is not inside `just check-remote`.
+
+Open `just btop` and leave it up. Run `just deploy` from another
+terminal. Do not start the switch from the btop shell. `just publish`
+is only the static sites. It is not this sequence.
 
 ---
 
@@ -483,6 +523,22 @@ egress. Do not mint a second certificate.
 ---
 
 ## 9. One-page command list
+
+### Update, audit, test, and switch
+
+The block in [Update, audit, test, and switch](#update-audit-test-and-switch)
+is the sequence. One-page copy:
+
+```bash
+nix flake update
+cargo update
+just audit-remote
+just check-remote
+just check-heavy
+just deploy-dry-run
+just btop
+just deploy
+```
 
 ### Agent (through dry-run; operator does not run these to find errors)
 

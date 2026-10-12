@@ -402,7 +402,7 @@ unless the agent cannot do it.
 
 - An update that is not followed by an audit of that new lock is not done.
 - An audit of a lock that was not just updated is not done, unless a significant amount of time has passed since the last paired update and audit. Do not invent a day count. Auditing a lock that was updated a few days earlier, without a new update, is not that gap.
-- In this repo the audit command is `just audit-remote` (hermetic `cargo-audit`). It runs in the same pass, after `cargo update`.
+- In this repo the audit command is `just audit-remote` (hermetic `cargo-audit`). It runs in the same pass, after `cargo update`. The full command block, including `nix flake update`, is [docs/TEST-AND-DEPLOY.md](docs/TEST-AND-DEPLOY.md) section *Update, audit, test, and switch*. Do not restate that block in chat. Point at that section.
 - Use the menhera cooldown index already configured for cargo. Do not point cargo at crates.io to skip the wait.
 - When the operator asks for either command, the agent runs the pair. Do not hand `cargo update` back because menhera is only on the laptop. The laptop-cargo forbid still covers tests, clippy, and rustc. It does not split this pair.
 
