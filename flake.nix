@@ -870,6 +870,12 @@
           # RUSTSEC-2026-0173 (proc-macro-error2) only.
           # See docs/SECURITY.md and .cargo/audit.toml.
           # --deny warnings stays. Do not ignore any other advisory.
+          # yanked.enabled is false because the sandbox has no crates.io
+          # index. cargo-audit otherwise prints "couldn't open crates.io
+          # index" and still exits 0. The nixos-26.05 cargo-audit binary
+          # has no --no-yanked flag. Yanked crates are refused by the
+          # menhera index when cargo update runs. This check does not
+          # pretend to scan yanks.
           cargo-audit =
             pkgs.runCommand "surmount-cargo-audit"
               {
@@ -877,6 +883,9 @@
               }
               ''
                 set -euo pipefail
+                export HOME="$PWD/home"
+                mkdir -p .cargo "$HOME/.cargo"
+                printf '%s\n' '[yanked]' 'enabled = false' | tee .cargo/audit.toml > "$HOME/.cargo/audit.toml"
                 cargo-audit audit --no-fetch --stale --deny warnings \
                   --ignore RUSTSEC-2024-0436 \
                   --ignore RUSTSEC-2026-0173 \
@@ -925,6 +934,18 @@
                 echo ok > "$out"
               '';
 
+          # just check is fmt, then clippy, then test. releaseTools.aggregate
+          # builds constituents in parallel, so each clippy derivation depends
+          # on cargo fmt and nixfmt. Clippy does not start until both pass.
+          afterFmt =
+            drv:
+            drv.overrideAttrs (old: {
+              buildInputs = (old.buildInputs or [ ]) ++ [
+                management-ui-fmt
+                nix-fmt-check
+              ];
+            });
+
           # Fast CI aggregate: rust quality + module contracts + nixfmt.
           # Excludes mail-vm-test, mail-vps toplevel, stalwart FODs, host e2e.
           ci = pkgs.releaseTools.aggregate {
@@ -932,21 +953,28 @@
             constituents = [
               self.packages.${system}.management-ui
               management-ui-test
-              management-ui-clippy
               management-ui-fmt
+              nix-fmt-check
+              (afterFmt management-ui-clippy)
               e2e-pure-test
-              e2e-clippy
+              (afterFmt e2e-clippy)
               module-eval-contract
               deploy-secrets-contract
               arti-module-contract
               arti-onion-package-contract
               public-site-package-contract
               splora-package-contract
-              nix-fmt-check
               cargo-deny-bans
               cargo-audit
             ]
-            ++ wave1CiExtras;
+            ++ lib.concatMap (
+              spec:
+              lib.optionals (wave1CrateLanded spec.crate) [
+                self.packages.${system}.${spec.crate}
+                wave1CheckAttrs."${spec.crate}-test"
+                (afterFmt wave1CheckAttrs."${spec.crate}-clippy")
+              ]
+            ) waveOps;
           };
         in
         {

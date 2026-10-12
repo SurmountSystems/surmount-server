@@ -42,13 +42,19 @@ stays on `main` until `flake.nix` names another ref. Stalwart versions
 are the fixed-output files under `nix/packages/`, not this command.
 
 `cargo update` uses the menhera index already configured on the laptop.
-`just audit-remote` is the audit of that lock and must be the next
-command. Do not update and skip it. Do not audit a lock that was not
-just updated, unless a significant amount of time has passed. A few
-days is not that gap.
+`just audit` and `just audit-remote` run the same RustSec check.
+`just audit-remote` forces the mail-host builder. Run one of them as
+the next command after `cargo update`. Do not update and skip it. Do
+not audit a lock that was not just updated, unless a significant
+amount of time has passed. A few days is not that gap. The check sets `[yanked] enabled = false` because the Nix sandbox
+has no crates.io index. Yanked crates are refused by the menhera index
+during `cargo update`.
+Nix does not warn that the git tree is dirty on these builds. The lock
+files are supposed to be uncommitted at this step.
 
-`just check-remote` is the test gate. It includes clippy, fmt, crate
-tests, nixfmt, cargo-deny, cargo-audit, and the module, deploy-secrets,
+`just check-remote` is the test gate. Fmt runs before clippy. Cargo
+fmt and nixfmt both finish before any clippy derivation starts. Then
+crate tests, cargo-deny, cargo-audit, and the module, deploy-secrets,
 Arti, and Splora contracts. `just check-heavy` is the mail VM test. It
 is not inside `just check-remote`.
 
@@ -61,8 +67,8 @@ is only the static sites. It is not this sequence.
 ## Why the operator still types the real switch
 
 The agent can and must run the entire procedure **up to and including**
-`just deploy-dry-run`. Named eval, `just check-remote`, clippy,
-nixfmt, and the dry-run plan are how errors show up. Dumping those
+`just deploy-dry-run`. Named eval, `just check-remote` (fmt and
+nixfmt, then clippy), and the dry-run plan are how errors show up. Dumping those
 commands on the operator is a broken leftover. Standing law:
 [../AGENTS.md](../AGENTS.md) *Deploy dry-run is agent work* and *Prove
 the operator gate*. The explicit equivalent of the dry-run is
@@ -241,22 +247,20 @@ What that does:
 
 The aggregate `checks.<system>.ci` constituents are:
 
+- `management-ui-fmt` and `nix-fmt-check` first
+- `management-ui-clippy`, `e2e-clippy`, and each landed wave1 `*-clippy` (`-D warnings`) only after those two pass
 - `packages.management-ui` (the UI binary)
 - `management-ui-test`
-- `management-ui-clippy` (`-D warnings`)
-- `management-ui-fmt`
 - `e2e-pure-test`
-- `e2e-clippy`
 - `module-eval-contract`
 - `deploy-secrets-contract`
 - `arti-module-contract`
 - `arti-onion-package-contract`
 - `public-site-package-contract`
 - `splora-package-contract`
-- `nix-fmt-check`
 - `cargo-deny-bans`
 - `cargo-audit`
-- plus `wave1CiExtras` from `flake.nix` when that list is non-empty
+- each landed wave1 package and that crate's test
 
 Not in `ci` (do not treat these as the quality bar):
 

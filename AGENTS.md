@@ -408,6 +408,12 @@ unless the agent cannot do it.
 
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
+## Fmt runs before clippy (operator 2026-10-12)
+
+Cargo fmt and nixfmt finish before clippy. `just check` is `fmt`, then `clippy`, then `test`. In `checks.*.ci`, `management-ui-clippy`, `e2e-clippy`, and each wave1 `*-clippy` depend on `management-ui-fmt` and `nix-fmt-check`. Do not list clippy before fmt. Do not let the CI aggregate start clippy beside fmt.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Mention is in scope; remote builder and niceness (operator 2026-08-17)
 
 If the operator mentioned work, that work is in scope. Implement it. Do **not**

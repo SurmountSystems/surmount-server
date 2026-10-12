@@ -109,7 +109,7 @@ remote-nix-build installable label:
       tee "$log" <"$fifo" >&2 &
       tee_pid=$!
       set +e
-      nix build --option max-jobs 0 --print-build-logs --print-out-paths --no-link "$installable" >"$outf" 2>"$fifo"
+      nix build --option max-jobs 0 --option warn-dirty false --print-build-logs --print-out-paths --no-link "$installable" >"$outf" 2>"$fifo"
       rc=$?
       set -e
       wait "$tee_pid" || true
@@ -146,8 +146,10 @@ remote-nix-build installable label:
     exit 1
 
 # Offline RustSec audit of crates/Cargo.lock (advisory-db flake input).
+# warn-dirty is off because this command runs after nix flake update
+# and cargo update, while those lock files are still uncommitted.
 audit:
-    nix build --print-build-logs ".#checks.{{system}}.cargo-audit"
+    nix build --option warn-dirty false --print-build-logs ".#checks.{{system}}.cargo-audit"
 
 # Ban sha1/md5 crates in the lockfile (cargo-deny bans).
 deny:
