@@ -14,11 +14,11 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "stalwart-webui";
-  version = "1.0.7";
+  version = "1.0.11";
 
   src = fetchurl {
     url = "https://github.com/stalwartlabs/webui/releases/download/v${finalAttrs.version}/webui.zip";
-    hash = "sha256-FCAod80zjFsXkgYKzYdUR7NFBvbyhv0yglfovQ5HV0o=";
+    hash = "sha256-1n5oyroCAkMBx52p8V/kZd6b9Tgs7lS9+cMJqXtBeaU=";
   };
 
   dontUnpack = true;

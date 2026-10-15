@@ -23,8 +23,9 @@ use base64::engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD}
 use hmac::{Hmac, Mac};
 use nostr::nips::nip19::ToBech32;
 pub use nostr::nips::nip98::{HttpData, HttpMethod};
-use nostr::prelude::{Event, EventBuilder, JsonUtil, Keys, Kind, PublicKey, TagKind, TagStandard};
-use nostr::{Timestamp, Url as NostrUrl};
+use nostr::prelude::{
+    Event, FinalizeEvent, IntoEventBuilder, Keys, Kind, PublicKey, Tags, Timestamp, Url as NostrUrl,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -393,27 +394,14 @@ pub fn verify_nip98_event_unlisted(
         return Err(AuthError::Skew);
     }
 
-    let authorized_url = event
-        .tags
-        .find_standardized(TagKind::u())
-        .and_then(|tag| match tag {
-            TagStandard::AbsoluteURL(u) => Some(u.to_string()),
-            _ => None,
-        })
-        .ok_or(AuthError::MissingTag("u"))?;
+    let authorized_url = nip98_tag_value(&event.tags, "u").ok_or(AuthError::MissingTag("u"))?;
 
     if !urls_match_for_nip98(&authorized_url, expected_url) {
         return Err(AuthError::UrlMismatch);
     }
 
-    let authorized_method = event
-        .tags
-        .find_standardized(TagKind::Method)
-        .and_then(|tag| match tag {
-            TagStandard::Method(m) => Some(m.to_string()),
-            _ => None,
-        })
-        .ok_or(AuthError::MissingTag("method"))?;
+    let authorized_method =
+        nip98_tag_value(&event.tags, "method").ok_or(AuthError::MissingTag("method"))?;
 
     if !authorized_method.eq_ignore_ascii_case(expected_method) {
         return Err(AuthError::MethodMismatch);
@@ -446,6 +434,18 @@ pub fn verify_nip98_event(
         return Err(AuthError::NotAllowlisted);
     }
     Ok(identity)
+}
+
+/// First value of a NIP-98 tag (`u` or `method`). nostr 0.45 dropped `TagKind`.
+fn nip98_tag_value(tags: &Tags, kind: &str) -> Option<String> {
+    tags.iter().find_map(|tag| {
+        let parts = tag.as_slice();
+        if parts.first().map(String::as_str) == Some(kind) {
+            parts.get(1).cloned()
+        } else {
+            None
+        }
+    })
 }
 
 /// Loose URL compare: normalize trailing slash on path-only roots.
@@ -797,11 +797,11 @@ pub fn sign_nip98_event(
 ) -> Result<Event, String> {
     let url = NostrUrl::parse(url).map_err(|e| e.to_string())?;
     let data = HttpData::new(url, method);
-    let mut builder = EventBuilder::http_auth(data);
+    let mut builder = data.into_event_builder();
     if let Some(ts) = created_at {
         builder = builder.custom_created_at(Timestamp::from_secs(ts));
     }
-    builder.sign_with_keys(keys).map_err(|e| e.to_string())
+    builder.finalize(keys).map_err(|e| e.to_string())
 }
 
 /// Encode event as `Authorization: Nostr <standard base64>` value (includes prefix).

@@ -259,6 +259,17 @@ Full write-up: [SECRETS.md](SECRETS.md). Hygiene top rule: [hygiene.md](hygiene.
 | Future PQ mail auth | Residual: when IETF and receivers support PQ or hybrid mail auth, Surmount tracks it. Separate from D1 TLS hybrid KEX and D2 PQConnect. |
 | Living docs | [DNS.md](DNS.md) *Hardness and quantum honesty*, [SECURITY.md](SECURITY.md), [OPS.md](OPS.md), [SECRETS.md](SECRETS.md), RESIDUAL B6 |
 
+### Google may send as surmount.systems (operator direction 2026-10-10)
+
+| Item | Direction |
+|------|-----------|
+| Domain | `surmount.systems` only. Do not apply this to `cryptoquick.com`. |
+| SPF | `v=spf1 a:mail.surmount.systems include:_spf.google.com -all`. Keep `a:mail.surmount.systems`. Still ends in `-all`. Do not use `~all` or `+all`. |
+| DMARC | Stays `p=quarantine`. Do not set `p=reject`. |
+| Google DKIM | Selector `google._domainkey` stays unpublished until Google Admin (Apps, Google Workspace, Gmail, Authenticate email) generates the TXT for selector name `google`. Do not invent a `p=` value. Google's private key stays at Google. |
+| Our DKIM | Selectors `stalwart` and `stalwart-rsa` stay. |
+| Living doc | [DNS.md](DNS.md) section *Google send (operator direction 2026-10-10)*. |
+
 ---
 
 ## 7. Process and language

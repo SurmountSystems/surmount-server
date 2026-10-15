@@ -2,14 +2,14 @@
 #
 # Why not stock pkgs.arti from the host nixpkgs channel?
 #   That channel packages Arti 1.4.2 (client-default features only). Upstream
-#   stable is far ahead (2.5.1 as of 2026-08-03; re-check 2026-08-27, no 2.6
-#   on crates.io). Greenfield Surmount pins the current engine here, same
+#   stable is far ahead (2.6.0, GitLab tag arti-v2.6.0). Greenfield Surmount
+#   pins the current engine here, same
 #   spirit as Stalwart: channel lag is not a reason to ship old Tor for the
 #   required HS surface.
 #
 # Why not only overrideAttrs on host pkgs.arti?
 #   Feature-only overrides inherit the channel version (1.4.2). This expression
-#   owns the upstream tag (arti-v2.5.1), features, and Surmount capability
+#   owns the upstream tag (arti-v2.6.0), features, and Surmount capability
 #   passthru.
 #
 # Why source build (not binary FOD like Stalwart)?
@@ -26,7 +26,7 @@
 #   works again, cargoHash can replace the artiUnstable.cargoDeps handoff.
 #
 # Toolchain:
-#   Arti 2.5.1 MSRV is 1.91. Older host channels had rustc < 1.91 and
+#   Arti 2.6.0 MSRV is 1.91. Older host channels had rustc < 1.91 and
 #   rustPackages_* tops out at 1.89. The flake passes a rustPlatform whose
 #   rustc/cargo meet MSRV (from the nixpkgs-rust input), without rebasing
 #   the whole host OS channel.
@@ -36,6 +36,8 @@
 #   expand. arti-client's matching feature pulls keymgr as needed for HS
 #   identity. Do not enable the arti binary experimental top-level `keymgr`
 #   unless a future residual proves it is required beyond onion-service-service.
+#   Counter Galois Onion is always on in 2.6.0, so this package does not pass
+#   that flag and does not use full.
 #
 # Never put HS private keys in this expression or the repo.
 # Live Tor publish still requires operator host keys + network verify (residual).
@@ -50,7 +52,7 @@
 #   5. Re-read upstream CHANGELOG / example config for TOML shape drift.
 #   6. Keep passthru.surmountOnionServiceCapable = true.
 #
-# Modelled on nixpkgs-unstable pkgs/by-name/ar/arti/package.nix (2.5.1 shape:
+# Modelled on nixpkgs-unstable pkgs/by-name/ar/arti/package.nix (2.6.0 shape:
 # buildAndTestSubdir, tokio-util postPatch, ARTI_FS_DISABLE_PERMISSION_CHECKS)
 # with Surmount pname, lean HS feature, and capability passthru.
 #
@@ -73,7 +75,7 @@
 
 let
   # Single source of truth for pin, cargoDeps assert, and GitLab tag.
-  version = "2.5.1";
+  version = "2.6.0";
 in
 assert lib.assertMsg (
   artiUnstable != null
@@ -91,7 +93,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     owner = "core";
     repo = "arti";
     tag = "arti-v${finalAttrs.version}";
-    hash = "sha256-fPobYu2ADTeIwpeXyxQKh5yr1zw+yMQfqTkiZMMd8YY=";
+    hash = "sha256-ukGplnZz1O1Djh12COKk8FL/3rLmmWGyl0b816wRWBE=";
   };
 
   # Working around a bug in cargo that appears with cargo-auditable, see
@@ -117,7 +119,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
   checkFeatures = [ "onion-service-service" ];
 
   checkFlags = [
-    # problematic test that hangs the build (same skip as nixpkgs 2.5.1)
+    # problematic test that hangs the build (same skip as nixpkgs 2.6.0)
     "--skip=reload_cfg::test::watch_single_file"
   ];
 

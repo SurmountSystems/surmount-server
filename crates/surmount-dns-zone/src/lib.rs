@@ -1,4 +1,5 @@
 //! Namecheap forward-zone helper. Default dry-run. Hermetic mock zone.
+//! `--live` without MOCK_DIR uses Namecheap getHosts then setHosts.
 //!
 //! SHA-1 parent DNSSEC digest type 1 fails closed on setHosts.
 

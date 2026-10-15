@@ -18,17 +18,17 @@
 }:
 
 let
-  version = "1.0.7";
+  version = "1.0.11";
 
   sources = {
     x86_64-linux = {
       url = "https://github.com/stalwartlabs/vandelay/releases/download/v${version}/vandelay-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-6maiYWqAfYrqb1DBbg0xk/4P4kOAzkn6eEsNACnz1v4=";
+      hash = "sha256-vXaqse8suZAFjXMe8b8UpKOVfh8HsaEibbFHiic0BWY=";
       dir = "vandelay-x86_64-unknown-linux-gnu";
     };
     aarch64-linux = {
       url = "https://github.com/stalwartlabs/vandelay/releases/download/v${version}/vandelay-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-SvpCtDh94+dCDh6GyhmMW62UOwVHmxRNU6FomaFzY6A=";
+      hash = "sha256-wBNbenTAzN6xHSl9LlvhMd/lNCgxY88wY1IblB8wxY4=";
       dir = "vandelay-aarch64-unknown-linux-gnu";
     };
   };

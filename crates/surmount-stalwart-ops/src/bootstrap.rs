@@ -325,7 +325,13 @@ where
     Ok(())
 }
 
-fn ensure_local(cli: &str, url: &str, user: &str, domain: &str, password: &str) -> Result<String> {
+pub(crate) fn ensure_local(
+    cli: &str,
+    url: &str,
+    user: &str,
+    domain: &str,
+    password: &str,
+) -> Result<String> {
     log_line(&format!("ensure directory: query domain name={domain}"));
     let q = Command::new(cli)
         .args([
@@ -455,7 +461,7 @@ fn ensure_local(cli: &str, url: &str, user: &str, domain: &str, password: &str) 
     Ok(apikey_user)
 }
 
-fn local_create(
+pub(crate) fn local_create(
     cli: &str,
     url: &str,
     user: &str,
@@ -553,7 +559,7 @@ fn read_password_file(path: &str) -> Result<String> {
         .to_string())
 }
 
-fn scrub(out: &str, password: &str) -> String {
+pub(crate) fn scrub(out: &str, password: &str) -> String {
     out.lines()
         .filter(|l| !l.contains(concat!("Secret", ":")))
         .map(|l| {

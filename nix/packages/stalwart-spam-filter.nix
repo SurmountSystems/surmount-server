@@ -14,16 +14,16 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "stalwart-spam-filter";
-  version = "3.0.0";
+  version = "3.0.2";
 
   srcToml = fetchurl {
     url = "https://github.com/stalwartlabs/spam-filter/releases/download/v${finalAttrs.version}/spam-filter.toml";
-    hash = "sha256-SsA1KDJA5Xcq0eQiumipy8uYW43obcTIjbtgBhtRvQc=";
+    hash = "sha256-MridVW9VRZkg+tLL+pS+Tmq4ObB22ptwObGvRF0RDnw=";
   };
 
   srcRules = fetchurl {
     url = "https://github.com/stalwartlabs/spam-filter/releases/download/v${finalAttrs.version}/spam-filter-rules.json.gz";
-    hash = "sha256-xObN2h5oG2HtWWFuOJSp8rv/jJT8ugFCfDC1sLMP7vo=";
+    hash = "sha256-HTpm9vqaMvcRxbOnOFNmPv8nyZSkbo9qDbZKmypYD1I=";
   };
 
   dontUnpack = true;

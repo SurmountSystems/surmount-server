@@ -4,7 +4,8 @@ Intentional design of every durable and semi-durable store in the Surmount
 mail + web stack. Written for a senior database engineer: precise, no
 "defaults are fine," explicit unknowns, load-test honesty.
 
-**Last updated:** 2026-08-19 (sshd host keys: module generates ed25519 only;
+**Last updated:** 2026-09-11 (per-site onion nicknames JSON + published-hostnames
+dir; HS keys still off git). Prior 2026-08-19 (sshd host keys: module generates ed25519 only;
 leftover RSA files on a live host are not deleted by hostKeys). Prior
 2026-08-17 (Arti HS identity dir + optional onion map file)
 
@@ -562,7 +563,9 @@ wired in modules yet.
 | Extra static site document roots | Static HTML/CSS/JS/media | `/var/lib/surmount/static-sites/<slug>` (Nix `managementUi.staticVhosts`; env `SURMOUNT_STATIC_VHOSTS_FILE`) | Files | Operator copy from DS3018xs GVFS; not git | Public site files (no deploy secrets) | surmount-management-ui |
 | Arti HS identity | Arti onion-service keystore | `surmount.artiHiddenService.onionServiceStateDir` (module default `/run/surmount-secrets/arti/onion-service` is **ephemeral**; live host uses durable Domain B under `/var/lib/surmount/secrets/arti/onion-service`) | Files; **reboot-safe only if not `/run`** | **Operator offline backup** (still residual). Never public git | **HS private keys** (0700 keystore). Onion **hostname** is not a secret | `surmount-arti`; module does not create the dir |
 | Arti process cache / HOME | Arti cache + `port_info.json` | `/var/lib/surmount/arti` (tmpfiles 0750 `surmount-arti`). Live host-local sets unit `HOME=` here | Files | Optional / skip | No keys | `surmount-arti` |
-| Optional onion map file | JSON host-to-onion overrides | `SURMOUNT_ONION_MAP_FILE` only if set; not required when auto-derive apex/www/services | Files | With operator path | Onion hostnames only; never HS keys | Operator / management-ui (loaded at process start) |
+| Optional onion map file | JSON host-to-onion overrides | `SURMOUNT_ONION_MAP_FILE` only if set | Files | With operator path | Onion hostnames only; never HS keys | Operator / management-ui (loaded at process start) |
+| Per-site onion nicknames | JSON clearnet Host -> Arti nickname | `/etc/surmount/onion-site-nicknames.json` (`SURMOUNT_ONION_SITE_NICKNAMES_FILE`) | Nix etc | With generation | Nicknames only; never HS keys | arti-hidden-service.nix |
+| Published per-site onion addresses | One file per Arti nickname | `surmount.artiHiddenService.stateDir` + `/published-hostnames` (`SURMOUNT_ONION_PUBLISHED_HOSTNAMES_DIR`) | Files; filled after `arti hss onion-address` | Optional | Public v3 addresses only; never HS keys | surmount-arti ExecStartPost |
 | nft surmount_guard sets | nftables sets (empty at install) | kernel nft when accessControl.nftSets | Host firewall | N/A (rebuilt from app/helper) | No | hardening.nix |
 | Product auth (npub allowlist) | Host file / env | `nostrAllowlistFile` Domain B path | As designed | sops + state | Bootstrap Administrator npubs; not User map rows | Surmount |
 | nginx (transitional) / future Axum-first edge state | certs + conf | conf in Nix; see EDGE_AND_TLS / tls research | Cert material | `/var/lib/acme` (scaffold) | Private keys | Edge module |

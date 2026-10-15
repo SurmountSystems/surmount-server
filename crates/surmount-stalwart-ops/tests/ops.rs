@@ -492,3 +492,280 @@ fn mail_tls_help() {
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.contains("--dry-run") && s.contains("Certificate"));
 }
+
+const VM_LAB_TOKEN: &str = "API_SYNTHETIC_VM_LAB_TOKEN_NOT_FOR_STDOUT_9f3c";
+const VM_LAB_PASSWORD: &str = "SYNTHETIC-ADMIN-PASSWORD-NOT-REAL-7e4b";
+
+fn vm_lab_smtp_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_vm-lab-smtp-accept")
+}
+
+fn smtp_script(replies: &str, rcpt: &str) -> (surmount_stalwart_ops::SmtpAcceptReport, Vec<u8>) {
+    let mut reader = std::io::BufReader::new(std::io::Cursor::new(replies.as_bytes()));
+    let mut outbound = Vec::new();
+    let report = surmount_stalwart_ops::smtp_accept_io(&mut reader, &mut outbound, rcpt);
+    (report, outbound)
+}
+
+fn fake_directory_cli(dir: &Path) -> PathBuf {
+    let body = r#"#!/bin/sh
+set -eu
+if [ -z "${STALWART_PASSWORD:-}" ]; then
+  echo "missing password" >&2
+  exit 2
+fi
+case "$*" in
+  *PASSWORD_SENTINEL*)
+    echo "leaked" >&2
+    exit 99
+    ;;
+esac
+case "$*" in
+  *query*domain*)
+    printf '%s\n' '{"items":[{"id":"d1","name":"example.test"}]}'
+    exit 0
+    ;;
+  *query*account*)
+    printf '%s\n' '{"items":[{"id":"a","name":"admin","emailAddress":"admin@example.test","roles":{"@type":"Admin"}}]}'
+    exit 0
+    ;;
+  *create*apikey*)
+    printf '%s\n' 'Secret: TOKEN_SENTINEL'
+    exit 0
+    ;;
+  *)
+    echo "unexpected" >&2
+    exit 1
+    ;;
+esac
+"#
+    .replace("PASSWORD_SENTINEL", VM_LAB_PASSWORD)
+    .replace("TOKEN_SENTINEL", VM_LAB_TOKEN);
+    write_exec(dir, "stalwart-cli", &body)
+}
+
+fn lab_recovery(dir: &Path) -> PathBuf {
+    let recovery = dir.join("recovery.env");
+    fs::write(
+        &recovery,
+        format!("STALWART_RECOVERY_ADMIN=admin:{VM_LAB_PASSWORD}\n"),
+    )
+    .unwrap();
+    chmod_600(&recovery);
+    recovery
+}
+
+#[test]
+fn vm_lab_smtp_rcpt_250_prints_data_line() {
+    // EHLO is multiline on purpose so a one-line reader falls out of step.
+    let replies = "\
+220 lab ESMTP\r\n\
+250-PIPELINING\r\n\
+250-SIZE 100\r\n\
+250 HELP\r\n\
+250 sender ok\r\n\
+250 recipient ok\r\n\
+354 end data with <CR><LF>.<CR><LF>\r\n\
+250 queued as vm\r\n\
+221 bye\r\n";
+    let (report, outbound) = smtp_script(replies, "recvbox@example.test");
+    assert!(report.success, "{report:?}");
+    assert_eq!(
+        report.lines,
+        vec!["RCPT 250".to_string(), "DATA 250".to_string()]
+    );
+    let wire = String::from_utf8(outbound).unwrap();
+    assert!(wire.contains("EHLO mail.example.test\r\n"));
+    assert!(wire.contains("MAIL FROM:<>\r\n"));
+    assert!(wire.contains("RCPT TO:<recvbox@example.test>\r\n"));
+    assert!(wire.contains("DATA\r\n"));
+    assert!(wire.contains("vm-receive-proof\r\n.\r\n"));
+    assert!(
+        report
+            .lines
+            .iter()
+            .all(|line| !line.contains("vm-receive-proof"))
+    );
+}
+
+#[test]
+fn vm_lab_smtp_rcpt_refusal_prints_rcpt_and_no_data_line() {
+    let replies = "\
+220 lab ESMTP\r\n\
+250 OK\r\n\
+250 sender ok\r\n\
+550 5.1.1 user unknown\r\n\
+221 bye\r\n";
+    let (report, outbound) = smtp_script(replies, "notcreated@example.test");
+    assert!(report.success, "{report:?}");
+    assert!(report.error.is_none());
+    assert_eq!(report.lines, vec!["RCPT 550".to_string()]);
+    assert!(report.lines.iter().all(|line| !line.starts_with("DATA ")));
+    let wire = String::from_utf8(outbound).unwrap();
+    assert!(wire.contains("RCPT TO:<notcreated@example.test>\r\n"));
+    assert!(wire.contains("QUIT\r\n"));
+    assert!(!wire.contains("DATA\r\n"));
+}
+
+#[test]
+fn vm_lab_smtp_data_not_250_fails_after_the_data_line() {
+    let replies = "\
+220 lab ESMTP\r\n\
+250 OK\r\n\
+250 sender ok\r\n\
+250 recipient ok\r\n\
+354 end\r\n\
+451 queue refused\r\n\
+221 bye\r\n";
+    let (report, _) = smtp_script(replies, "recvbox@example.test");
+    assert!(!report.success);
+    assert_eq!(
+        report.lines,
+        vec!["RCPT 250".to_string(), "DATA 451".to_string()]
+    );
+}
+
+#[test]
+fn vm_lab_smtp_foreign_domain_does_not_talk() {
+    let (report, outbound) = smtp_script("220 lab ESMTP\r\n", "user@other.test");
+    assert!(!report.success);
+    assert!(report.lines.is_empty());
+    assert!(outbound.is_empty());
+    assert_eq!(
+        report.error.as_deref(),
+        Some("refusing non-example.test recipient")
+    );
+}
+
+#[test]
+fn vm_lab_smtp_accept_bin_rejects_foreign_domain() {
+    let out = Command::new(vm_lab_smtp_bin())
+        .arg("user@other.test")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout
+            .lines()
+            .all(|line| !line.starts_with("RCPT ") && !line.starts_with("DATA "))
+    );
+}
+
+#[test]
+fn vm_lab_token_file_is_mode_0600_without_printing_token() {
+    let work = temp_dir("vm-token");
+    let path = work.join("dir").join("stalwart-api-token");
+    surmount_stalwart_ops::write_api_token_file(&path, VM_LAB_TOKEN, None).unwrap();
+    let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        format!("{VM_LAB_TOKEN}\n")
+    );
+}
+
+#[test]
+fn vm_lab_token_file_refuses_symlink() {
+    let work = temp_dir("vm-symlink");
+    let real = work.join("real");
+    fs::write(&real, "x\n").unwrap();
+    let link = work.join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let err = surmount_stalwart_ops::write_api_token_file(&link, VM_LAB_TOKEN, None).unwrap_err();
+    assert!(!err.to_string().contains(VM_LAB_TOKEN));
+    assert_eq!(fs::read_to_string(&real).unwrap(), "x\n");
+}
+
+#[test]
+fn vm_lab_directory_setup_rejects_arguments() {
+    let err = surmount_stalwart_ops::run_vm_lab_directory_guest(["--help"]).unwrap_err();
+    assert!(err.to_string().contains("no arguments"));
+}
+
+#[test]
+fn vm_lab_directory_missing_pin_fails_before_http() {
+    let work = temp_dir("vm-nopin");
+    let recovery = work.join("recovery.env");
+    fs::write(&recovery, "OTHER=1\n").unwrap();
+    chmod_600(&recovery);
+    let token_path = work.join("stalwart-api-token");
+    let cli = write_exec(&work, "stalwart-cli", "#!/bin/sh\nexit 99\n");
+    let opts = surmount_stalwart_ops::VmLabDirectory::hermetic(&recovery, &token_path, &cli);
+    let err = surmount_stalwart_ops::run_vm_lab_directory(
+        &opts,
+        |_host, _port| panic!("http should not be probed"),
+        |_unit| panic!("forward should not start"),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("recovery pin"));
+    assert!(!token_path.exists());
+}
+
+#[test]
+fn vm_lab_directory_status_lines_omit_token_and_file_is_0600() {
+    let work = temp_dir("vm-dir");
+    let cli = fake_directory_cli(&work);
+    let recovery = lab_recovery(&work);
+    let token_path = work.join("ui").join("stalwart-api-token");
+    let opts = surmount_stalwart_ops::VmLabDirectory::hermetic(&recovery, &token_path, &cli);
+    let lines = surmount_stalwart_ops::run_vm_lab_directory(
+        &opts,
+        |host, _port| host == "127.0.0.1",
+        |_unit| {
+            Err(surmount_stalwart_ops::ToolError::fail(
+                "forward unit must not start when 127.0.0.1:8080 is open".to_string(),
+            ))
+        },
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
+    let rendered = lines.join("\n");
+    let domain_at = lines
+        .iter()
+        .position(|line| line == "domain-ready")
+        .unwrap();
+    let token_at = lines.iter().position(|line| line == "token-ready").unwrap();
+    assert!(domain_at < token_at, "{rendered}");
+    assert!(!rendered.contains(VM_LAB_TOKEN), "{rendered}");
+    assert!(!rendered.contains(VM_LAB_PASSWORD), "{rendered}");
+    assert!(!rendered.contains("Secret"), "{rendered}");
+    let mode = fs::metadata(&token_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert_eq!(
+        fs::read_to_string(&token_path).unwrap(),
+        format!("{VM_LAB_TOKEN}\n")
+    );
+}
+
+#[test]
+fn vm_lab_directory_forwards_ipv6_management_then_writes_token() {
+    let work = temp_dir("vm-fwd");
+    let cli = fake_directory_cli(&work);
+    let recovery = lab_recovery(&work);
+    let token_path = work.join("stalwart-api-token");
+    let opts = surmount_stalwart_ops::VmLabDirectory::hermetic(&recovery, &token_path, &cli);
+    let phase = std::cell::Cell::new(0u8);
+    let lines = surmount_stalwart_ops::run_vm_lab_directory(
+        &opts,
+        |host, _port| match (host, phase.get()) {
+            ("127.0.0.1", 0) => false,
+            ("::1", 0) => true,
+            ("127.0.0.1", 1) => true,
+            _ => false,
+        },
+        |_unit| -> surmount_stalwart_ops::Result<()> {
+            phase.set(1);
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|err| panic!("{err}"));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "management-http forwarded from ::1")
+    );
+    assert!(lines.iter().any(|line| line == "token-ready"));
+    assert!(!lines.join("\n").contains(VM_LAB_TOKEN));
+    let mode = fs::metadata(&token_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}

@@ -286,6 +286,7 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
                 "deploy-host: running secrets-install-host (host-id={}; values not logged)",
                 opts.secrets_host_id.as_deref().unwrap_or("")
             );
+            // The bridge may already have written host secrets. Do not retry it.
             run_cmd(&secrets_cmd)?;
         }
     }
@@ -305,6 +306,12 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
     let mut smoke_rc = 0i32;
     if opts.dry_run {
         println!(
+            "deploy-host: dry-run: ssh keepalives ServerAliveInterval=30 ServerAliveCountMax=10 TCPKeepAlive=yes"
+        );
+        println!(
+            "deploy-host: dry-run: a dropped connection retries before nixos-rebuild; a switch SSH drop is not retried"
+        );
+        println!(
             "deploy-host: dry-run: rebuild uses path: flake so host-local (rsync'd, not in public git) is visible to Nix (git flake would omit untracked/gitignored paths)"
         );
         println!(
@@ -313,7 +320,7 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
             shell_quote(&rebuild_remote_cmd)
         );
         println!(
-            "deploy-host: dry-run: post-switch smoke always runs after rebuild (even if rebuild exit non-zero): ssh -- {} {}",
+            "deploy-host: dry-run: post-switch smoke runs after a rebuild that finished (including a non-zero rebuild exit): ssh -- {} {}",
             shell_quote(&opts.target),
             shell_quote(&smoke_remote_cmd)
         );
@@ -321,13 +328,30 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
             "deploy-host: dry-run: smoke checks generation + systemctl is-active sshd stalwart-mail surmount-management-ui (start UI if inactive) + loopback /health"
         );
     } else {
-        rebuild_rc = ssh_run_rc(&opts.target, &rebuild_remote_cmd);
+        // One switch attempt. A drop after this starts may have changed the host.
+        let finish = ssh_finish(&opts.target, &rebuild_remote_cmd);
+        if let RemoteFinish::Connection { code } = &finish {
+            eprintln!(
+                "deploy-host: nixos-rebuild exit={}",
+                ssh_status_label(*code)
+            );
+        }
+        rebuild_rc = switch_outcome(finish)?;
         eprintln!("deploy-host: nixos-rebuild exit={rebuild_rc}");
         eprintln!(
-            "deploy-host: running post-switch smoke on {} (always after rebuild)",
+            "deploy-host: running post-switch smoke on {} (after a finished rebuild)",
             opts.target
         );
-        smoke_rc = ssh_run_rc(&opts.target, &smoke_remote_cmd);
+        smoke_rc = match retry_remote(&format!("post-switch smoke ssh -- {}", opts.target), || {
+            ssh_finish(&opts.target, &smoke_remote_cmd)
+        }) {
+            Ok(code) => code,
+            Err(err) => {
+                return Err(ToolError::fail(format!(
+                    "{err}; not starting a second switch"
+                )));
+            }
+        };
         eprintln!("deploy-host: post-switch smoke exit={smoke_rc}");
     }
 
@@ -456,26 +480,40 @@ fn ssh_rsh(target: &str) -> String {
         .join(" ")
 }
 
-fn ssh_run(host: &str, remote_cmd: &str) -> Result<(), ToolError> {
-    let extra = ssh_extra_args(host);
-    let st = Command::new(ssh_bin())
-        .args(&extra)
-        .arg("--")
-        .arg(host)
-        .arg(remote_cmd)
-        .status()
-        .map_err(|e| ToolError::fail(format!("ssh failed: {e}")))?;
-    if st.success() {
-        Ok(())
-    } else {
-        Err(ToolError::fail(format!(
-            "ssh -- {host} exited {}",
-            st.code().unwrap_or(1)
-        )))
+/// OpenSSH client failure is 255. A remote command that finished uses its
+/// own status, including 1. No code means the client died on a signal.
+const SSH_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RemoteFinish {
+    Exited(i32),
+    Connection { code: Option<i32> },
+    Local(String),
+}
+
+fn classify_ssh_code(code: Option<i32>) -> RemoteFinish {
+    match code {
+        Some(255) | None => RemoteFinish::Connection { code },
+        Some(other) => RemoteFinish::Exited(other),
     }
 }
 
-fn ssh_run_rc(host: &str, remote_cmd: &str) -> i32 {
+/// rsync passes ssh's 255 through. 10, 30, and 35 are socket and timeout exits.
+fn classify_rsync_code(code: Option<i32>) -> RemoteFinish {
+    match code {
+        Some(10 | 30 | 35 | 255) | None => RemoteFinish::Connection { code },
+        Some(other) => RemoteFinish::Exited(other),
+    }
+}
+
+fn ssh_status_label(code: Option<i32>) -> String {
+    match code {
+        Some(code) => code.to_string(),
+        None => "signal".to_string(),
+    }
+}
+
+fn ssh_finish(host: &str, remote_cmd: &str) -> RemoteFinish {
     let extra = ssh_extra_args(host);
     match Command::new(ssh_bin())
         .args(&extra)
@@ -484,8 +522,63 @@ fn ssh_run_rc(host: &str, remote_cmd: &str) -> i32 {
         .arg(remote_cmd)
         .status()
     {
-        Ok(s) => s.code().unwrap_or(1),
-        Err(_) => 1,
+        Ok(status) => classify_ssh_code(status.code()),
+        Err(e) => RemoteFinish::Local(format!("ssh failed: {e}")),
+    }
+}
+
+/// Retry a connection drop. A finished remote status, including exit 1, returns immediately.
+fn retry_remote<F>(what: &str, mut once: F) -> Result<i32, ToolError>
+where
+    F: FnMut() -> RemoteFinish,
+{
+    let mut last = RemoteFinish::Connection { code: None };
+    for attempt in 1..=SSH_ATTEMPTS {
+        match once() {
+            RemoteFinish::Exited(code) => return Ok(code),
+            RemoteFinish::Local(msg) => return Err(ToolError::fail(msg)),
+            finish @ RemoteFinish::Connection { .. } => {
+                last = finish;
+                if attempt == SSH_ATTEMPTS {
+                    break;
+                }
+                eprintln!(
+                    "deploy-host: connection failed (attempt {attempt} of {SSH_ATTEMPTS}); retrying {what}"
+                );
+            }
+        }
+    }
+    let shown = match &last {
+        RemoteFinish::Connection { code } => ssh_status_label(*code),
+        _ => "signal".to_string(),
+    };
+    Err(ToolError::fail(format!(
+        "connection failed after {SSH_ATTEMPTS} attempts: {what} exited {shown}"
+    )))
+}
+
+/// The switch is one attempt. Never call this in a retry loop.
+fn switch_outcome(finish: RemoteFinish) -> Result<i32, ToolError> {
+    match finish {
+        RemoteFinish::Exited(code) => Ok(code),
+        RemoteFinish::Connection { code } => {
+            let shown = ssh_status_label(code);
+            Err(ToolError::fail(format!(
+                "connection failed during nixos-rebuild switch (ssh status {shown}); not starting a second switch"
+            )))
+        }
+        RemoteFinish::Local(msg) => Err(ToolError::fail(format!(
+            "connection failed during nixos-rebuild switch ({msg}); not starting a second switch"
+        ))),
+    }
+}
+
+fn ssh_run(host: &str, remote_cmd: &str) -> Result<(), ToolError> {
+    let code = retry_remote(&format!("ssh -- {host}"), || ssh_finish(host, remote_cmd))?;
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(ToolError::fail(format!("ssh -- {host} exited {code}")))
     }
 }
 
@@ -513,16 +606,19 @@ fn rsync_remote(
 ) -> Result<(), ToolError> {
     let src_s = format!("{}/", src.display());
     let dest_s = format!("{target}:{}/", remote_dir.trim_end_matches('/'));
-    let mut cmd = Command::new("rsync");
-    cmd.arg("-e").arg(ssh_rsh(target));
-    cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
-    let st = cmd
-        .status()
-        .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
-    if st.success() {
+    let code = retry_remote("rsync", || {
+        let mut cmd = Command::new("rsync");
+        cmd.arg("-e").arg(ssh_rsh(target));
+        cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
+        match cmd.status() {
+            Ok(status) => classify_rsync_code(status.code()),
+            Err(e) => RemoteFinish::Local(format!("rsync failed: {e}")),
+        }
+    })?;
+    if code == 0 {
         Ok(())
     } else {
-        Err(ToolError::fail("rsync exited non-zero"))
+        Err(ToolError::fail(format!("rsync exited {code}")))
     }
 }
 
@@ -566,6 +662,91 @@ mod tests {
         let a = ssh_extra_args("example.test");
         let joined = a.join(" ");
         assert!(joined.contains("ServerAliveInterval=30"), "{joined}");
+        assert!(joined.contains("ServerAliveCountMax=10"), "{joined}");
+        assert!(joined.contains("TCPKeepAlive=yes"), "{joined}");
         assert!(joined.contains("BatchMode=yes"), "{joined}");
+    }
+
+    #[test]
+    fn ssh_255_is_connection_and_remote_exit_is_not() {
+        assert_eq!(
+            classify_ssh_code(Some(255)),
+            RemoteFinish::Connection { code: Some(255) }
+        );
+        assert_eq!(
+            classify_ssh_code(None),
+            RemoteFinish::Connection { code: None }
+        );
+        assert_eq!(classify_ssh_code(Some(0)), RemoteFinish::Exited(0));
+        assert_eq!(classify_ssh_code(Some(1)), RemoteFinish::Exited(1));
+    }
+
+    #[test]
+    fn rsync_socket_codes_are_connection() {
+        for code in [10, 30, 35, 255] {
+            assert!(
+                matches!(
+                    classify_rsync_code(Some(code)),
+                    RemoteFinish::Connection { .. }
+                ),
+                "{code}"
+            );
+        }
+        assert_eq!(classify_rsync_code(Some(1)), RemoteFinish::Exited(1));
+        assert_eq!(classify_rsync_code(Some(23)), RemoteFinish::Exited(23));
+        assert_eq!(
+            classify_rsync_code(None),
+            RemoteFinish::Connection { code: None }
+        );
+    }
+
+    #[test]
+    fn retry_repeats_only_connection_failures() {
+        let mut calls = 0;
+        let err = retry_remote("ssh -- example.test", || {
+            calls += 1;
+            RemoteFinish::Connection { code: Some(255) }
+        })
+        .unwrap_err();
+        assert_eq!(calls, 3);
+        assert!(err.message.contains("connection failed"), "{}", err.message);
+        assert!(err.exit_code != 0);
+
+        calls = 0;
+        let code = retry_remote("ssh -- example.test", || {
+            calls += 1;
+            RemoteFinish::Exited(1)
+        })
+        .unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(calls, 1);
+
+        calls = 0;
+        let err = retry_remote("ssh -- example.test", || {
+            calls += 1;
+            RemoteFinish::Local("ssh failed: missing".into())
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert!(
+            !err.message.contains("connection failed"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("ssh failed"), "{}", err.message);
+    }
+
+    #[test]
+    fn switch_drop_is_reported_once() {
+        let err = switch_outcome(RemoteFinish::Connection { code: Some(255) }).unwrap_err();
+        assert!(err.message.contains("connection failed"), "{}", err.message);
+        assert!(
+            err.message.contains("not starting a second switch"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("255"), "{}", err.message);
+        assert_eq!(switch_outcome(RemoteFinish::Exited(1)).unwrap(), 1);
+        assert_eq!(switch_outcome(RemoteFinish::Exited(0)).unwrap(), 0);
     }
 }

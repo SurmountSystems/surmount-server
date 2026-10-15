@@ -319,6 +319,10 @@
     trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
     ];
+    # Host cargo cache. An administrator creates the directory.
+    extra-sandbox-paths = [
+      "/var/cache/grok-oss-cargo-target"
+    ];
   };
 
   nixpkgs.config.allowUnfree = false;

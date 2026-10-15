@@ -725,11 +725,9 @@ async fn security_headers_middleware(
     // Discovery eligibility stays on the original onion Host / URI so
     // Onion-Location is not emitted on `.onion` or CleartextSocket.
     let (csp_host, vault_path) = if crate::onion_discovery::host_is_onion(&host) {
-        match crate::onion_discovery::match_onion_vhost_rewrite(
-            &path,
-            &state.config.onion_discovery,
-        ) {
-            Some((clearnet, new_path)) => (clearnet, new_path),
+        match crate::onion_discovery::match_onion_host_rewrite(&host, &state.config.onion_discovery)
+        {
+            Some(clearnet) => (clearnet, path.clone()),
             None => (host.clone(), path.clone()),
         }
     } else {
@@ -1016,7 +1014,10 @@ async fn auth_session_create(
     response
 }
 
-fn resolve_session_event(headers: &HeaderMap, body: &Bytes) -> Result<nostr::Event, AuthError> {
+fn resolve_session_event(
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<nostr::prelude::Event, AuthError> {
     if let Some(auth) = header_str(headers, "authorization")
         && (auth.to_ascii_lowercase().starts_with("nostr ") || auth.starts_with("Nostr "))
     {
@@ -1629,8 +1630,8 @@ async fn apex_public_host_middleware(
     let services = state.config.services_hostname.as_str();
     let path_only = path.split('?').next().unwrap_or(path);
 
-    // Router::layer runs after routing. Onion `/_o/{host}/.well-known/mta-sts.txt`
-    // does not match the policy route; serve here after Host rewrite.
+    // Router::layer runs after routing. Onion Host rewrite sets the mapped
+    // clearnet Host; serve MTA-STS here when that Host is the policy name.
     if path_only == "/.well-known/mta-sts.txt"
         && should_serve_mta_sts_policy(
             state.config.mta_sts_mode,
@@ -1683,11 +1684,10 @@ async fn apex_public_host_middleware(
     next.run(request).await
 }
 
-/// Onion Host + `/_o/{mapped-clearnet-host}` selects that Host's surface.
+/// Onion request Host selects that site's clearnet surface (per-site v3).
 ///
-/// Strips the discriminator and rewrites Host so extra vhosts and MTA-STS
-/// policy serve on the shared v3. Unmatched `/_o/{host}` stays unrewritten
-/// (404 unless that path is already a console route). `{onion}/` stays console.
+/// Rewrites Host to the mapped clearnet name and keeps the path. There is no
+/// shared `/_o/{host}` discriminator (that correlated sites on one onion).
 async fn onion_vhost_rewrite_middleware(
     State(state): State<Arc<AppState>>,
     mut request: Request,
@@ -1697,18 +1697,13 @@ async fn onion_vhost_rewrite_middleware(
     if !crate::onion_discovery::host_is_onion(&host) {
         return next.run(request).await;
     }
-    let Some((clearnet, new_path)) = crate::onion_discovery::match_onion_vhost_rewrite(
-        request.uri().path(),
-        &state.config.onion_discovery,
-    ) else {
+    let Some(clearnet) =
+        crate::onion_discovery::match_onion_host_rewrite(&host, &state.config.onion_discovery)
+    else {
         return next.run(request).await;
     };
     if let Ok(hv) = HeaderValue::from_str(&clearnet) {
         request.headers_mut().insert(header::HOST, hv);
-    }
-    if let Some(uri) = crate::onion_discovery::rewrite_uri_path_keep_query(request.uri(), &new_path)
-    {
-        *request.uri_mut() = uri;
     }
     next.run(request).await
 }
@@ -2196,31 +2191,60 @@ mod edge_wire_tests {
         format!("http://{FIXTURE_ONION_HOST}")
     }
 
+    fn onion_location_for(
+        cfg: &crate::onion_discovery::OnionDiscoveryConfig,
+        host: &str,
+        path: &str,
+    ) -> String {
+        let mapping = cfg
+            .lookup(host)
+            .unwrap_or_else(|| panic!("expected onion mapping for {host}"));
+        let uri: axum::http::Uri = path.parse().unwrap_or_else(|_| panic!("uri {path}"));
+        crate::onion_discovery::onion_location_value(mapping, &uri)
+            .unwrap_or_else(|| panic!("Onion-Location for {host}"))
+    }
+
     fn fixture_onion_discovery() -> crate::onion_discovery::OnionDiscoveryConfig {
+        let extra: Vec<_> = crate::onion_discovery::per_site_mappings(
+            "example.test",
+            "services.example.test",
+            &[] as &[&str],
+        )
+        .into_iter()
+        .filter(|m| m.clearnet_host != "services.example.test")
+        .collect();
         crate::onion_discovery::build_onion_discovery(
             "example.test",
             "services.example.test",
             Some(&fixture_onion_url()),
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             &[] as &[&str],
         )
     }
 
-    /// Auto-derive plus extra static Hosts (same path as process-start map).
+    /// Per-site onions plus extra static Hosts. Services keep the fixture v3.
     fn onion_discovery_with_extra_hosts(
         extra_hosts: &[&str],
     ) -> crate::onion_discovery::OnionDiscoveryConfig {
+        let extra: Vec<_> = crate::onion_discovery::per_site_mappings(
+            "example.test",
+            "services.example.test",
+            extra_hosts,
+        )
+        .into_iter()
+        .filter(|m| m.clearnet_host != "services.example.test")
+        .collect();
         crate::onion_discovery::build_onion_discovery(
             "example.test",
             "services.example.test",
             Some(&fixture_onion_url()),
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             extra_hosts,
@@ -2272,13 +2296,23 @@ mod edge_wire_tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert_eq!(ol, onion_location, "Onion-Location");
+        assert!(
+            !ol.contains("/_o/"),
+            "Onion-Location must not use a shared /_o/{{host}} prefix: {ol}"
+        );
+        let onion_host = onion_location
+            .trim_start_matches("http://")
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .unwrap_or("");
         let alt = headers
             .get("alt-svc")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         assert_eq!(
             alt,
-            format!("h2=\"{FIXTURE_ONION_HOST}:443\"; ma=86400; persist=1"),
+            format!("h2=\"{onion_host}:443\"; ma=86400; persist=1"),
             "Alt-Svc"
         );
     }
@@ -2478,7 +2512,7 @@ mod edge_wire_tests {
         use surmount_management_ui::ban::MemoryBanBackend;
 
         let secret = b"test-session-secret-ban-matrix!!!!";
-        let allow_keys = nostr::Keys::generate();
+        let allow_keys = nostr::prelude::Keys::generate();
         let allow_hex = allow_keys.public_key().to_hex();
         let ban = BanGuard::with_backend(
             BanEnforcement::Enforce,
@@ -2572,7 +2606,7 @@ mod edge_wire_tests {
         );
 
         // 5) Presented NIP-98 not allowlisted on protected path -> ban.
-        let evil = nostr::Keys::generate();
+        let evil = nostr::prelude::Keys::generate();
         let domains_url = format!("{base}/api/v1/domains");
         let event = sign_nip98_event(
             &evil,
@@ -2634,7 +2668,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn auth_mode_nostr_gates_without_cookie() {
         let secret = b"test-session-secret-for-http-gate!!";
-        let k = nostr::Keys::generate();
+        let k = nostr::prelude::Keys::generate();
         let hex = k.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -2691,7 +2725,7 @@ mod edge_wire_tests {
         };
 
         let secret = b"test-session-secret-for-http-sess!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -2768,7 +2802,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn auth_session_without_connect_info_is_json_401_not_500() {
         let secret = b"test-session-secret-for-h3-sess!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -2812,7 +2846,7 @@ mod edge_wire_tests {
         };
 
         let secret = b"test-session-secret-for-h3-ok!!!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -2863,7 +2897,7 @@ mod edge_wire_tests {
         let backend = MemoryBanBackend::new(vec![]);
         let ban = BanGuard::with_backend(BanEnforcement::Enforce, Box::new(backend));
         let secret = b"test-session-secret-for-h3-ban!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_with_ban(&hex, secret, ban);
         let check = state.clone();
@@ -3565,7 +3599,7 @@ mod edge_wire_tests {
     /// Named contract: extra Host serves its own document root; www alias same
     /// root; apex stays Surmount public site; services stays console; unknown
     /// Host does not leak extra files; path traversal 404; extra static Hosts
-    /// auto-map dual onion discovery with a Host discriminator prefix.
+    /// emit Onion-Location at that Host's own onion root (not a shared prefix).
     #[tokio::test]
     async fn primary_edge_extra_static_vhost_serves_own_root() {
         let testdata = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata");
@@ -3600,6 +3634,23 @@ mod edge_wire_tests {
         );
         config.onion_discovery =
             onion_discovery_with_extra_hosts(&["extra.test", "www.extra.test", "other.test"]);
+        let extra_loc = onion_location_for(&config.onion_discovery, "extra.test", "/");
+        let extra_onion = config
+            .onion_discovery
+            .lookup("extra.test")
+            .expect("extra mapped")
+            .onion_host
+            .clone();
+        let other_onion = config
+            .onion_discovery
+            .lookup("other.test")
+            .expect("other mapped")
+            .onion_host
+            .clone();
+        assert_ne!(
+            extra_onion, other_onion,
+            "two extra Hosts must not share a v3 onion"
+        );
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3626,10 +3677,7 @@ mod edge_wire_tests {
             .await
             .unwrap();
         assert_eq!(extra.status(), reqwest::StatusCode::OK);
-        assert_both_onion_discovery(
-            extra.headers(),
-            &format!("http://{FIXTURE_ONION_HOST}/_o/extra.test/"),
-        );
+        assert_both_onion_discovery(extra.headers(), &extra_loc);
         let extra_body = extra.text().await.unwrap();
         assert!(
             extra_body.contains("EXTRA-VHOST-MARKER"),
@@ -3768,7 +3816,7 @@ mod edge_wire_tests {
         );
 
         let secret = b"test-session-secret-for-http-gate!!";
-        let k = nostr::Keys::generate();
+        let k = nostr::prelude::Keys::generate();
         let hex = k.public_key().to_hex();
         let mut allowlist = std::collections::HashSet::new();
         allowlist.insert(hex.to_ascii_lowercase());
@@ -4903,7 +4951,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn auth_mode_nostr_gates_accounts_api_with_directory_injected() {
         let secret = b"test-session-secret-for-dir-gate!!";
-        let k = nostr::Keys::generate();
+        let k = nostr::prelude::Keys::generate();
         let hex = k.public_key().to_hex();
         let base = test_state_nostr(&hex, secret);
         let state = Arc::new(AppState {
@@ -5294,10 +5342,30 @@ mod edge_wire_tests {
         let _ = serve.await;
     }
 
-    /// Named contract: apex and www convenience mapping both emit.
+    /// Named contract: two public Hosts emit two different Onion-Location
+    /// onion hostnames at each Host's onion root (not `/_o/{host}`).
     #[tokio::test]
-    async fn onion_discovery_apex_and_www_convenience() {
+    async fn two_hosts_emit_distinct_onion_location_headers() {
         let state = test_state_onion_https();
+        let cfg = state.config.onion_discovery.clone();
+        let apex_onion = cfg
+            .lookup("example.test")
+            .expect("apex mapped")
+            .onion_host
+            .clone();
+        let www_onion = cfg
+            .lookup("www.example.test")
+            .expect("www mapped")
+            .onion_host
+            .clone();
+        assert_ne!(
+            apex_onion, www_onion,
+            "each public Host must have its own v3 onion"
+        );
+        let apex_loc = onion_location_for(&cfg, "example.test", "/");
+        let www_loc = onion_location_for(&cfg, "www.example.test", "/");
+        assert_eq!(apex_loc, format!("http://{apex_onion}/"));
+        assert_eq!(www_loc, format!("http://{www_onion}/"));
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -5310,19 +5378,22 @@ mod edge_wire_tests {
             .ok();
         });
         let client = reqwest::Client::new();
-        for host in ["example.test", "www.example.test"] {
-            let res = client
-                .get(format!("http://{addr}/"))
-                .header("Host", host)
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(res.status(), reqwest::StatusCode::OK, "host {host}");
-            assert_both_onion_discovery(
-                res.headers(),
-                &format!("http://{FIXTURE_ONION_HOST}/_o/{host}/"),
-            );
-        }
+        let apex = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(apex.status(), reqwest::StatusCode::OK);
+        assert_both_onion_discovery(apex.headers(), &apex_loc);
+        let www = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "www.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(www.status(), reqwest::StatusCode::OK);
+        assert_both_onion_discovery(www.headers(), &www_loc);
         serve.abort();
         let _ = serve.await;
     }
@@ -5382,11 +5453,19 @@ mod edge_wire_tests {
             Some(&fixture_onion_url()),
             true,
             true,
-            Vec::new(),
+            crate::onion_discovery::per_site_mappings(
+                "example.test",
+                "services.example.test",
+                &[] as &[&str],
+            )
+            .into_iter()
+            .filter(|m| m.clearnet_host != "services.example.test")
+            .collect::<Vec<_>>(),
             &["services.example.test".into()],
             &["services.example.test".into()],
             &[] as &[&str],
         );
+        let expected_apex = onion_location_for(&config.onion_discovery, "example.test", "/");
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5414,10 +5493,7 @@ mod edge_wire_tests {
             .await
             .unwrap();
         assert_eq!(apex.status(), reqwest::StatusCode::OK);
-        assert_both_onion_discovery(
-            apex.headers(),
-            &format!("http://{FIXTURE_ONION_HOST}/_o/example.test/"),
-        );
+        assert_both_onion_discovery(apex.headers(), &expected_apex);
         serve.abort();
         let _ = serve.await;
     }
@@ -5465,7 +5541,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn onion_discovery_https_3xx_emits_both() {
         let secret = b"test-session-secret-for-onion-3xx!!";
-        let k = nostr::Keys::generate();
+        let k = nostr::prelude::Keys::generate();
         let hex = k.public_key().to_hex();
         let base = test_state_nostr(&hex, secret);
         let mut config = base.config.clone();
@@ -5590,6 +5666,11 @@ mod edge_wire_tests {
         let base = test_state_onion_https();
         let mut config = base.config.clone();
         config.mta_sts_mode = crate::mta_sts::MtaStsMode::Testing;
+        let expected = onion_location_for(
+            &config.onion_discovery,
+            "mta-sts.example.test",
+            "/.well-known/mta-sts.txt",
+        );
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5610,10 +5691,7 @@ mod edge_wire_tests {
             .await
             .unwrap();
         assert_eq!(res.status(), reqwest::StatusCode::OK);
-        assert_both_onion_discovery(
-            res.headers(),
-            &format!("http://{FIXTURE_ONION_HOST}/_o/mta-sts.example.test/.well-known/mta-sts.txt"),
-        );
+        assert_both_onion_discovery(res.headers(), &expected);
         serve.abort();
         let _ = serve.await;
     }
@@ -5676,10 +5754,10 @@ mod edge_wire_tests {
         let _ = serve.await;
     }
 
-    /// Named contract: onion Host plus extra-vhost discriminator serves that
-    /// vhost root, not the services console.
+    /// Named contract: that extra Host's own onion serves that vhost root,
+    /// not the services console.
     #[tokio::test]
-    async fn onion_host_discriminator_serves_extra_vhost_not_console() {
+    async fn onion_host_per_site_serves_extra_vhost_not_console() {
         let testdata = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata");
         let extra_root = testdata.join("static-vhosts").join("extra.test");
         let apex_root = testdata.join("public-site");
@@ -5688,6 +5766,13 @@ mod edge_wire_tests {
         config.apex_public_root = Some(apex_root);
         config.static_vhosts.insert("extra.test".into(), extra_root);
         config.onion_discovery = onion_discovery_with_extra_hosts(&["extra.test"]);
+        let extra_onion = config
+            .onion_discovery
+            .lookup("extra.test")
+            .expect("extra mapped")
+            .onion_host
+            .clone();
+        let unknown_onion = crate::onion_discovery::unique_v3_onion_host(99);
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5702,8 +5787,8 @@ mod edge_wire_tests {
         });
         let client = reqwest::Client::new();
         let extra = client
-            .get(format!("http://{addr}/_o/extra.test/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", extra_onion.as_str())
             .send()
             .await
             .unwrap();
@@ -5712,23 +5797,23 @@ mod edge_wire_tests {
         let extra_body = extra.text().await.unwrap();
         assert!(
             extra_body.contains("EXTRA-VHOST-MARKER"),
-            "onion discriminator must serve extra.test root: {extra_body}"
+            "that Host's onion must serve extra.test root: {extra_body}"
         );
         assert!(
             !extra_body.contains("Operator console") && !extra_body.contains("Overview"),
-            "onion discriminator must not serve console: {extra_body}"
+            "that Host's onion must not serve console: {extra_body}"
         );
 
         let unknown = client
-            .get(format!("http://{addr}/_o/unknown.example/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", unknown_onion.as_str())
             .send()
             .await
             .unwrap();
         let unknown_body = unknown.text().await.unwrap();
         assert!(
             !unknown_body.contains("EXTRA-VHOST-MARKER"),
-            "unknown discriminator must not leak extra files: {unknown_body}"
+            "unknown onion must not leak extra files: {unknown_body}"
         );
 
         let root = client
@@ -5742,21 +5827,21 @@ mod edge_wire_tests {
         let root_body = root.text().await.unwrap();
         assert!(
             root_body.contains("Operator console") || root_body.contains("Overview"),
-            "onion root must stay the services console: {root_body}"
+            "services onion root must stay the services console: {root_body}"
         );
         assert!(
             !root_body.contains("EXTRA-VHOST-MARKER"),
-            "onion root must not serve extra vhost: {root_body}"
+            "services onion root must not serve extra vhost: {root_body}"
         );
         serve.abort();
         let _ = serve.await;
     }
 
-    /// Named contract: onion Host plus extra/apex discriminator uses public-site
-    /// CSP (`script-src 'self' 'unsafe-inline'`), not the console nonce CSP.
+    /// Named contract: extra/apex per-site onions use public-site CSP
+    /// (`script-src 'self' 'unsafe-inline'`), not the console nonce CSP.
     /// Discovery headers stay off on `.onion` Host.
     #[tokio::test]
-    async fn onion_host_discriminator_extra_vhost_uses_public_site_csp() {
+    async fn onion_host_per_site_extra_vhost_uses_public_site_csp() {
         let testdata = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("testdata");
         let extra_root = testdata.join("static-vhosts").join("extra.test");
         let apex_root = testdata.join("public-site");
@@ -5765,6 +5850,18 @@ mod edge_wire_tests {
         config.apex_public_root = Some(apex_root);
         config.static_vhosts.insert("extra.test".into(), extra_root);
         config.onion_discovery = onion_discovery_with_extra_hosts(&["extra.test"]);
+        let extra_onion = config
+            .onion_discovery
+            .lookup("extra.test")
+            .expect("extra mapped")
+            .onion_host
+            .clone();
+        let apex_onion = config
+            .onion_discovery
+            .lookup("example.test")
+            .expect("apex mapped")
+            .onion_host
+            .clone();
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5779,8 +5876,8 @@ mod edge_wire_tests {
         });
         let client = reqwest::Client::new();
         let extra = client
-            .get(format!("http://{addr}/_o/extra.test/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", extra_onion.as_str())
             .send()
             .await
             .unwrap();
@@ -5794,25 +5891,25 @@ mod edge_wire_tests {
             .to_string();
         assert!(
             extra_csp.contains("script-src 'self' 'unsafe-inline'"),
-            "onion extra discriminator must use public-site CSP: {extra_csp}"
+            "extra Host onion must use public-site CSP: {extra_csp}"
         );
         assert!(
             !extra_csp.contains("nonce-"),
-            "onion extra discriminator must not use console nonce CSP: {extra_csp}"
+            "extra Host onion must not use console nonce CSP: {extra_csp}"
         );
         let extra_body = extra.text().await.unwrap();
         assert!(
             extra_body.contains("EXTRA-VHOST-MARKER"),
-            "onion discriminator must still serve extra.test root: {extra_body}"
+            "extra Host onion must still serve extra.test root: {extra_body}"
         );
         assert!(
             !extra_body.contains("Operator console") && !extra_body.contains("Overview"),
-            "onion discriminator must not serve console: {extra_body}"
+            "extra Host onion must not serve console: {extra_body}"
         );
 
         let apex = client
-            .get(format!("http://{addr}/_o/example.test/"))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/"))
+            .header("Host", apex_onion.as_str())
             .send()
             .await
             .unwrap();
@@ -5826,11 +5923,11 @@ mod edge_wire_tests {
             .to_string();
         assert!(
             apex_csp.contains("script-src 'self' 'unsafe-inline'"),
-            "onion apex discriminator must use public-site CSP: {apex_csp}"
+            "apex onion must use public-site CSP: {apex_csp}"
         );
         assert!(
             !apex_csp.contains("nonce-"),
-            "onion apex discriminator must not use console nonce CSP: {apex_csp}"
+            "apex onion must not use console nonce CSP: {apex_csp}"
         );
 
         let root = client
@@ -5849,40 +5946,40 @@ mod edge_wire_tests {
             .to_string();
         assert!(
             root_csp.contains("nonce-"),
-            "onion root console must keep nonce CSP: {root_csp}"
+            "services onion console must keep nonce CSP: {root_csp}"
         );
         assert!(
             !root_csp.contains("script-src 'self' 'unsafe-inline'"),
-            "onion root console must not use public-site script-src: {root_csp}"
+            "services onion console must not use public-site script-src: {root_csp}"
         );
         serve.abort();
         let _ = serve.await;
     }
 
-    /// Named contract: onion Host plus MTA-STS discriminator serves the policy
-    /// body, not a console 404.
+    /// Named contract: the MTA-STS Host's own onion serves the policy body,
+    /// not a console 404.
     #[tokio::test]
-    async fn onion_host_discriminator_serves_mta_sts_policy() {
+    async fn onion_host_per_site_serves_mta_sts_policy() {
         let base = test_state_onion_https();
         let mut config = base.config.clone();
         config.mta_sts_mode = crate::mta_sts::MtaStsMode::Testing;
         config.onion_discovery = onion_discovery_with_extra_hosts(&[]);
-        assert!(
-            config
-                .onion_discovery
-                .lookup("mta-sts.example.test")
-                .is_some(),
-            "mta-sts Host must auto-map for onion rewrite"
+        let mta_map = config
+            .onion_discovery
+            .lookup("mta-sts.example.test")
+            .expect("mta-sts Host must map for onion rewrite");
+        let mta_onion = mta_map.onion_host.clone();
+        assert_eq!(
+            crate::onion_discovery::match_onion_host_rewrite(&mta_onion, &config.onion_discovery),
+            Some("mta-sts.example.test".into())
         );
         assert_eq!(
             crate::onion_discovery::match_onion_vhost_rewrite(
                 "/_o/mta-sts.example.test/.well-known/mta-sts.txt",
                 &config.onion_discovery,
             ),
-            Some((
-                "mta-sts.example.test".into(),
-                "/.well-known/mta-sts.txt".into()
-            ))
+            None,
+            "shared /_o/{{host}} is not a discovery path"
         );
         let state = rebuild_state_with_config(config);
         let app = build_router(state);
@@ -5902,10 +5999,8 @@ mod edge_wire_tests {
             .build()
             .unwrap();
         let res = client
-            .get(format!(
-                "http://{addr}/_o/mta-sts.example.test/.well-known/mta-sts.txt"
-            ))
-            .header("Host", FIXTURE_ONION_HOST)
+            .get(format!("http://{addr}/.well-known/mta-sts.txt"))
+            .header("Host", mta_onion.as_str())
             .send()
             .await
             .unwrap();
@@ -5924,7 +6019,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn login_page_script_nonce_matches_csp() {
         let secret = b"test-session-secret-for-csp-nonce!!";
-        let k = nostr::Keys::generate();
+        let k = nostr::prelude::Keys::generate();
         let hex = k.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -5981,7 +6076,7 @@ mod edge_wire_tests {
     async fn session_login_cookies(
         client: &reqwest::Client,
         base: &str,
-        keys: &nostr::Keys,
+        keys: &nostr::prelude::Keys,
     ) -> (String, String, String) {
         use surmount_management_ui::auth::{
             HttpMethod, event_to_nostr_authorization, sign_nip98_event,
@@ -6034,7 +6129,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn csrf_logout_without_token_forbidden() {
         let secret = b"test-session-secret-for-csrf-out!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -6079,7 +6174,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn csrf_logout_with_double_submit_succeeds() {
         let secret = b"test-session-secret-for-csrf-ok!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -6240,7 +6335,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn account_create_cookie_auth_requires_csrf() {
         let secret = b"test-session-secret-for-acct-csrf!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let base_state = test_state_nostr(&hex, secret);
         // Keep nostr; mock directory for hermetic mutation.
@@ -6401,7 +6496,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mail_page_unauth_redirects_create_unauth_is_401() {
         let secret = b"test-session-secret-for-mail-unauth";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -6447,7 +6542,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn account_create_admin_contracts_refuse_and_success() {
         let secret = b"test-session-secret-for-create-ok!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let map_path = crate::config::unused_console_accounts_path();
         let state = test_state_nostr_mock_map(&hex, secret, map_path.clone());
@@ -6640,16 +6735,448 @@ mod edge_wire_tests {
         let _ = serve.await;
     }
 
+    /// Named contract: create still sets the password when Stalwart returns no
+    /// emailAddress. An id-only created object and a local-part echo both lack
+    /// `@`. The password PATCH must target that created id. A list row whose
+    /// address is only the local-part must not be enough, because lookup of
+    /// `local@primary` does not match it. The form posts `name`, not the preview.
+    #[tokio::test]
+    async fn account_create_sets_password_on_created_id_when_jmap_has_no_email() {
+        use axum::body::Body;
+        use axum::extract::Request;
+        use axum::http::{StatusCode as HyperStatus, header};
+        use axum::response::Response;
+        use surmount_management_ui::console_accounts::{ConsoleRole, load_console_accounts};
+        use tokio::sync::Mutex;
+
+        let secret = concat!("unit-test-only-", "secret");
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen_h = seen.clone();
+        let wire = axum::Router::new().route(
+            "/jmap",
+            post(move |req: Request| {
+                let seen = seen_h.clone();
+                async move {
+                    let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024)
+                        .await
+                        .unwrap_or_default();
+                    let incoming: serde_json::Value =
+                        serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
+                    seen.lock().await.push(incoming.to_string());
+                    let method = incoming["methodCalls"][0][0].as_str().unwrap_or("");
+                    let args = &incoming["methodCalls"][0][1];
+                    let body = if method.contains("Domain") {
+                        serde_json::json!({
+                            "methodResponses": [
+                                ["x:Domain/query", {"ids": ["dom-9"]}, "dq1"],
+                                ["x:Domain/get", {
+                                    "list": [{"id": "dom-9", "name": "example.test"}]
+                                }, "dg1"]
+                            ]
+                        })
+                    } else if args.get("update").is_some() {
+                        let update_id = args["update"]
+                            .as_object()
+                            .and_then(|m| m.keys().next().cloned())
+                            .unwrap_or_default();
+                        let mut updated = serde_json::Map::new();
+                        updated.insert(update_id, serde_json::Value::Null);
+                        serde_json::json!({
+                            "methodResponses": [[
+                                "x:Account/set",
+                                {
+                                    "updated": serde_json::Value::Object(updated),
+                                    "notUpdated": {}
+                                },
+                                "u1"
+                            ]]
+                        })
+                    } else if args.get("create").is_some() {
+                        let name = args["create"]["new1"]["name"].as_str().unwrap_or("");
+                        let created = if name == "lean" {
+                            serde_json::json!({"id": "live-lean", "name": "lean"})
+                        } else {
+                            serde_json::json!({"id": "live-tony"})
+                        };
+                        serde_json::json!({
+                            "methodResponses": [[
+                                "x:Account/set",
+                                {"created": {"new1": created}},
+                                "c1"
+                            ]]
+                        })
+                    } else {
+                        // No emailAddress. Lookup of local@primary cannot match `name`.
+                        serde_json::json!({
+                            "methodResponses": [
+                                ["x:Account/query", {"ids": ["live-tony", "live-lean"]}, "q1"],
+                                ["x:Account/get", {
+                                    "list": [
+                                        {"id": "live-tony", "name": "tony", "@type": "User"},
+                                        {"id": "live-lean", "name": "lean", "@type": "User"}
+                                    ]
+                                }, "g1"]
+                            ]
+                        })
+                    };
+                    Response::builder()
+                        .status(HyperStatus::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mock_addr = listener.local_addr().unwrap();
+        let mock_serve = tokio::spawn(async move {
+            axum::serve(listener, wire).await.ok();
+        });
+
+        let session_secret = b"test-session-secret-for-create-id";
+        let keys = nostr::prelude::Keys::generate();
+        let hex = keys.public_key().to_hex();
+        let map_path = crate::config::unused_console_accounts_path();
+        let base_state = test_state_nostr(&hex, session_secret);
+        let mut config = base_state.config.clone();
+        config.console_accounts_path = map_path.clone();
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let state = Arc::new(AppState {
+            http: http.clone(),
+            rate_limiter: None,
+            ban: BanGuard::with_backend(
+                BanEnforcement::Off,
+                Box::new(surmount_management_ui::ban::MemoryBanBackend::new(vec![])),
+            ),
+            directory: crate::directory::directory_stalwart(
+                http,
+                format!("http://{mock_addr}"),
+                "unit-test-token",
+            ),
+            config,
+        });
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .ok();
+        });
+        let client = reqwest::Client::new();
+        let base = format!("http://{addr}");
+        let (session_pair, _login, _blob) = session_login_cookies(&client, &base, &keys).await;
+        let csrf = session_bound_from_pair(&session_pair, session_secret);
+
+        async fn post_create(
+            client: &reqwest::Client,
+            base: &str,
+            session_pair: &str,
+            csrf: &str,
+            body: serde_json::Value,
+        ) -> (reqwest::StatusCode, String, serde_json::Value) {
+            let resp = client
+                .post(format!("{base}/api/v1/accounts"))
+                .header(reqwest::header::COOKIE, session_pair)
+                .header(CSRF_HEADER_NAME, csrf)
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            let status = resp.status();
+            let text = resp.text().await.unwrap();
+            let v = serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+            (status, text, v)
+        }
+
+        let (st, text, body) = post_create(
+            &client,
+            &base,
+            &session_pair,
+            &csrf,
+            serde_json::json!({
+                "name": "tony",
+                "description": "Tony V (Lean)",
+                "password": secret,
+                "confirm": secret,
+                "role": "administrator",
+                "csrf": csrf
+            }),
+        )
+        .await;
+        assert_eq!(st, reqwest::StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true, "{body}");
+        assert_eq!(body["password_set"], true, "{body}");
+        assert_eq!(body["address"], "tony@example.test", "{body}");
+        assert_eq!(body["account"]["id"], "live-tony", "{body}");
+        assert_eq!(body["account"]["address"], "tony@example.test", "{body}");
+        assert!(
+            !text.contains("mailbox address required"),
+            "id-only create must not refuse the password"
+        );
+        assert!(!text.contains(secret), "response must not echo the secret");
+        assert!(
+            body.get("error").is_none() || body["error"].is_null(),
+            "success must not carry error: {body}"
+        );
+
+        let (st, text, body) = post_create(
+            &client,
+            &base,
+            &session_pair,
+            &csrf,
+            serde_json::json!({
+                "name": "lean",
+                "password": secret,
+                "confirm": secret,
+                "role": "administrator",
+                "csrf": csrf
+            }),
+        )
+        .await;
+        assert_eq!(st, reqwest::StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true, "{body}");
+        assert_eq!(body["password_set"], true, "{body}");
+        assert_eq!(body["address"], "lean@example.test", "{body}");
+        assert_eq!(body["account"]["id"], "live-lean", "{body}");
+        assert_eq!(body["account"]["address"], "lean@example.test", "{body}");
+        assert!(
+            !text.contains("mailbox address required"),
+            "local-part echo must not refuse the password"
+        );
+        assert!(!text.contains(secret));
+
+        let calls = seen.lock().await;
+        let mut domains = 0usize;
+        let mut creates = Vec::new();
+        let mut updates = Vec::new();
+        let mut other = 0usize;
+        for raw in calls.iter() {
+            let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+            let method = v["methodCalls"][0][0].as_str().unwrap_or("");
+            let args = &v["methodCalls"][0][1];
+            if method.contains("Domain") {
+                domains += 1;
+            } else if args.get("create").is_some() {
+                creates.push(v);
+            } else if args.get("update").is_some() {
+                updates.push(v);
+            } else {
+                other += 1;
+            }
+        }
+        assert_eq!(domains, 2, "each create looks up the primary domain id");
+        assert_eq!(creates.len(), 2, "two mailbox creates");
+        assert_eq!(
+            updates.len(),
+            2,
+            "password must PATCH the created principal id"
+        );
+        assert_eq!(
+            other, 0,
+            "email lookup must not run when create returns no emailAddress"
+        );
+        let mut saw_tony = false;
+        let mut saw_lean = false;
+        for v in &creates {
+            let obj = &v["methodCalls"][0][1]["create"]["new1"];
+            assert_eq!(obj["@type"], "User");
+            assert_ne!(obj["@type"], "Group");
+            let name = obj["name"].as_str().unwrap_or("");
+            assert!(!name.contains('@'), "name must be the local-part");
+            assert_eq!(obj["domainId"], "dom-9");
+            assert_ne!(obj["domainId"], "example.test");
+            assert!(
+                obj["credentials"]
+                    .as_object()
+                    .expect("credentials")
+                    .is_empty()
+            );
+            assert_eq!(obj["roles"]["@type"], "User");
+            let raw = v.to_string();
+            assert!(!raw.contains("AccountPassword"));
+            assert!(!raw.contains(secret), "create must not carry the password");
+            match name {
+                "tony" => {
+                    assert_eq!(obj["description"], "Tony V (Lean)");
+                    saw_tony = true;
+                }
+                "lean" => {
+                    assert!(obj.get("description").is_none());
+                    saw_lean = true;
+                }
+                other_name => panic!("unexpected create name {other_name}"),
+            }
+        }
+        assert!(saw_tony && saw_lean, "both local-parts must be created");
+        for id in ["live-tony", "live-lean"] {
+            let found = updates.iter().find(|v| {
+                v["methodCalls"][0][1]["update"]
+                    .as_object()
+                    .is_some_and(|m| m.contains_key(id))
+            });
+            let Some(v) = found else {
+                panic!("missing password update for {id}");
+            };
+            let patch = &v["methodCalls"][0][1]["update"][id];
+            assert_eq!(patch["credentials"]["0"]["@type"], "Password");
+            assert_eq!(patch["credentials"]["0"]["secret"].as_str(), Some(secret));
+            let update_obj = v["methodCalls"][0][1]["update"].as_object().unwrap();
+            assert!(!update_obj.contains_key("tony"));
+            assert!(!update_obj.contains_key("lean"));
+            assert!(!v.to_string().contains("AccountPassword"));
+        }
+
+        let loaded = load_console_accounts(&map_path).unwrap();
+        let tony = loaded
+            .by_mailbox("tony@example.test")
+            .expect("console row is the composed address");
+        assert_eq!(tony.role, ConsoleRole::Administrator);
+        assert!(tony.npub_hex.is_none(), "empty npub stays IMAP/SMTP only");
+        assert!(loaded.by_mailbox("tony").is_none());
+        assert!(loaded.by_mailbox("live-tony").is_none());
+        let lean = loaded.by_mailbox("lean@example.test").expect("lean row");
+        assert_eq!(lean.role, ConsoleRole::Administrator);
+        assert!(loaded.by_mailbox("lean").is_none());
+        assert!(loaded.by_mailbox("live-lean").is_none());
+
+        drop(calls);
+        let _ = std::fs::remove_file(&map_path);
+        serve.abort();
+        mock_serve.abort();
+        let _ = serve.await;
+        let _ = mock_serve.await;
+    }
+
+    /// Named contract: a submitted npub on create is stored on that mailbox
+    /// and can be read back. This is someone else's key, not the admin key.
+    /// The separate attach form is `grant_console_attaches_npub1_to_existing_mailbox`.
+    #[tokio::test]
+    async fn account_create_persists_submitted_npub_readable_on_mailbox() {
+        use nostr::prelude::ToBech32;
+        use surmount_management_ui::auth::{
+            HttpMethod, event_to_nostr_authorization, sign_nip98_event,
+        };
+        use surmount_management_ui::console_accounts::{ConsoleRole, load_console_accounts};
+
+        let secret = concat!("unit-test-only-", "secret");
+        let session_secret = b"test-session-secret-for-npub-create";
+        let admin_keys = nostr::prelude::Keys::generate();
+        let admin_hex = admin_keys.public_key().to_hex();
+        let guest_keys = nostr::prelude::Keys::generate();
+        let guest_hex = guest_keys.public_key().to_hex().to_ascii_lowercase();
+        let guest_npub = guest_keys.public_key().to_bech32().unwrap();
+        assert!(
+            guest_npub.starts_with("npub1"),
+            "synthetic fixture must be bech32 npub1"
+        );
+        assert_ne!(guest_hex, admin_hex.to_ascii_lowercase());
+        let map_path = crate::config::unused_console_accounts_path();
+        let state = test_state_nostr_mock_map(&admin_hex, session_secret, map_path.clone());
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .ok();
+        });
+        let client = reqwest::Client::new();
+        let base = format!("http://{addr}");
+        let (session_pair, _login, _blob) =
+            session_login_cookies(&client, &base, &admin_keys).await;
+        let csrf = session_bound_from_pair(&session_pair, session_secret);
+        let resp = client
+            .post(format!("{base}/api/v1/accounts"))
+            .header(reqwest::header::COOKIE, &session_pair)
+            .header(CSRF_HEADER_NAME, &csrf)
+            .json(&serde_json::json!({
+                "name": "guestbox",
+                "password": secret,
+                "confirm": secret,
+                "npub": guest_npub,
+                "role": "user",
+                "csrf": csrf
+            }))
+            .send()
+            .await
+            .unwrap();
+        let status = resp.status();
+        let text = resp.text().await.unwrap();
+        let body: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::json!({}));
+        assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true, "{body}");
+        assert_eq!(body["password_set"], true, "{body}");
+        assert_eq!(body["address"], "guestbox@example.test", "{body}");
+        assert!(!text.contains(secret));
+        assert!(!text.contains(&guest_npub), "response must not echo npub");
+
+        let loaded = load_console_accounts(&map_path).unwrap();
+        let row = loaded
+            .by_mailbox("guestbox@example.test")
+            .expect("create stores the composed address");
+        assert_eq!(row.npub_normalized(), Some(guest_hex.clone()));
+        assert_eq!(row.role, ConsoleRole::User);
+        assert!(loaded.by_mailbox("guestbox").is_none());
+        assert!(loaded.by_mailbox("guestbox@mock.surmount.test").is_none());
+
+        let (guest_session, _, _) = session_login_cookies(&client, &base, &guest_keys).await;
+        assert!(
+            guest_session.starts_with("surmount_session="),
+            "stored npub must log into the services portal"
+        );
+        let me_url = format!("{base}/api/v1/auth/me");
+        let me_ev = sign_nip98_event(
+            &guest_keys,
+            &me_url,
+            HttpMethod::GET,
+            Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            ),
+        )
+        .unwrap();
+        let me = client
+            .get(&me_url)
+            .header(
+                reqwest::header::AUTHORIZATION,
+                event_to_nostr_authorization(&me_ev),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(me.status(), reqwest::StatusCode::OK);
+        let me_body: serde_json::Value = me.json().await.unwrap();
+        assert_eq!(me_body["role"], "user", "{me_body}");
+        assert_eq!(me_body["mailbox"], "guestbox@example.test", "{me_body}");
+
+        let _ = std::fs::remove_file(&map_path);
+        let _ = std::fs::remove_file(format!("{}.lock", map_path.display()));
+        serve.abort();
+        let _ = serve.await;
+    }
+
     /// Named contract: User cannot create or touch other passwords; own password
     /// works; operator pages 403. Allowlist with no map row stays Administrator.
     #[tokio::test]
     async fn console_user_role_lockout_and_allowlist_admin() {
         let secret = b"test-session-secret-for-role-gate!!";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
-        let user_keys = nostr::Keys::generate();
+        let user_keys = nostr::prelude::Keys::generate();
         let user_hex = user_keys.public_key().to_hex();
-        let stranger = nostr::Keys::generate();
+        let stranger = nostr::prelude::Keys::generate();
         let map_path = crate::config::unused_console_accounts_path();
         let mut file = surmount_management_ui::console_accounts::ConsoleAccountFile::default();
         file.upsert_mailbox(
@@ -6794,9 +7321,9 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn leftover_cookie_password_is_403_and_mail_does_not_prefill_hunter() {
         let secret = b"test-session-secret-for-leftover-pw";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
-        let user_keys = nostr::Keys::generate();
+        let user_keys = nostr::prelude::Keys::generate();
         let user_hex = user_keys.public_key().to_hex();
         let map_path = crate::config::unused_console_accounts_path();
         let mut file = surmount_management_ui::console_accounts::ConsoleAccountFile::default();
@@ -6893,9 +7420,9 @@ mod edge_wire_tests {
         };
 
         let secret = b"test-session-secret-for-nip98-q-pw";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
-        let user_keys = nostr::Keys::generate();
+        let user_keys = nostr::prelude::Keys::generate();
         let user_hex = user_keys.public_key().to_hex();
         let map_path = crate::config::unused_console_accounts_path();
         let mut file = surmount_management_ui::console_accounts::ConsoleAccountFile::default();
@@ -7016,9 +7543,9 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn user_session_can_patch_own_mailbox_password_not_others() {
         let secret = b"test-session-secret-for-user-patch!";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
-        let user_keys = nostr::Keys::generate();
+        let user_keys = nostr::prelude::Keys::generate();
         let user_hex = user_keys.public_key().to_hex();
         let map_path = crate::config::unused_console_accounts_path();
         let mut file = surmount_management_ui::console_accounts::ConsoleAccountFile::default();
@@ -7190,9 +7717,9 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn nwc_uri_valid_accepted_nsec_garbage_refused_without_echo() {
         let secret = b"test-session-secret-for-nwc-store!!";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
-        let user_keys = nostr::Keys::generate();
+        let user_keys = nostr::prelude::Keys::generate();
         let user_hex = user_keys.public_key().to_hex();
         let map_path = crate::config::unused_console_accounts_path();
         let mut file = surmount_management_ui::console_accounts::ConsoleAccountFile::default();
@@ -7342,11 +7869,11 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn grant_console_csrf_user_and_map_refuse() {
         let secret = b"test-session-secret-for-grant-csrf";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
-        let user_keys = nostr::Keys::generate();
+        let user_keys = nostr::prelude::Keys::generate();
         let user_hex = user_keys.public_key().to_hex();
-        let guest_keys = nostr::Keys::generate();
+        let guest_keys = nostr::prelude::Keys::generate();
         let guest_hex = guest_keys.public_key().to_hex();
         let map_dir = std::env::temp_dir().join(format!(
             "surmount-console-mapdir-{}-{}",
@@ -7545,7 +8072,7 @@ mod edge_wire_tests {
     /// required (live default source unavailable). Synthetic npubs only.
     #[tokio::test]
     async fn grant_console_attaches_npub1_to_existing_mailbox() {
-        use nostr::ToBech32;
+        use nostr::prelude::ToBech32;
         use surmount_management_ui::auth::{
             HttpMethod, event_to_nostr_authorization, sign_nip98_event,
         };
@@ -7554,9 +8081,9 @@ mod edge_wire_tests {
         };
 
         let secret = b"test-session-secret-for-npub-attach";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
-        let guest_keys = nostr::Keys::generate();
+        let guest_keys = nostr::prelude::Keys::generate();
         let guest_hex = guest_keys.public_key().to_hex().to_ascii_lowercase();
         let guest_npub = guest_keys.public_key().to_bech32().unwrap();
         assert!(
@@ -7604,7 +8131,7 @@ mod edge_wire_tests {
         async fn guest_session(
             client: &reqwest::Client,
             session_url: &str,
-            keys: &nostr::Keys,
+            keys: &nostr::prelude::Keys,
         ) -> reqwest::StatusCode {
             let ev = sign_nip98_event(
                 keys,
@@ -7808,7 +8335,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn console_map_load_fail_does_not_promote_allowlist_admin() {
         let secret = b"test-session-secret-for-map-fail!!";
-        let admin_keys = nostr::Keys::generate();
+        let admin_keys = nostr::prelude::Keys::generate();
         let admin_hex = admin_keys.public_key().to_hex();
         let map_path = crate::config::unused_console_accounts_path();
         let mut file = surmount_management_ui::console_accounts::ConsoleAccountFile::default();
@@ -7876,7 +8403,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mailbox_password_unauth_is_401() {
         let secret = b"test-session-secret-for-pw-unauth!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr(&hex, secret);
         let app = build_router(state);
@@ -8118,7 +8645,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mail_page_authenticated_get_embeds_and_mints_csrf() {
         let secret = b"test-session-secret-for-mail-csrf!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -8192,7 +8719,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mailbox_password_csrf_from_mail_page_succeeds_session_only_still_403() {
         let secret = b"test-session-secret-for-mail-pw!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -8297,7 +8824,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mail_page_authenticated_get_csrf_cookie_survives_same_jar_as_session() {
         let secret = b"test-session-secret-for-mail-jar!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -8433,7 +8960,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mailbox_password_session_plus_header_succeeds_without_csrf_cookie() {
         let secret = b"test-session-secret-for-sync-csrf!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -8499,7 +9026,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mailbox_password_session_wrong_token_is_403() {
         let secret = b"test-session-secret-for-wrong-csrf";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -8549,7 +9076,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mailbox_password_session_empty_token_is_403() {
         let secret = b"test-session-secret-for-empty-csrf";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -8598,7 +9125,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mailbox_password_no_session_with_token_is_401() {
         let secret = b"test-session-secret-for-nosess-tok";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);
@@ -8636,7 +9163,7 @@ mod edge_wire_tests {
     #[tokio::test]
     async fn mailbox_password_header_only_no_session_is_401() {
         let secret = b"test-session-secret-for-hdr-only!!";
-        let keys = nostr::Keys::generate();
+        let keys = nostr::prelude::Keys::generate();
         let hex = keys.public_key().to_hex();
         let state = test_state_nostr_mock_dir(&hex, secret);
         let app = build_router(state);

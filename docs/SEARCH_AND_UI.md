@@ -16,8 +16,8 @@ missing Axum `ConnectInfo`; NWC is not that login). Prior 2026-08-25 (living mai
 `~/.agents/surmount-server/operator-facts.md`, not this public file.)
 Prior 2026-08-24 (`just deploy` publishes static sites; `just deploy-host` is the NixOS generation.) Prior 2026-08-21 (living mailbox map:
 `~/.agents/surmount-server/operator-facts.md`. Do not assume Thunderbird.
-Prior 2026-08-20: Onion-Location + Alt-Svc on every
-public Host; `/_o/{host}` onion routing)
+Prior 2026-09-11: each public HTTP Host has its own v3 onion.
+Prior 2026-08-20: Onion-Location + Alt-Svc on every public Host)
 
 ## Principles
 
@@ -116,8 +116,9 @@ is a **bootstrap fallback**, not the long-term Surmount UX.
 Legacy public sites: **static files only** at the edge. Not part of
 the Leptos app. Live apex/www serve the packaged
 `SurmountSystems/site` tree (`pkgs.surmount-public-site`; Host
-`surmount.systems` / `www.surmount.systems`). `just deploy` publishes
-static sites; `just deploy-host` is the NixOS generation.
+`surmount.systems` / `www.surmount.systems`). `just publish` publishes
+static sites; `just deploy` is the NixOS generation (the host switch).
+`just deploy-host` is that switch with no default target.
 Operator console stays on `services.surmount.systems`. COMING SOON
 leftover is closed.
 
@@ -143,12 +144,11 @@ leftover is closed.
   `onionServiceStateDir` / derived `SURMOUNT_ONION_HOSTNAME_FILE`); structured
   `configured` / `hostname_missing` / `not_provisioned` on system +
   `GET /api/v1/system`. Lab override `SURMOUNT_ONION_URL` only; never invent.
-  **Discovery headers (2026-08-17, every public Host 2026-08-20):**
-  Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Auto-map: apex, www,
-  services, `mta-sts.{apex}`, extra static Hosts; same v3. Services
-  Onion-Location is `{onion}{path}`. Other mapped Hosts use
-  `{onion}/_o/{clearnet-host}{path}` so purple-pill lands on that surface.
-  `http://{onion}/` is the services console. Mail unmapped. Mapping loaded
+  **Discovery headers (2026-08-17, every public Host 2026-08-20;
+  per-site v3 2026-09-11):**
+  Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Map: apex, www,
+  services, `mta-sts.{apex}`, extra static Hosts; one v3 per Host.
+  Onion-Location is `{that-host-onion}{path}`. Mail unmapped. Mapping loaded
   at process start; restart the unit after hostname/env/map/static-vhost
   change (no hot-reload). Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`,
   `SURMOUNT_ONION_ALT_SVC_ENABLED`, `SURMOUNT_ONION_LOCATION_DISABLED_HOSTS`,

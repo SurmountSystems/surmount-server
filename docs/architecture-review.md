@@ -89,7 +89,7 @@ Measured 2026-07-30 from package files, `nix build`, `--version`, and
 | nixpkgs lock rev | `445d861c6d31b4af0c79d8d4be2331f762a361d7` | locked node `nixpkgs` (nixos-26.05) | `flake.lock` |
 | Channel `pkgs.stalwart-mail` | historical on **25.05** (was 0.11.8); Surmount never uses channel engine | stock module dual-disabled | nixpkgs (not product pin) |
 | Surmount service module | custom | disables both stock paths (`services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`); option `services.stalwart` | `modules/stalwart-service.nix` |
-| Management UI | Axum + Leptos SSR admin shell scaffold (ssr-only; no hydrate) | crane under `nix/packages/` with `rustPackages_1_95` (nixos-26.05) | `crates/management-ui/`, `nix/packages/management-ui.nix`, `nix/rust-toolchain.nix` |
+| Management UI | Axum + Leptos SSR admin shell scaffold (ssr-only; no hydrate) | crane under `nix/packages/` with nixpkgs-rust rustc 1.99.0 (not host `rustPackages_1_95`) | `crates/management-ui/`, `nix/packages/management-ui.nix`, `nix/rust-toolchain.nix` |
 | Upstream server tag | `v0.16.15` (published 2026-07-27) | https://github.com/stalwartlabs/stalwart | evidence note |
 | RocksDB (upstream lock) | rust `rocksdb` **0.24.0**; `librocksdb-sys` **0.17.3+10.4.2** | tag `Cargo.lock` | evidence note |
 | Blob hash crate | `blake3` **1.8.5** | tag `Cargo.lock` | evidence note |
@@ -103,7 +103,7 @@ compatibility ([AGENTS.md](../AGENTS.md), [open-choices.md](open-choices.md)).
 **Why binary FOD, not rustPlatform today:** cargo vendor hit crates.io HTTP 403
 in this environment (2026-07-30). Binary FODs are hermetic hashes and match the
 published tag. Source build is a future path, not current (host rustc age is
-no longer the blocker; living crane is 1.95 on 26.05).
+no longer the blocker; crane rustc is 1.99.0 from nixpkgs-rust, not host 1.95.0).
 
 **Approx closures (this machine after build):** server ~126.5 MiB; cli ~39 MiB
 (see evidence note for store path examples).
