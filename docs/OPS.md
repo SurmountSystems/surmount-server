@@ -1837,8 +1837,9 @@ management-ui or on :443.
 `surmount.grokOss.enable` stays default false. Enable only from private
 host-local. The module does not start a boot TUI unit. Do not set `Nice=`
 on grok-oss (sshd class). Flake input grok-oss tracks
-`github:SurmountSystems/grok-oss/remote-1` (open PR 51 is the product
-tip; default branch main is not). Operator bumps:
+`github:SurmountSystems/grok-oss/main`. Operator 2026-10-14 locked
+`b7ab91532c9e8008081b4f281794be43ecae73a6` (HB-1 merged as GitHub pull
+167, crate version 1.0.45). Operator bumps:
 `nix flake update grok-oss`. After a host switch that includes this
 package, attach with `just grok-oss` as user grok.
 

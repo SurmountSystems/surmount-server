@@ -71,11 +71,8 @@
     };
 
     # Grok OSS TUI (bin/grok-oss).
-    # remote-1 was deleted after PR 51 squash-merged onto main.
-    # 6edf5fda is not an ancestor of main. remote-2 then squash-merged
-    # as PR 59, and that commit is the main tip. No live ref still
-    # points at 6edf5fda, so the URL is main.
-    # Operator bumps: nix flake update grok-oss.
+    # URL is main. Operator 2026-10-14: HB-1 merged as GitHub pull 167.
+    # The lock follows that main. Bump with: nix flake update grok-oss.
     # Default-off NixOS module; package is fail-closed when enable=true.
     grok-oss.url = "github:SurmountSystems/grok-oss/main";
 
@@ -931,19 +928,23 @@
                 if [ "$fail" -ne 0 ]; then
                   exit 1
                 fi
-                echo ok > "$out"
+                mkdir -p "$out"
+                echo ok > "$out/ok"
               '';
 
           # just check is fmt, then clippy, then test. releaseTools.aggregate
           # builds constituents in parallel, so each clippy derivation depends
-          # on cargo fmt and nixfmt. Clippy does not start until both pass.
+          # on cargo fmt and nixfmt. The store paths are string context, not
+          # buildInputs: nix-fmt-check is a file, and stdenv would source a
+          # file in buildInputs.
           afterFmt =
             drv:
             drv.overrideAttrs (old: {
-              buildInputs = (old.buildInputs or [ ]) ++ [
-                management-ui-fmt
-                nix-fmt-check
-              ];
+              preBuild = ''
+                test -e ${management-ui-fmt}
+                test -e ${nix-fmt-check}
+                ${old.preBuild or ""}
+              '';
             });
 
           # Fast CI aggregate: rust quality + module contracts + nixfmt.

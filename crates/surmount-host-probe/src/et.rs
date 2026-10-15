@@ -308,7 +308,10 @@ mod tests {
     #[test]
     fn btop_extra_runs_btop_then_leaves_shell() {
         let extra = btop_et_extra();
-        assert_eq!(extra, vec!["-e".to_string(), "-c".to_string(), "btop".to_string()]);
+        assert_eq!(
+            extra,
+            vec!["-e".to_string(), "-c".to_string(), "btop".to_string()]
+        );
     }
 
     #[test]
