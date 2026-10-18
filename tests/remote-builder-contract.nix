@@ -54,17 +54,16 @@ let
     assert (d.MemoryAccounting or false) == true;
     "t39g-nix-daemon-is-the-real-build-cgroup-ok";
 
-  # Job slots are memory-safe. Do not default to a fake 64-job advert.
-  t39h-max-jobs-tracks-cores-not-fake-64 =
+  # Half the measured mail-host CPUs. Not one slot per online CPU.
+  t39h-max-jobs-half-measured-cpus =
     let
       e = evalRB { remoteBuilder.enable = true; };
       jobs = e.config.nix.settings.max-jobs;
     in
     assert failedAssertions e == [ ];
-    assert e.config.surmount.remoteBuilder.maxJobs == 8;
-    assert jobs == 8;
-    assert jobs != 64;
-    "t39h-max-jobs-tracks-cores-not-fake-64-ok";
+    assert e.config.surmount.remoteBuilder.maxJobs == 32;
+    assert jobs == 32;
+    "t39h-max-jobs-half-measured-cpus-ok";
 
   t39i-custom-max-jobs-not-sku =
     let
@@ -195,7 +194,7 @@ in
 {
   ok = [
     t39g-nix-daemon-is-the-real-build-cgroup
-    t39h-max-jobs-tracks-cores-not-fake-64
+    t39h-max-jobs-half-measured-cpus
     t39i-custom-max-jobs-not-sku
     t39j-cpu-quota-auto-not-one-cpu
     t39p-online-cpus-sets-multi-cpu-quota

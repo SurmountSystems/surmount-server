@@ -485,8 +485,10 @@ nixbuilder-only cap is a miss. Job slots (`maxJobs`, laptop machines
 fake high slot count that lets Nix spawn more parallel rustc than the
 guest can hold. Speed factor is not a substitute for `MemoryMax`.
 Scaffold `memoryMax = "4G"` is a builder budget, not a published guest
-RAM size. Scaffold `maxJobs = 8` is a memory-safe default, not a
-published core count. The builder is the preferred in-guest OOM
+RAM size. Scaffold `maxJobs = 32` is half the measured mail-host CPUs
+(operator 2026-10-17). It is not one slot per online CPU. Scram, the
+builder OOM score, and Nice=19 are why this is no longer 8. Do not
+publish the raw CPU count. The builder is the preferred in-guest OOM
 victim (`OOMScoreAdjust`). Enable `surmount.hardening.qemuGuestAgent`
 from host-local so SHC can inject a command when SSH is stuck. Do **not**
 start Lake from an agent. `surmount.lake.enable` stays false until

@@ -19,8 +19,9 @@ runs the real switch with Eternal Terminal open). Prior 2026-09-03 (public NIP-0
 missing `ConnectInfo`; NWC is the `/mail` wallet store). Prior 2026-09-02 (guest grok-oss uses a machine xAI console
 API key on surmount-1, path only under `/home/grok/.grok`; guest has no
 git and no GitHub SSH; signed commits stay on the laptop). Prior same
-day (flake input grok-oss tracks
-`github:SurmountSystems/grok-oss/remote-1`; after a host switch, run
+day (flake input grok-oss is commit pin
+`decb052744d25b63dbca8a95ca65b4ad794b9ad5` on
+`github:SurmountSystems/grok-oss`; after a host switch, run
 `just grok-oss` as user grok).
 Prior 2026-08-25 (docs polish: operator bins are `nix run .#...`;
 living mailbox maps stay in `~/.agents/surmount-server/operator-facts.md`,
@@ -917,9 +918,9 @@ does not wait on ssh-ng. Example: `BUILD_LOCAL=true just rekey`. That
 sets `NIX_CONFIG` `builders =` and `max-jobs = auto` for that command
 only. Do not copy guest core counts onto the laptop. Pre-commit honors
 the same variable. When the guest is up, omit it so rustc still goes
-to the niced remote builder. `maxJobs` (scaffold default is a
-memory-safe slot count, **not** laptop cores and **not** a published
-guest core count) sets host `nix.settings.max-jobs`. That slot count
+to the niced remote builder. `maxJobs` (scaffold default **32**, half
+the measured mail-host CPUs, **not** one slot per online CPU and
+**not** a published core count) sets host `nix.settings.max-jobs`. That slot count
 must stay under `memoryMax` so Nix does not spawn more parallel rustc
 than the cgroup can hold. Using every guest CPU as a job slot is the
 OOM path. `cpuQuota = auto` with `onlineCpus` unset leaves systemd
@@ -1836,8 +1837,9 @@ management-ui or on :443.
 
 `surmount.grokOss.enable` stays default false. Enable only from private
 host-local. The module does not start a boot TUI unit. Do not set `Nice=`
-on grok-oss (sshd class). Flake input grok-oss tracks
-`github:SurmountSystems/grok-oss/main`. Operator 2026-10-14 locked
+on grok-oss (sshd class). Flake input grok-oss is commit pin
+`decb052744d25b63dbca8a95ca65b4ad794b9ad5` on
+`github:SurmountSystems/grok-oss`. Operator 2026-10-14 locked
 `b7ab91532c9e8008081b4f281794be43ecae73a6` (HB-1 merged as GitHub pull
 167, crate version 1.0.45). Operator bumps:
 `nix flake update grok-oss`. After a host switch that includes this

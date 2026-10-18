@@ -285,7 +285,10 @@ deploy-host *args:
     exec nix run ".#surmount-deploy-host" -- "$@"
 
 # Interactive btop on the mail host via Eternal Terminal (not raw SSH).
-# Nested guest: the crate runs local btop. Needs a live tty.
+# Laptop: exec the Eternal Terminal client at $HOME/.nix-profile/bin/et.
+# That is the client command -v et prints. Do not nix run or copy a binary.
+# Host btop is the one already installed on the mail host. -e (--noexit) leaves a shell.
+# Nested guest: local btop, no et. Needs a live tty.
 [positional-arguments]
 btop *args:
     #!/usr/bin/env bash
@@ -293,7 +296,10 @@ btop *args:
     if [[ "${1:-}" == "--" ]]; then
       shift
     fi
-    exec nix run ".#surmount-btop-host" -- "$@"
+    if [[ -f /etc/surmount/root-justfile ]]; then
+      exec btop "$@"
+    fi
+    exec "$HOME/.nix-profile/bin/et" -k 5 -p 2022 --ssh-option "IdentityFile=${SURMOUNT_DEPLOY_SSH_IDENTITY:-$HOME/.ssh/id_ed25519}" -e -c btop root@surmount-1 "$@"
 
 [positional-arguments]
 host-inxi *args:

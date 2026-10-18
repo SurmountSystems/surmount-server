@@ -32,7 +32,7 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
+reqwest = { workspace = true, features = ["blocking", "query"] }
 
 [lints]
 workspace = true

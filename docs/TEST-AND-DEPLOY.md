@@ -321,7 +321,8 @@ The extra `--` after `just deploy-host` stops just from eating flags.
 What the dry-run prints (it must not rebuild the guest):
 
 - rsync of the public tree to `root@surmount-1:/root/surmount-server/`
-  (excludes `.git/`, `host-local/`, secrets patterns)
+  (excludes `.git/`, `host-local/`, the workspace `target/` cargo cache,
+  `crates/target/`, secrets patterns)
 - rsync of private host-local to
   `root@surmount-1:/root/surmount-server/host-local/`
 - `nixos-rebuild switch --flake path:/root/surmount-server#mail-vps`

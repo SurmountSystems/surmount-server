@@ -171,7 +171,7 @@ let
     assert e.config.surmount.logging.runtimeMaxUse == "256M";
     assert e.config.surmount.remoteBuilder.memoryMax == "4G";
     assert e.config.surmount.remoteBuilder.cpuQuota == "auto";
-    assert e.config.surmount.remoteBuilder.maxJobs == 8;
+    assert e.config.surmount.remoteBuilder.maxJobs == 32;
     assert e.config.surmount.remoteBuilder.diskGuardPercent == 95;
     assert e.config.surmount.lake.enable == false;
     assert e.config.surmount.lake.jobs == 4;
@@ -2383,8 +2383,7 @@ let
     assert !(userSlice ? CPUQuota);
     assert (e.config.systemd.services.nix-daemon.serviceConfig.MemoryMax or null) == "4G";
     assert (e.config.systemd.services.nix-daemon.serviceConfig.Nice or null) == 19;
-    assert e.config.nix.settings.max-jobs == 8;
-    assert e.config.nix.settings.max-jobs != 64;
+    assert e.config.nix.settings.max-jobs == 32;
     assert e.config.environment.etc ? "surmount/niced-builder";
     assert e.config.environment.etc ? "surmount/niced-nix-daemon-stdio";
     assert !(e.config.environment.etc ? "surmount/niced-lake");
@@ -2496,15 +2495,14 @@ let
     assert (d.IOSchedulingClass or "") == "idle";
     "t39g-nix-daemon-is-the-real-build-cgroup-ok";
 
-  t39h-max-jobs-tracks-cores-not-fake-64 =
+  t39h-max-jobs-half-measured-cpus =
     let
       e = evalSurmount { remoteBuilder.enable = true; };
     in
     assert failedAssertions e == [ ];
-    assert e.config.surmount.remoteBuilder.maxJobs == 8;
-    assert e.config.nix.settings.max-jobs == 8;
-    assert e.config.nix.settings.max-jobs != 64;
-    "t39h-max-jobs-tracks-cores-not-fake-64-ok";
+    assert e.config.surmount.remoteBuilder.maxJobs == 32;
+    assert e.config.nix.settings.max-jobs == 32;
+    "t39h-max-jobs-half-measured-cpus-ok";
 
   t39o-builder-is-preferred-oom-victim =
     let
@@ -3239,7 +3237,7 @@ let
     t39e-remote-builder-refuses-lake-unit
     t39f-remote-builder-no-nix-ld
     t39g-nix-daemon-is-the-real-build-cgroup
-    t39h-max-jobs-tracks-cores-not-fake-64
+    t39h-max-jobs-half-measured-cpus
     t39o-builder-is-preferred-oom-victim
     t40-apex-public-root-packaged-site
     t41-static-vhosts-env-and-readonly-paths

@@ -13,9 +13,13 @@ let
   rustToolchain = import ../rust-toolchain.nix { pkgs = pkgsRust; };
   craneLib' = craneLib.overrideToolchain rustToolchain;
 
+  # The btop exec test reads the repo justfile. filterCargoSources drops it.
   src = lib.cleanSourceWith {
     src = craneLib'.path ../..;
-    filter = path: type: craneLib'.filterCargoSources path type;
+    filter =
+      path: type:
+        (craneLib'.filterCargoSources path type)
+        || (type == "regular" && builtins.baseNameOf path == "justfile");
   };
 
   commonArgs = {
@@ -34,7 +38,8 @@ let
     commonArgs
     // {
       inherit cargoArtifacts;
-      cargoTestExtraArgs = "-p surmount-host-probe";
+      # --show-output prints BTOP_LAUNCH_ARGV from the shipped et test.
+      cargoTestExtraArgs = "-p surmount-host-probe -- --show-output";
       meta = {
         description = "Host probes: inxi (no TTY), btop (TTY), hybrid TLS";
         mainProgram = "surmount-inxi-host";

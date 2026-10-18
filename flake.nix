@@ -32,27 +32,36 @@
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.6.0 source build).
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.7.0 source build).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     # rustc/cargo for crane packages and the grok-oss build. Not host
-    # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable: on 2026-10-10 that
-    # branch still only has pkgs/development/compilers/rust/1_98.nix.
-    # Not staging HEAD: that tip has rustc 1.99.0 and pkgs.arti 2.7.0.
-    # This rev is the nixpkgs commit "rust: 1.98.1 -> 1.99.0" (c9f19b6,
-    # committed 2026-10-01). pkgs.rustc is 1.99.0 and pkgs.arti stays 2.6.0.
-    # The rustc 1.99.0 source hash matches the official tarball. Crane
-    # 47b6b27 has no nixpkgs input: mkLib keeps host pkgs and
-    # overrideToolchain supplies this rustc. Do not float this input.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/c9f19b6be67332ce2ee7520c1630c804685df838";
+    # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable: on 2026-10-17 that
+    # branch still only has pkgs/development/compilers/rust/1_98.nix, which
+    # is below 1.99. Master has 1_99.nix. Upstream stable is 1.99.1
+    # (2026-10-15). nixpkgs has no 1.99.1 file, so this pin is rustc 1.99.0.
+    # Not beta 1.100. Not a downgrade. Not a side commit that keeps an older
+    # sqlite expression.
+    # This rev is c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81 (nixpkgs master,
+    # 2026-10-18). pkgs.rustc is 1.99.0 and pkgs.arti is 2.7.0. Prior lock
+    # 93b590222 (2026-10-14) is not this pin. Crane has no nixpkgs input:
+    # mkLib keeps host pkgs and overrideToolchain supplies this rustc.
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
-    crane.url = "github:ipetkov/crane/47b6b27ed9a3a9181415e4367d0c30ab2a0e0250";
+    # Crane release v0.24.0 is 692f7e9 (2026-08-21), older than master.
+    # Master tip bd63bf1 (2026-10-11) is one commit after 47b6b27. That
+    # commit only bumps crane's internal flake.lock. The pin follows master.
+    crane.url = "github:ipetkov/crane/bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a";
     # crane follows its own nixpkgs; we pass pkgs from our nixpkgs in outputs.
 
+    # sops-nix has no versioned GitHub release. 44931708 (2026-10-15) is six
+    # commits after 5efb5a6: nested JSON keys, secrets ordered before
+    # sysinit.target, and clearer key errors. The tip commit is a finished
+    # test, not a broken HEAD.
     sops-nix = {
-      url = "github:Mic92/sops-nix/5efb5a6f4f5ab192817d28557dd4d650fa14d866";
+      url = "github:Mic92/sops-nix/44931708c62937c2b1bf7953902989fa5bb9ee1b";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -71,10 +80,13 @@
     };
 
     # Grok OSS TUI (bin/grok-oss).
-    # URL is main. Operator 2026-10-14: HB-1 merged as GitHub pull 167.
-    # The lock follows that main. Bump with: nix flake update grok-oss.
+    # Commit pin, not a floating main ref. The repo stays
+    # github:SurmountSystems/grok-oss. This rev is
+    # decb052744d25b63dbca8a95ca65b4ad794b9ad5. Prior lock was
+    # 7dc3685277bb65c4a0634e91a6e2596e48ad882f (main).
+    # Do not retarget this input to a side branch.
     # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/main";
+    grok-oss.url = "github:SurmountSystems/grok-oss/decb052744d25b63dbca8a95ca65b4ad794b9ad5";
 
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
@@ -333,7 +345,7 @@
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.6.0 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.7.0 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
           # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
           # vendor handoff avoids crates.io 403). C deps from host pkgs.

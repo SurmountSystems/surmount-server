@@ -59,6 +59,33 @@ pub fn btop_et_extra() -> Vec<String> {
     vec!["-e".into(), "-c".into(), "btop".into()]
 }
 
+/// Mail-host Eternal Terminal target already used by `just deploy`.
+/// Not a second host. Port and identity stay in `build_et_argv`.
+pub const BTOP_ET_TARGET: &str = "root@surmount-1";
+
+/// Laptop Eternal Terminal client. `command -v et` prints this path
+/// when PATH is `$HOME/.nix-profile/bin:/usr/bin`.
+/// The recipe does not nix-run, nix-build, or copy a binary to the mail host.
+pub const BTOP_ET_CLIENT: &str = "$HOME/.nix-profile/bin/et";
+
+/// Shell default for the root identity `operator_ssh_identity` already
+/// selects: `SURMOUNT_DEPLOY_SSH_IDENTITY`, else `$HOME/.ssh/id_ed25519`.
+pub const BTOP_ET_IDENTITY_SHELL: &str =
+    "${SURMOUNT_DEPLOY_SSH_IDENTITY:-$HOME/.ssh/id_ed25519}";
+
+/// Laptop `just btop` argv. The program is `$HOME/.nix-profile/bin/et`.
+/// Does not nix-run, nix-build, or copy a store path.
+/// Nested guest detection stays in `already_on_mail_guest`. This argv
+/// is only the laptop launch.
+pub fn btop_laptop_et_argv() -> Vec<String> {
+    build_et_argv(
+        BTOP_ET_CLIENT,
+        BTOP_ET_TARGET,
+        &btop_et_extra(),
+        Some(Path::new(BTOP_ET_IDENTITY_SHELL)),
+    )
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GuestSessionHints {
     pub force_local: Option<bool>,
@@ -284,7 +311,7 @@ pub fn format_et_status(st: EtPortStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn root_target_gets_identity_file() {
@@ -312,6 +339,138 @@ mod tests {
             extra,
             vec!["-e".to_string(), "-c".to_string(), "btop".to_string()]
         );
+    }
+
+    #[test]
+    fn laptop_justfile_btop_matches_et_argv() {
+        let extra = btop_et_extra();
+        let argv = build_et_argv(BTOP_ET_CLIENT, "root@surmount-1", &extra, None);
+        let just = include_str!("../../../justfile");
+        let recipe = just
+            .split("btop *args:")
+            .nth(1)
+            .expect("just btop recipe");
+        let body = recipe.split("\n\n").next().expect("recipe body");
+        assert!(body.contains(BTOP_ET_CLIENT), "{body}");
+        assert!(!body.contains("nix run"), "{body}");
+        assert!(!body.contains("nix build"), "{body}");
+        assert!(!body.contains("/nix/store"), "{body}");
+        for token in &argv {
+            if token == BTOP_ET_CLIENT || token == "root@surmount-1" {
+                continue;
+            }
+            assert!(
+                body.contains(token.as_str()),
+                "just btop missing {token} from real argv {argv:?}\n{body}"
+            );
+        }
+    }
+
+    fn shell_join_argv(argv: &[String]) -> String {
+        argv.iter()
+            .map(|arg| {
+                let plain = arg.chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | '/' | ':')
+                });
+                if plain {
+                    arg.clone()
+                } else {
+                    format!("\"{arg}\"")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn btop_recipe_body(just: &str) -> String {
+        let mut body = String::new();
+        let mut in_recipe = false;
+        for line in just.lines() {
+            if !in_recipe {
+                if line.starts_with("btop ") || line == "btop:" {
+                    in_recipe = true;
+                }
+                continue;
+            }
+            if !line.is_empty()
+                && !line.starts_with(' ')
+                && !line.starts_with('\t')
+                && !line.starts_with('#')
+            {
+                break;
+            }
+            body.push_str(line);
+            body.push('\n');
+        }
+        assert!(in_recipe, "justfile has no btop recipe");
+        body
+    }
+
+    #[test]
+    fn btop_laptop_just_exec_matches_argv_not_nix() {
+        let argv = btop_laptop_et_argv();
+        let via_builder = build_et_argv(
+            BTOP_ET_CLIENT,
+            BTOP_ET_TARGET,
+            &btop_et_extra(),
+            Some(Path::new(BTOP_ET_IDENTITY_SHELL)),
+        );
+        assert_eq!(argv, via_builder);
+        assert_eq!(
+            argv.first().map(String::as_str),
+            Some(BTOP_ET_CLIENT),
+            "{argv:?}"
+        );
+        assert!(
+            argv.windows(3)
+                .any(|w| w[0] == "-e" && w[1] == "-c" && w[2] == "btop"),
+            "{argv:?}"
+        );
+        assert!(argv.iter().any(|a| a == "-p"), "{argv:?}");
+        assert!(argv.iter().any(|a| a == "2022"), "{argv:?}");
+        assert!(argv.iter().any(|a| a == "--ssh-option"), "{argv:?}");
+        assert!(
+            argv.iter().any(|a| a.starts_with("IdentityFile=")),
+            "{argv:?}"
+        );
+        assert!(argv.iter().any(|a| a == BTOP_ET_TARGET), "{argv:?}");
+        let joined = argv.join(" ");
+        assert!(!joined.contains("nix run"), "{joined}");
+        assert!(!joined.contains("nix build"), "{joined}");
+        assert!(!joined.contains("nix copy"), "{joined}");
+        assert!(!joined.contains("/nix/store"), "{joined}");
+
+        let just_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../justfile");
+        let just = std::fs::read_to_string(&just_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", just_path.display()));
+        let recipe = btop_recipe_body(&just);
+        let exec_line = recipe
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("exec ") && line.contains(BTOP_ET_CLIENT))
+            .unwrap_or_else(|| panic!("btop recipe has no et client exec line:\n{recipe}"));
+        let rendered = shell_join_argv(&argv);
+        let tail = exec_line
+            .strip_prefix("exec ")
+            .unwrap_or_else(|| panic!("exec line is not exec: {exec_line}"));
+        let tail = tail.strip_suffix(" \"$@\"").unwrap_or_else(|| {
+            panic!("positional args must stay after the locked argv: {exec_line}")
+        });
+        assert_eq!(
+            tail, rendered,
+            "just btop exec drifted from btop_laptop_et_argv"
+        );
+        assert!(!recipe.contains("nix run"), "{recipe}");
+        assert!(!recipe.contains("nix build"), "{recipe}");
+        assert!(!recipe.contains("nix copy"), "{recipe}");
+        assert!(!recipe.contains("/nix/store"), "{recipe}");
+        assert!(!recipe.contains("surmount-btop-host"), "{recipe}");
+        assert!(!just.contains("nix run \".#surmount-btop-host\""), "{just}");
+        // Visible in the remote test log (--show-output). -e is et --noexit.
+        eprintln!("BTOP_LAUNCH_ARGV={rendered}");
+        eprintln!("BTOP_LAUNCH_NOEXIT_FLAG=-e");
+        eprintln!("BTOP_LAUNCH_REMOTE_COMMAND=-c btop");
+        eprintln!("BTOP_LAUNCH_COPY=absent");
     }
 
     #[test]

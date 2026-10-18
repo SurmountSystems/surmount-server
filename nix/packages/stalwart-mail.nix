@@ -41,20 +41,21 @@
 }:
 
 let
-  # Checked 2026-10-03: GitHub tag v0.16.24. Each 0.16.x note says an
-  # upgrade from 0.16.x replaces the binary. UPGRADING/v0_16.md is the
-  # 0.15-and-below migration, which this pin already passed.
-  version = "0.16.24";
+  # Checked 2026-10-17: GitHub tag v0.16.26 (released 2026-10-11).
+  # v0.16.25 and v0.16.26 say an upgrade from 0.16.x replaces the binary.
+  # Those notes do not change the settings schema. UPGRADING/v0_16.md is
+  # the 0.15-and-below migration, which this pin already passed.
+  version = "0.16.26";
 
   # Release asset hashes (gnu libc). musl variants exist upstream if needed.
   sources = {
     x86_64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-UTkmkdSrZ4ZOhK9SFSd9vUoGn/r5oM65SgdGLiJIeEM=";
+      hash = "sha256-7VCV//2Lat342EJMBqV0lIFycW4F9S85Td/vP8K9IhE=";
     };
     aarch64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-TgJZcaZZHXo/uBiDxVbQOPokbugWTr2govpoLl0xdlA=";
+      hash = "sha256-uqWBIx97SlO/7pAPfhhrXPRgWHRVimKYPjiI0McPp8k=";
     };
   };
 

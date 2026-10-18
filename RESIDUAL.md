@@ -153,7 +153,7 @@ start Lake from an agent. SHC ticket 261
 closed 2026-08-18. Agents never reboot. Do not open another ticket. Do
 not invent MX / DMARC / VW / ban / Q-AUTH-1.
 In-tree scaffold `memoryMax = "4G"` is not a published guest RAM size.
-Scaffold `maxJobs = 8` is not a published core count.
+Scaffold `maxJobs = 32` is half the measured mail-host CPUs, not one slot per online CPU.
 Host-local may set a real cap privately. Niceness is not a memory cap.
 The operator laptop is local. surmount-1 is the remote builder.
 Laptop user Nix machines `max-jobs` matches live guest

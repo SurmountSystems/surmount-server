@@ -22,6 +22,8 @@ const RSYNC_EXCLUDES: &[&str] = &[
     "--exclude",
     "crates/target/",
     "--exclude",
+    "target/",
+    "--exclude",
     "host-local/",
     "--exclude",
     "**/host-local/",
@@ -648,6 +650,24 @@ fn run_cmd(argv: &[String]) -> Result<(), ToolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn public_rsync_skips_workspace_cargo_target() {
+        let mut patterns = Vec::new();
+        let mut flags = RSYNC_EXCLUDES.iter();
+        while let Some(flag) = flags.next() {
+            assert_eq!(*flag, "--exclude");
+            patterns.push(*flags.next().expect("exclude pattern"));
+        }
+        assert!(
+            patterns.contains(&"target/"),
+            "workspace cargo target must stay off the wire: {patterns:?}"
+        );
+        assert!(
+            patterns.contains(&"crates/target/"),
+            "crate cargo target must stay off the wire: {patterns:?}"
+        );
+    }
 
     #[test]
     fn root_at_host_is_root_user() {

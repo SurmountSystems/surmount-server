@@ -5,7 +5,7 @@ survive compaction live here, in [operator-direction.md](operator-direction.md),
 and in [open-choices.md](open-choices.md). Implementation detail stays in Nix
 modules and Rust crates.
 
-**Last updated:** 2026-09-11 (per-site v3 onions; Onion-Location is each Host's onion root plus path). Prior 2026-08-17 (Onion-Location + Alt-Svc on Axum edge; live Arti unit)
+**Last updated:** 2026-10-16 (mail hostname `/` is the services console, not a redirect). Prior 2026-09-11 (per-site v3 onions; Onion-Location is each Host's onion root plus path). Prior 2026-08-17 (Onion-Location + Alt-Svc on Axum edge; live Arti unit)
 
 Operator direction 2026-07-30 is working product direction (dated, not eternal
 law). Scaffold defaults still describe what code does today when they differ.
@@ -208,7 +208,7 @@ Firewall set in `modules/networking.nix`.
 |------|------|----------|
 | `services.surmount.systems` | `/` | management-ui operator console (UDS target; TCP loopback scaffold) |
 | `services.surmount.systems` | `/stalwart-admin/` | Stalwart HTTP (bootstrap only) |
-| `mail.surmount.systems` | `/` | redirect to services (ACME name for mail certs) |
+| `mail.surmount.systems` | `/` | same console as services. Host classification is Other, so `/` redirects to `/login` on that name. The name is on the certificate. It is not a separate public site. |
 | apex / www | `/` | packaged SurmountSystems/site static files (flake input; store path default); else UNDER CONSTRUCTION if the root has no index.html (not operator console) |
 | future vault host | `/` | Vaultwarden local only (private, no public signup) |
 

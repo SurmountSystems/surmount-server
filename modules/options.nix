@@ -1318,16 +1318,17 @@ in
 
       maxJobs = mkOption {
         type = types.ints.positive;
-        default = 8;
+        default = 32;
         description = ''
           Parallel store jobs this builder will accept (host
           nix.settings.max-jobs). The operator laptop is local;
           surmount-1 is the remote builder. Laptop ssh-ng machines
           max-jobs must match this live guest number, not laptop inxi
           / nproc. Measure the guest with ssh surmount-1 inxi or lscpu
-          before changing it. Scaffold 8 is a memory-safe default, not
-          laptop cores and not a published guest SKU. Do not set this
-          to a fake high advert.
+          before changing it. Scaffold 32 is half the measured
+          mail-host CPUs (operator 2026-10-17). It is not one slot per
+          online CPU. Scram, the builder OOM score, and Nice=19 are
+          why this is no longer 8. Do not publish the raw CPU count.
         '';
       };
 
