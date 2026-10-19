@@ -82,12 +82,13 @@
     # Grok OSS TUI (bin/grok-oss).
     # Commit pin, not a floating main ref. The repo stays
     # github:SurmountSystems/grok-oss. This rev is
-    # 182293cb30fa5414dd47686b92708103519b7462. Prior lock was
+    # 525538172dc21391bc690a4cc4a8706a5c554e47. Prior lock was
+    # 182293cb30fa5414dd47686b92708103519b7462. Earlier lock was
     # decb052744d25b63dbca8a95ca65b4ad794b9ad5. Earlier lock was
     # 7dc3685277bb65c4a0634e91a6e2596e48ad882f (main).
     # Do not retarget this input to a side branch.
     # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/182293cb30fa5414dd47686b92708103519b7462";
+    grok-oss.url = "github:SurmountSystems/grok-oss/525538172dc21391bc690a4cc4a8706a5c554e47";
 
     # Tau (bin/tau). SurmountSystems/tau master at
     # d2e1955b0491f538a486007d0d3ab779d95a828f (committer
