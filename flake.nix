@@ -21,13 +21,10 @@
   # ./host-local is auto-imported when present (path flake / remote rsync
   # without .git); never committed.
 
-  # Mild discoverability only; host nix.settings already prefer cache.nixos.org.
-  nixConfig = {
-    extra-substituters = [ "https://cache.nixos.org" ];
-    extra-trusted-public-keys = [
-      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-    ];
-  };
+  # Do not set nixConfig extra-substituters here. cache.nixos.org is already
+  # the default cache. Guest nixos-rebuild is not a trusted flake-config
+  # context, so extra-substituters / extra-trusted-public-keys only printed
+  # "ignoring untrusted flake configuration" on the switch (2026-09-20).
 
   inputs = {
     # Prefer stable for a mail host. Bump deliberately after reading release notes.
@@ -35,26 +32,41 @@
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.5.1 source build).
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.7.0 source build).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # Rustc/cargo only for engines whose MSRV exceeds the host channel default.
-    # Arti 2.5.1 MSRV is 1.91. Keep a separate input so we can pin newer rustc
-    # without waiting on every host-channel package set. Bump when Arti needs it.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # rustc/cargo for crane packages and the grok-oss build. Not host
+    # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable. Not beta 1.100.
+    # Master HEAD 27347cc2965498fa03393739031c9ef8ecd72c0a (2026-10-19)
+    # still has pkgs/development/compilers/rust/1_99.nix at rustcVersion
+    # "1.99.0". The 1.99.1 file is commit
+    # 9ecc0a672e9ef2ca4eec8e87dbee653607a7d332 (message
+    # "rust: 1.99.0 -> 1.99.1"), open as NixOS/nixpkgs pull 574572 against
+    # staging, not merged to master. That file sets rustcVersion = "1.99.1".
+    # Prior lock c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81 was rustc 1.99.0.
+    # Crane has no nixpkgs input: mkLib keeps host pkgs and
+    # overrideToolchain supplies this rustc.
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/9ecc0a672e9ef2ca4eec8e87dbee653607a7d332";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
-    crane.url = "github:ipetkov/crane/756d6d07c3818ea95d1e2cdac63fa7d02fe3e61b";
+    # Crane release v0.24.0 is 692f7e9 (2026-08-21), older than master.
+    # Master tip bd63bf1 (2026-10-11) is one commit after 47b6b27. That
+    # commit only bumps crane's internal flake.lock. The pin follows master.
+    crane.url = "github:ipetkov/crane/bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a";
     # crane follows its own nixpkgs; we pass pkgs from our nixpkgs in outputs.
 
+    # sops-nix has no versioned GitHub release. 44931708 (2026-10-15) is six
+    # commits after 5efb5a6: nested JSON keys, secrets ordered before
+    # sysinit.target, and clearer key errors. The tip commit is a finished
+    # test, not a broken HEAD.
     sops-nix = {
-      url = "github:Mic92/sops-nix/f1406619a3884cd5c47992a70b8b35c9c0fcb4c9";
+      url = "github:Mic92/sops-nix/44931708c62937c2b1bf7953902989fa5bb9ee1b";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
     # Public static site for apex/www. Fetch the git tree (HTML/CSS/JS).
-    # Operator bumps: just deploy (nix flake update surmount-site).
+    # Operator bumps: just publish (nix flake update surmount-site).
     surmount-site = {
       url = "github:SurmountSystems/site";
       flake = false;
@@ -67,11 +79,24 @@
       flake = false;
     };
 
-    # Grok OSS TUI (bin/grok-oss). Product tip is still branch remote-1
-    # (open PR 51; default branch main is #50 and is not this tip).
-    # Operator bumps: nix flake update grok-oss.
+    # Grok OSS TUI (bin/grok-oss).
+    # Commit pin, not a floating main ref. The repo stays
+    # github:SurmountSystems/grok-oss. This rev is
+    # 182293cb30fa5414dd47686b92708103519b7462. Prior lock was
+    # decb052744d25b63dbca8a95ca65b4ad794b9ad5. Earlier lock was
+    # 7dc3685277bb65c4a0634e91a6e2596e48ad882f (main).
+    # Do not retarget this input to a side branch.
     # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/remote-1";
+    grok-oss.url = "github:SurmountSystems/grok-oss/182293cb30fa5414dd47686b92708103519b7462";
+
+    # Tau (bin/tau). SurmountSystems/tau master at
+    # d2e1955b0491f538a486007d0d3ab779d95a828f (committer
+    # 2026-10-05T16:18:47Z). This is the operator-synced tree,
+    # not github:dpc/tau. Commit pin, not a floating master ref.
+    # Do not follow their nixpkgs. Their nested nixpkgs-unstable
+    # stays their lock. Default-off NixOS module; package is
+    # fail-closed when enable=true.
+    tau.url = "github:SurmountSystems/tau/d2e1955b0491f538a486007d0d3ab779d95a828f";
 
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
@@ -89,6 +114,7 @@
       surmount-site,
       advisory-db,
       grok-oss,
+      tau,
       splora,
       ...
     }:
@@ -162,6 +188,10 @@
         surmount-secrets-prompt = self.packages.${system}.surmount-secrets-prompt;
         surmount-rekey = self.packages.${system}.surmount-rekey;
         grok-oss = self.packages.${system}.grok-oss;
+        # Flake-input bin/tau (packages.tau). Not referenced unless
+        # surmount.tau.enable is true. Default-off eval must not
+        # realize this derivation.
+        tau = self.packages.${system}.tau;
         # Flake-input packages. Upstream crane src omits .cargo/config.toml
         # (laptop cargo still uses Menhera). Do not wrap src again here.
         splora = self.packages.${system}.splora;
@@ -176,7 +206,7 @@
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
-      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust / nixos-unstable).
+      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.1).
       mkManagementUiCrane =
         system:
         let
@@ -195,6 +225,18 @@
               # filterCargoSources drops dotdirs.
               || (type == "directory" && baseNameOf path == ".well-known");
           };
+          # host-probe tests include_str the repo justfile. The shared src
+          # filter drops it. This copy is only for that crate's test and clippy.
+          srcWithJustfile = lib.cleanSourceWith {
+            src = craneLib.path ./.;
+            filter =
+              path: type:
+              (craneLib.filterCargoSources path type)
+              || (builtins.match ".*\\.(html|css|js|svg|png|toml|json|txt|md|sh|nix)$" path != null)
+              || (builtins.match ".*authorized_keys$" path != null)
+              || (type == "directory" && baseNameOf path == ".well-known")
+              || (type == "regular" && baseNameOf path == "justfile");
+          };
           commonArgs = {
             inherit src;
             pname = "surmount-management-ui";
@@ -211,6 +253,7 @@
             pkgs
             craneLib
             src
+            srcWithJustfile
             commonArgs
             cargoArtifacts
             ;
@@ -330,7 +373,7 @@
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.5.1 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.7.0 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
           # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
           # vendor handoff avoids crates.io 403). C deps from host pkgs.
@@ -403,10 +446,17 @@
           };
           # Grok OSS from locked github:SurmountSystems/grok-oss (operator-bump).
           # Not in checks.ci (heavy crane). Module stays default-off.
+          # rustToolchain is nixpkgs-rust 1.99.1, not host pkgs.rustc 1.95.0.
           grok-oss = pkgs.callPackage ./nix/packages/grok-oss.nix {
             grokOssFlake = grok-oss;
-            inherit system;
+            inherit system rustToolchain;
           };
+          # Tau from locked github:SurmountSystems/tau (operator-synced
+          # tree, not github:dpc/tau). Consume packages.tau only
+          # (upstream nix/pkgs/tau.nix). Not in checks.ci.
+          # Module stays default-off. Fail-closed when enable=true.
+          tau =
+            tau.packages.${system}.tau or (throw "tau flake input has no packages.${system}.tau (fail-closed)");
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
@@ -608,10 +658,19 @@
             commonArgs
             cargoArtifacts
             src
+            srcWithJustfile
             ;
+
+          # reqwest 0.13 rustls builds a platform verifier inside Client::build,
+          # including plain-HTTP callers. The sandbox has no CA bundle unless
+          # SSL_CERT_FILE points at cacert. rustls-native-certs reads that file.
+          sandboxCa = {
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+          };
 
           management-ui-test = craneLib.cargoTest (
             commonArgs
+            // sandboxCa
             // {
               inherit cargoArtifacts;
               cargoTestExtraArgs = "-p surmount-management-ui";
@@ -637,6 +696,7 @@
           # Pure e2e helpers + host-gate contracts (no VPS; not host probes).
           e2e-pure-test = craneLib.cargoTest (
             commonArgs
+            // sandboxCa
             // {
               inherit cargoArtifacts;
               pname = "surmount-e2e-pure";
@@ -668,6 +728,7 @@
             pname: extra:
             craneLib.cargoTest (
               commonArgs
+              // sandboxCa
               // extra
               // {
                 inherit cargoArtifacts;
@@ -780,10 +841,19 @@
             acc
             // lib.optionalAttrs landed {
               ${spec.crate} = self.packages.${system}.${spec.crate};
-              "${spec.crate}-test" = mkWave1Test spec.crate {
-                nativeBuildInputs = commonArgs.nativeBuildInputs ++ spec.extraNative;
-              };
-              "${spec.crate}-clippy" = mkWave1Clippy spec.crate { };
+              "${spec.crate}-test" = mkWave1Test spec.crate (
+                {
+                  nativeBuildInputs = commonArgs.nativeBuildInputs ++ spec.extraNative;
+                }
+                // lib.optionalAttrs (spec.crate == "surmount-host-probe") {
+                  src = srcWithJustfile;
+                }
+              );
+              "${spec.crate}-clippy" = mkWave1Clippy spec.crate (
+                lib.optionalAttrs (spec.crate == "surmount-host-probe") {
+                  src = srcWithJustfile;
+                }
+              );
             }
           ) { } waveOps;
 
@@ -859,6 +929,19 @@
             pkgs.writeText "arti-onion-package-contract" (builtins.toJSON r.ok);
 
           # Offline RustSec audit of Cargo.lock (no crates.io).
+          # Ignore RUSTSEC-2024-0436 (paste 1.0.15) only. That advisory's
+          # patched list is empty, and menhera-cooldown's newest paste is
+          # 1.0.15. Cargo does not select a pastey patch for crates that
+          # require paste 1.x. proc-macro-error2 (RUSTSEC-2026-0173) is
+          # not in this lock, so that ignore is gone.
+          # See docs/SECURITY.md and .cargo/audit.toml.
+          # --deny warnings stays. Do not ignore any other advisory.
+          # yanked.enabled is false because the sandbox has no crates.io
+          # index. cargo-audit otherwise prints "couldn't open crates.io
+          # index" and still exits 0. The nixos-26.05 cargo-audit binary
+          # has no --no-yanked flag. Yanked crates are refused by the
+          # menhera index when cargo update runs. This check does not
+          # pretend to scan yanks.
           cargo-audit =
             pkgs.runCommand "surmount-cargo-audit"
               {
@@ -866,7 +949,11 @@
               }
               ''
                 set -euo pipefail
-                cargo-audit audit --no-fetch --stale \
+                export HOME="$PWD/home"
+                mkdir -p .cargo "$HOME/.cargo"
+                printf '%s\n' '[yanked]' 'enabled = false' | tee .cargo/audit.toml > "$HOME/.cargo/audit.toml"
+                cargo-audit audit --no-fetch --stale --deny warnings \
+                  --ignore RUSTSEC-2024-0436 \
                   -d ${advisory-db} \
                   -f ${./Cargo.lock}
                 mkdir -p "$out"
@@ -909,8 +996,24 @@
                 if [ "$fail" -ne 0 ]; then
                   exit 1
                 fi
-                echo ok > "$out"
+                mkdir -p "$out"
+                echo ok > "$out/ok"
               '';
+
+          # just check is fmt, then clippy, then test. releaseTools.aggregate
+          # builds constituents in parallel, so each clippy derivation depends
+          # on cargo fmt and nixfmt. The store paths are string context, not
+          # buildInputs: nix-fmt-check is a file, and stdenv would source a
+          # file in buildInputs.
+          afterFmt =
+            drv:
+            drv.overrideAttrs (old: {
+              preBuild = ''
+                test -e ${management-ui-fmt}
+                test -e ${nix-fmt-check}
+                ${old.preBuild or ""}
+              '';
+            });
 
           # Fast CI aggregate: rust quality + module contracts + nixfmt.
           # Excludes mail-vm-test, mail-vps toplevel, stalwart FODs, host e2e.
@@ -919,21 +1022,28 @@
             constituents = [
               self.packages.${system}.management-ui
               management-ui-test
-              management-ui-clippy
               management-ui-fmt
+              nix-fmt-check
+              (afterFmt management-ui-clippy)
               e2e-pure-test
-              e2e-clippy
+              (afterFmt e2e-clippy)
               module-eval-contract
               deploy-secrets-contract
               arti-module-contract
               arti-onion-package-contract
               public-site-package-contract
               splora-package-contract
-              nix-fmt-check
               cargo-deny-bans
               cargo-audit
             ]
-            ++ wave1CiExtras;
+            ++ lib.concatMap (
+              spec:
+              lib.optionals (wave1CrateLanded spec.crate) [
+                self.packages.${system}.${spec.crate}
+                wave1CheckAttrs."${spec.crate}-test"
+                (afterFmt wave1CheckAttrs."${spec.crate}-clippy")
+              ]
+            ) waveOps;
           };
         in
         {
@@ -977,15 +1087,11 @@
                 inherit pkgs;
                 inherit (pkgs) lib;
                 nixosTest = pkgs.nixosTest or pkgs.testers.runNixOSTest;
+                # runNixOSTest pins node.pkgs to this overlaid set and marks
+                # nixpkgs.overlays read-only. Do not assign that option here.
                 surmountModules = [
                   sops-nix.nixosModules.sops
                   ./modules
-                  (
-                    { ... }:
-                    {
-                      nixpkgs.overlays = [ (surmountOverlay system) ];
-                    }
-                  )
                 ];
                 managementUi = self.packages.${system}.management-ui;
               }
@@ -1005,7 +1111,7 @@
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
-              # Match crane toolchain (nix/rust-toolchain.nix via nixpkgs-rust).
+              # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.99.1).
               (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
               rust-analyzer
               pkg-config

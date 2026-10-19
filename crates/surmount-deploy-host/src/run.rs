@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -21,6 +21,8 @@ const RSYNC_EXCLUDES: &[&str] = &[
     "result-*",
     "--exclude",
     "crates/target/",
+    "--exclude",
+    "target/",
     "--exclude",
     "host-local/",
     "--exclude",
@@ -286,15 +288,13 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
                 "deploy-host: running secrets-install-host (host-id={}; values not logged)",
                 opts.secrets_host_id.as_deref().unwrap_or("")
             );
+            // The bridge may already have written host secrets. Do not retry it.
             run_cmd(&secrets_cmd)?;
         }
     }
 
     let rebuild_flake_ref = format!("path:{}#{}", opts.remote_dir, opts.flake_attr);
-    let rebuild_remote_cmd = format!(
-        "nixos-rebuild switch --flake {}",
-        shell_quote(&rebuild_flake_ref)
-    );
+    let rebuild_remote_cmd = switch_remote_command(&rebuild_flake_ref);
     let smoke_name = smoke_remote_name();
     let smoke_remote_cmd = format!(
         "if command -v {smoke} >/dev/null 2>&1; then {smoke}; else echo 'deploy-host: remote smoke missing (surmount-deploy-host-post-switch-smoke not on PATH after switch)' >&2; exit 1; fi",
@@ -303,7 +303,14 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
 
     let mut rebuild_rc = 0i32;
     let mut smoke_rc = 0i32;
+    let mut built_generation: Option<u64> = None;
     if opts.dry_run {
+        println!(
+            "deploy-host: dry-run: ssh keepalives ServerAliveInterval=30 ServerAliveCountMax=10 TCPKeepAlive=yes"
+        );
+        println!(
+            "deploy-host: dry-run: a dropped connection retries before nixos-rebuild; a switch SSH drop is not retried"
+        );
         println!(
             "deploy-host: dry-run: rebuild uses path: flake so host-local (rsync'd, not in public git) is visible to Nix (git flake would omit untracked/gitignored paths)"
         );
@@ -313,7 +320,7 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
             shell_quote(&rebuild_remote_cmd)
         );
         println!(
-            "deploy-host: dry-run: post-switch smoke always runs after rebuild (even if rebuild exit non-zero): ssh -- {} {}",
+            "deploy-host: dry-run: post-switch smoke runs after a rebuild that finished (including a non-zero rebuild exit): ssh -- {} {}",
             shell_quote(&opts.target),
             shell_quote(&smoke_remote_cmd)
         );
@@ -321,13 +328,33 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
             "deploy-host: dry-run: smoke checks generation + systemctl is-active sshd stalwart-mail surmount-management-ui (start UI if inactive) + loopback /health"
         );
     } else {
-        rebuild_rc = ssh_run_rc(&opts.target, &rebuild_remote_cmd);
+        // One switch attempt. A drop after this starts may have changed the host.
+        // Capture stdout so the built-generation line can be read, and copy
+        // both streams through so a non-zero rebuild's own error stays visible.
+        let (finish, rebuild_stdout) = ssh_captured(&opts.target, &rebuild_remote_cmd);
+        built_generation = parse_built_generation(&rebuild_stdout);
+        if let RemoteFinish::Connection { code } = &finish {
+            eprintln!(
+                "deploy-host: nixos-rebuild exit={}",
+                ssh_status_label(*code)
+            );
+        }
+        rebuild_rc = switch_outcome(finish)?;
         eprintln!("deploy-host: nixos-rebuild exit={rebuild_rc}");
         eprintln!(
-            "deploy-host: running post-switch smoke on {} (always after rebuild)",
+            "deploy-host: running post-switch smoke on {} (after a finished rebuild)",
             opts.target
         );
-        smoke_rc = ssh_run_rc(&opts.target, &smoke_remote_cmd);
+        smoke_rc = match retry_remote(&format!("post-switch smoke ssh -- {}", opts.target), || {
+            ssh_finish(&opts.target, &smoke_remote_cmd)
+        }) {
+            Ok(code) => code,
+            Err(err) => {
+                return Err(ToolError::fail(format!(
+                    "{err}; not starting a second switch"
+                )));
+            }
+        };
         eprintln!("deploy-host: post-switch smoke exit={smoke_rc}");
     }
 
@@ -343,6 +370,19 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
         )));
     }
     if rebuild_rc != 0 {
+        // Smoke 0 is not success by itself. Exit 0 only when the later
+        // readlink generation is the generation the switch reported it built.
+        // Unknown, unchanged, or a generation that did not move stays exit 1.
+        if smoke_rc == 0 {
+            if let Some(built_n) = built_generation {
+                if read_profile_generation(&opts.target) == Some(built_n) {
+                    eprintln!(
+                        "deploy-host: generation {built_n} is the generation the switch built; nixos-rebuild exit={rebuild_rc}; post-switch smoke exit={smoke_rc}"
+                    );
+                    return Ok(());
+                }
+            }
+        }
         return Err(ToolError::fail(format!(
             "nixos-rebuild failed (exit {rebuild_rc}); post-switch smoke exit={smoke_rc} (activation may still have applied; inspect host)"
         )));
@@ -456,26 +496,176 @@ fn ssh_rsh(target: &str) -> String {
         .join(" ")
 }
 
-fn ssh_run(host: &str, remote_cmd: &str) -> Result<(), ToolError> {
+/// OpenSSH client failure is 255. A remote command that finished uses its
+/// own status, including 1. No code means the client died on a signal.
+const SSH_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RemoteFinish {
+    Exited(i32),
+    Connection { code: Option<i32> },
+    Local(String),
+}
+
+fn classify_ssh_code(code: Option<i32>) -> RemoteFinish {
+    match code {
+        Some(255) | None => RemoteFinish::Connection { code },
+        Some(other) => RemoteFinish::Exited(other),
+    }
+}
+
+/// rsync passes ssh's 255 through. 10, 30, and 35 are socket and timeout exits.
+fn classify_rsync_code(code: Option<i32>) -> RemoteFinish {
+    match code {
+        Some(10 | 30 | 35 | 255) | None => RemoteFinish::Connection { code },
+        Some(other) => RemoteFinish::Exited(other),
+    }
+}
+
+fn ssh_status_label(code: Option<i32>) -> String {
+    match code {
+        Some(code) => code.to_string(),
+        None => "signal".to_string(),
+    }
+}
+
+/// One remote switch. Prints `synthetic-built-generation:` after the rebuild.
+/// A new profile link (`system-N-link`) is the generation the switch built.
+/// The same link name as before the switch is `unchanged`, not a generation.
+/// The fake ssh matches `*nixos-rebuild*` before `*readlink*` and does not run
+/// this script; it prints the same generation line itself.
+fn switch_remote_command(flake_ref: &str) -> String {
+    let flake_q = shell_quote(flake_ref);
+    [
+        "before=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
+        &format!("nixos-rebuild switch --flake {flake_q}"),
+        "rc=$?",
+        "after=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
+        "if [ -n \"$after\" ] && [ \"$after\" != \"$before\" ]; then printf '%s\\n' \"synthetic-built-generation: $after\"; else printf '%s\\n' \"synthetic-built-generation: unchanged\"; fi",
+        "exit \"$rc\"",
+    ]
+    .join("; ")
+}
+
+/// Later readlink. The fake ssh prints the booted generation number for any
+/// command whose last argument contains `readlink`. On the host this is the
+/// profile link `system-N-link`, which switch updates. `/run/booted-system`
+/// stays on the previous boot until reboot, so it is not that generation.
+const PROFILE_GENERATION_REMOTE: &str = "readlink /nix/var/nix/profiles/system";
+
+fn parse_generation_token(token: &str) -> Option<u64> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    if token.bytes().all(|b| b.is_ascii_digit()) {
+        return token.parse::<u64>().ok().filter(|n| *n > 0);
+    }
+    let name = token.rsplit('/').next().unwrap_or(token);
+    let rest = name.strip_prefix("system-")?;
+    let num = rest.strip_suffix("-link")?;
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    num.parse::<u64>().ok().filter(|n| *n > 0)
+}
+
+fn parse_generation_text(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        return parse_generation_token(line);
+    }
+    None
+}
+
+fn parse_built_generation(stdout: &str) -> Option<u64> {
+    for line in stdout.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("synthetic-built-generation:") else {
+            continue;
+        };
+        return parse_generation_token(rest);
+    }
+    None
+}
+
+fn read_tee(mut src: impl Read, mut sink: impl Write) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match src.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let _ = sink.write_all(&chunk[..n]);
+                let _ = sink.flush();
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+/// Run one SSH. Copy stdout and stderr through as they arrive so a long
+/// rebuild stays visible, and return stdout for the generation line.
+/// Stderr is not dropped.
+fn ssh_captured(host: &str, remote_cmd: &str) -> (RemoteFinish, String) {
     let extra = ssh_extra_args(host);
-    let st = Command::new(ssh_bin())
+    let mut child = match Command::new(ssh_bin())
         .args(&extra)
         .arg("--")
         .arg(host)
         .arg(remote_cmd)
-        .status()
-        .map_err(|e| ToolError::fail(format!("ssh failed: {e}")))?;
-    if st.success() {
-        Ok(())
-    } else {
-        Err(ToolError::fail(format!(
-            "ssh -- {host} exited {}",
-            st.code().unwrap_or(1)
-        )))
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            return (
+                RemoteFinish::Local(format!("ssh failed: {e}")),
+                String::new(),
+            );
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        return (
+            RemoteFinish::Local("ssh stdout missing".to_string()),
+            String::new(),
+        );
+    };
+    let Some(stderr) = child.stderr.take() else {
+        return (
+            RemoteFinish::Local("ssh stderr missing".to_string()),
+            String::new(),
+        );
+    };
+    let err_thread = std::thread::spawn(move || {
+        let _ = read_tee(stderr, io::stderr());
+    });
+    let out_buf = read_tee(stdout, io::stdout());
+    let _ = err_thread.join();
+    let finish = match child.wait() {
+        Ok(status) => classify_ssh_code(status.code()),
+        Err(e) => RemoteFinish::Local(format!("ssh failed: {e}")),
+    };
+    (finish, String::from_utf8_lossy(&out_buf).into_owned())
+}
+
+fn read_profile_generation(host: &str) -> Option<u64> {
+    let (finish, text) = ssh_captured(host, PROFILE_GENERATION_REMOTE);
+    match finish {
+        RemoteFinish::Exited(0) => parse_generation_text(&text),
+        _ => None,
     }
 }
 
-fn ssh_run_rc(host: &str, remote_cmd: &str) -> i32 {
+fn ssh_finish(host: &str, remote_cmd: &str) -> RemoteFinish {
     let extra = ssh_extra_args(host);
     match Command::new(ssh_bin())
         .args(&extra)
@@ -484,8 +674,63 @@ fn ssh_run_rc(host: &str, remote_cmd: &str) -> i32 {
         .arg(remote_cmd)
         .status()
     {
-        Ok(s) => s.code().unwrap_or(1),
-        Err(_) => 1,
+        Ok(status) => classify_ssh_code(status.code()),
+        Err(e) => RemoteFinish::Local(format!("ssh failed: {e}")),
+    }
+}
+
+/// Retry a connection drop. A finished remote status, including exit 1, returns immediately.
+fn retry_remote<F>(what: &str, mut once: F) -> Result<i32, ToolError>
+where
+    F: FnMut() -> RemoteFinish,
+{
+    let mut last = RemoteFinish::Connection { code: None };
+    for attempt in 1..=SSH_ATTEMPTS {
+        match once() {
+            RemoteFinish::Exited(code) => return Ok(code),
+            RemoteFinish::Local(msg) => return Err(ToolError::fail(msg)),
+            finish @ RemoteFinish::Connection { .. } => {
+                last = finish;
+                if attempt == SSH_ATTEMPTS {
+                    break;
+                }
+                eprintln!(
+                    "deploy-host: connection failed (attempt {attempt} of {SSH_ATTEMPTS}); retrying {what}"
+                );
+            }
+        }
+    }
+    let shown = match &last {
+        RemoteFinish::Connection { code } => ssh_status_label(*code),
+        _ => "signal".to_string(),
+    };
+    Err(ToolError::fail(format!(
+        "connection failed after {SSH_ATTEMPTS} attempts: {what} exited {shown}"
+    )))
+}
+
+/// The switch is one attempt. Never call this in a retry loop.
+fn switch_outcome(finish: RemoteFinish) -> Result<i32, ToolError> {
+    match finish {
+        RemoteFinish::Exited(code) => Ok(code),
+        RemoteFinish::Connection { code } => {
+            let shown = ssh_status_label(code);
+            Err(ToolError::fail(format!(
+                "connection failed during nixos-rebuild switch (ssh status {shown}); not starting a second switch"
+            )))
+        }
+        RemoteFinish::Local(msg) => Err(ToolError::fail(format!(
+            "connection failed during nixos-rebuild switch ({msg}); not starting a second switch"
+        ))),
+    }
+}
+
+fn ssh_run(host: &str, remote_cmd: &str) -> Result<(), ToolError> {
+    let code = retry_remote(&format!("ssh -- {host}"), || ssh_finish(host, remote_cmd))?;
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(ToolError::fail(format!("ssh -- {host} exited {code}")))
     }
 }
 
@@ -513,16 +758,19 @@ fn rsync_remote(
 ) -> Result<(), ToolError> {
     let src_s = format!("{}/", src.display());
     let dest_s = format!("{target}:{}/", remote_dir.trim_end_matches('/'));
-    let mut cmd = Command::new("rsync");
-    cmd.arg("-e").arg(ssh_rsh(target));
-    cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
-    let st = cmd
-        .status()
-        .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
-    if st.success() {
+    let code = retry_remote("rsync", || {
+        let mut cmd = Command::new("rsync");
+        cmd.arg("-e").arg(ssh_rsh(target));
+        cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
+        match cmd.status() {
+            Ok(status) => classify_rsync_code(status.code()),
+            Err(e) => RemoteFinish::Local(format!("rsync failed: {e}")),
+        }
+    })?;
+    if code == 0 {
         Ok(())
     } else {
-        Err(ToolError::fail("rsync exited non-zero"))
+        Err(ToolError::fail(format!("rsync exited {code}")))
     }
 }
 
@@ -554,6 +802,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn public_rsync_skips_workspace_cargo_target() {
+        let mut patterns = Vec::new();
+        let mut flags = RSYNC_EXCLUDES.iter();
+        while let Some(flag) = flags.next() {
+            assert_eq!(*flag, "--exclude");
+            patterns.push(*flags.next().expect("exclude pattern"));
+        }
+        assert!(
+            patterns.contains(&"target/"),
+            "workspace cargo target must stay off the wire: {patterns:?}"
+        );
+        assert!(
+            patterns.contains(&"crates/target/"),
+            "crate cargo target must stay off the wire: {patterns:?}"
+        );
+    }
+
+    #[test]
     fn root_at_host_is_root_user() {
         assert!(target_user_is_root("root@surmount-1"));
         assert!(target_user_is_root("root"));
@@ -566,6 +832,127 @@ mod tests {
         let a = ssh_extra_args("example.test");
         let joined = a.join(" ");
         assert!(joined.contains("ServerAliveInterval=30"), "{joined}");
+        assert!(joined.contains("ServerAliveCountMax=10"), "{joined}");
+        assert!(joined.contains("TCPKeepAlive=yes"), "{joined}");
         assert!(joined.contains("BatchMode=yes"), "{joined}");
+    }
+
+    #[test]
+    fn ssh_255_is_connection_and_remote_exit_is_not() {
+        assert_eq!(
+            classify_ssh_code(Some(255)),
+            RemoteFinish::Connection { code: Some(255) }
+        );
+        assert_eq!(
+            classify_ssh_code(None),
+            RemoteFinish::Connection { code: None }
+        );
+        assert_eq!(classify_ssh_code(Some(0)), RemoteFinish::Exited(0));
+        assert_eq!(classify_ssh_code(Some(1)), RemoteFinish::Exited(1));
+    }
+
+    #[test]
+    fn rsync_socket_codes_are_connection() {
+        for code in [10, 30, 35, 255] {
+            assert!(
+                matches!(
+                    classify_rsync_code(Some(code)),
+                    RemoteFinish::Connection { .. }
+                ),
+                "{code}"
+            );
+        }
+        assert_eq!(classify_rsync_code(Some(1)), RemoteFinish::Exited(1));
+        assert_eq!(classify_rsync_code(Some(23)), RemoteFinish::Exited(23));
+        assert_eq!(
+            classify_rsync_code(None),
+            RemoteFinish::Connection { code: None }
+        );
+    }
+
+    #[test]
+    fn retry_repeats_only_connection_failures() {
+        let mut calls = 0;
+        let err = retry_remote("ssh -- example.test", || {
+            calls += 1;
+            RemoteFinish::Connection { code: Some(255) }
+        })
+        .unwrap_err();
+        assert_eq!(calls, 3);
+        assert!(err.message.contains("connection failed"), "{}", err.message);
+        assert!(err.exit_code != 0);
+
+        calls = 0;
+        let code = retry_remote("ssh -- example.test", || {
+            calls += 1;
+            RemoteFinish::Exited(1)
+        })
+        .unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(calls, 1);
+
+        calls = 0;
+        let err = retry_remote("ssh -- example.test", || {
+            calls += 1;
+            RemoteFinish::Local("ssh failed: missing".into())
+        })
+        .unwrap_err();
+        assert_eq!(calls, 1);
+        assert!(
+            !err.message.contains("connection failed"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("ssh failed"), "{}", err.message);
+    }
+
+    #[test]
+    fn switch_drop_is_reported_once() {
+        let err = switch_outcome(RemoteFinish::Connection { code: Some(255) }).unwrap_err();
+        assert!(err.message.contains("connection failed"), "{}", err.message);
+        assert!(
+            err.message.contains("not starting a second switch"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("255"), "{}", err.message);
+        assert_eq!(switch_outcome(RemoteFinish::Exited(1)).unwrap(), 1);
+        assert_eq!(switch_outcome(RemoteFinish::Exited(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn built_generation_line_ignores_unchanged() {
+        assert_eq!(
+            parse_built_generation("synthetic-built-generation: 67\n"),
+            Some(67)
+        );
+        assert_eq!(
+            parse_built_generation("synthetic-built-generation: unchanged\n"),
+            None
+        );
+        assert_eq!(
+            parse_built_generation("noise\nsynthetic-built-generation: system-66-link\n"),
+            Some(66)
+        );
+        assert_eq!(
+            parse_built_generation("synthetic-booted-generation: 67\n"),
+            None
+        );
+        assert_eq!(parse_generation_text("67\n"), Some(67));
+        assert_eq!(parse_generation_text("system-66-link\n"), Some(66));
+        assert_eq!(parse_generation_text(""), None);
+        assert_eq!(parse_generation_text("unchanged\n"), None);
+    }
+
+    #[test]
+    fn generation_probe_is_not_a_second_switch() {
+        assert!(!PROFILE_GENERATION_REMOTE.contains("nixos-rebuild"));
+        assert!(!PROFILE_GENERATION_REMOTE.contains("post-switch-smoke"));
+        assert!(PROFILE_GENERATION_REMOTE.contains("readlink"));
+        let cmd = switch_remote_command("path:/tmp/repo#mail-vps");
+        assert!(cmd.contains("nixos-rebuild switch --flake"));
+        assert!(cmd.contains("path:/tmp/repo#mail-vps"));
+        assert!(cmd.contains("synthetic-built-generation:"));
+        assert!(!cmd.contains("post-switch-smoke"));
     }
 }

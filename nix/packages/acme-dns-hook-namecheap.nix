@@ -43,6 +43,8 @@ craneLib'.buildPackage (
   commonArgs
   // {
     inherit cargoArtifacts;
+    # reqwest rustls still loads the OS CA bundle inside Client::build.
+    SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
     cargoTestExtraArgs = "-p surmount-acme-namecheap --bin acme-dns-hook-namecheap";
     meta = {
       description = "Namecheap DNS-01 ACME external-hook (Surmount helper; Rust)";

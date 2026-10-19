@@ -40,5 +40,7 @@
     ./lake.nix
     # Optional Grok OSS: default off, user grok, MemoryMax, no boot TUI.
     ./grok-oss.nix
+    # Optional Tau coding agent: default off, no daemon, no extensions.
+    ./tau.nix
   ];
 }

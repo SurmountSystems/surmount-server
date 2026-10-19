@@ -36,6 +36,8 @@ craneLib'.buildPackage (
   // {
     inherit cargoArtifacts;
     # Hermetic mock tests only. Never live Namecheap as CI green.
+    # reqwest rustls still loads the OS CA bundle inside Client::build.
+    SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
     cargoTestExtraArgs = "-p surmount-acme-namecheap";
     meta = {
       description = "Namecheap DNS-01 ACME hook, dispatch, lab, laptop renew, host-profile render";

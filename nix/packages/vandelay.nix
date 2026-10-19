@@ -7,6 +7,10 @@
 #
 # Packaging mode: pinned upstream release binary FODs (same pattern as
 # stalwart-cli). Bump: set version, prefetch each arch tar.gz, paste hashes.
+# 1.0.12 (2026-10-11): parallel Email/import batches, keep non-selectable
+# IMAP parents, and stop holding a whole JMAP page of blobs in memory.
+# https://github.com/stalwartlabs/vandelay/releases/tag/v1.0.12
+# (accessed: 2026-10-17). Asset names are unchanged.
 
 {
   lib,
@@ -18,17 +22,17 @@
 }:
 
 let
-  version = "1.0.7";
+  version = "1.0.12";
 
   sources = {
     x86_64-linux = {
       url = "https://github.com/stalwartlabs/vandelay/releases/download/v${version}/vandelay-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-6maiYWqAfYrqb1DBbg0xk/4P4kOAzkn6eEsNACnz1v4=";
+      hash = "sha256-4hLrj3B4AUmjN8IGi8qiEsPtRwxkbLVxO2qXD/J+nZ8=";
       dir = "vandelay-x86_64-unknown-linux-gnu";
     };
     aarch64-linux = {
       url = "https://github.com/stalwartlabs/vandelay/releases/download/v${version}/vandelay-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-SvpCtDh94+dCDh6GyhmMW62UOwVHmxRNU6FomaFzY6A=";
+      hash = "sha256-ToazZRZnBi4ZGcyDrhVrQdeu/S2s8My7OAwtAGNM7j0=";
       dir = "vandelay-aarch64-unknown-linux-gnu";
     };
   };

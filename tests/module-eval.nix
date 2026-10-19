@@ -171,7 +171,7 @@ let
     assert e.config.surmount.logging.runtimeMaxUse == "256M";
     assert e.config.surmount.remoteBuilder.memoryMax == "4G";
     assert e.config.surmount.remoteBuilder.cpuQuota == "auto";
-    assert e.config.surmount.remoteBuilder.maxJobs == 8;
+    assert e.config.surmount.remoteBuilder.maxJobs == 32;
     assert e.config.surmount.remoteBuilder.diskGuardPercent == 95;
     assert e.config.surmount.lake.enable == false;
     assert e.config.surmount.lake.jobs == 4;
@@ -180,6 +180,8 @@ let
     assert e.config.surmount.grokOss.package == null;
     assert e.config.surmount.grokOss.user == "grok";
     assert e.config.surmount.grokOss.memoryMax == "4G";
+    # Tau coding agent is opt-in (host-local). Scaffold off; no daemon.
+    assert e.config.surmount.tau.enable == false;
     assert e.config.surmount.logging.rateLimitBurst == "50000";
     # Domain C Vaultwarden stays off on sample defaults (no production footgun).
     assert e.config.surmount.vaultwarden.enable == false;
@@ -393,6 +395,79 @@ let
     assert
       !(lib.hasInfix "SURMOUNT_ONION_HOSTNAME_FILE=/run/surmount-secrets/arti/onion-service/hostname" envBlob);
     "t5c-onion-hostname-file-option-wins-ok";
+
+  # Per-site v3 onions: two public HTTP Hosts get two different Arti nicknames.
+  # Onion-Location must be each Host's own onion root (not /_o/{host} on a
+  # shared onion). Mail Hosts stay unmapped. HS keys never appear in toml.
+  t5d-per-site-onions-distinct-nicknames =
+    let
+      extraRoot = "/var/lib/surmount/static-sites/extra";
+      e = evalSurmount {
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+        managementUi.enable = true;
+        managementUi.staticVhosts = {
+          "extra.example.test" = {
+            root = extraRoot;
+          };
+        };
+        managementUi.extraMailHostnames = [ "mail.cryptoquick.com" ];
+      };
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+      nick = e.config.surmount.artiHiddenService.nickname;
+      apex = e.config.surmount.primaryDomain;
+      www = "www.${apex}";
+      mail = e.config.surmount.mailHostname;
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      envBlob = builtins.unsafeDiscardStringContext (lib.concatStringsSep "\n" envList);
+      nickLine = lib.findFirst (s: lib.hasPrefix "SURMOUNT_ONION_SITE_NICKNAMES_FILE=" s) null envList;
+      nickPath =
+        if nickLine == null then "" else lib.removePrefix "SURMOUNT_ONION_SITE_NICKNAMES_FILE=" nickLine;
+      nickEtc = e.config.environment.etc."surmount/onion-site-nicknames.json" or { };
+      nickJson =
+        if nickEtc ? text && nickEtc.text != null && nickEtc.text != "" then
+          builtins.unsafeDiscardStringContext nickEtc.text
+        else if nickEtc ? source && nickEtc.source != null then
+          builtins.unsafeDiscardStringContext (builtins.readFile nickEtc.source)
+        else
+          "";
+      nickMap = if nickJson == "" then { } else builtins.fromJSON nickJson;
+      apexNick = nickMap.${apex} or "";
+      wwwNick = nickMap.${www} or "";
+      extraNick = nickMap."extra.example.test" or "";
+      servicesNick = nickMap.${e.config.surmount.servicesHostname} or "";
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.environment.etc ? "surmount/onion-site-nicknames.json";
+    assert lib.hasInfix "SURMOUNT_ONION_SITE_NICKNAMES_FILE=" envBlob;
+    assert nickPath != "";
+    assert nickJson != "";
+    assert !(lib.hasInfix "/_o/" nickJson);
+    assert !(lib.hasInfix "BEGIN PRIVATE" toml);
+    assert !(lib.hasInfix "PRIVATE KEY" toml);
+    assert !(lib.hasInfix "hs_ed25519_secret_key" toml);
+    # Console keeps the existing HS nickname so the live identity stays that site.
+    assert servicesNick == nick;
+    assert lib.hasInfix "[onion_services.\"${nick}\"]" toml;
+    # Apex and an extra site each get an onion. www does not.
+    assert apexNick != "";
+    assert wwwNick == "";
+    assert extraNick != "";
+    assert extraNick != apexNick;
+    assert extraNick != nick;
+    assert !(nickMap ? ${www});
+    assert !(nickMap ? "mta-sts.${apex}");
+    assert lib.hasInfix "[onion_services.\"${apexNick}\"]" toml;
+    assert !(lib.hasInfix "[onion_services.\"site-www-" toml);
+    assert !(lib.hasInfix "site-mta-sts-" toml);
+    assert lib.hasInfix "[onion_services.\"${extraNick}\"]" toml;
+    # Mail Hosts stay unmapped (primary MX and extra mail hostname).
+    assert !(nickMap ? ${mail});
+    assert !(nickMap ? "mail.cryptoquick.com");
+    assert !(lib.hasInfix "mail.cryptoquick.com" nickJson);
+    assert !(lib.hasInfix "[onion_services.\"site-mail-" toml);
+    "t5d-per-site-onions-distinct-nicknames-ok";
 
   # Complete management-publish config: startDaemon does NOT need acceptIncomplete.
   t6-arti-start-daemon-complete-no-accept =
@@ -2310,8 +2385,7 @@ let
     assert !(userSlice ? CPUQuota);
     assert (e.config.systemd.services.nix-daemon.serviceConfig.MemoryMax or null) == "4G";
     assert (e.config.systemd.services.nix-daemon.serviceConfig.Nice or null) == 19;
-    assert e.config.nix.settings.max-jobs == 8;
-    assert e.config.nix.settings.max-jobs != 64;
+    assert e.config.nix.settings.max-jobs == 32;
     assert e.config.environment.etc ? "surmount/niced-builder";
     assert e.config.environment.etc ? "surmount/niced-nix-daemon-stdio";
     assert !(e.config.environment.etc ? "surmount/niced-lake");
@@ -2423,15 +2497,14 @@ let
     assert (d.IOSchedulingClass or "") == "idle";
     "t39g-nix-daemon-is-the-real-build-cgroup-ok";
 
-  t39h-max-jobs-tracks-cores-not-fake-64 =
+  t39h-max-jobs-half-measured-cpus =
     let
       e = evalSurmount { remoteBuilder.enable = true; };
     in
     assert failedAssertions e == [ ];
-    assert e.config.surmount.remoteBuilder.maxJobs == 8;
-    assert e.config.nix.settings.max-jobs == 8;
-    assert e.config.nix.settings.max-jobs != 64;
-    "t39h-max-jobs-tracks-cores-not-fake-64-ok";
+    assert e.config.surmount.remoteBuilder.maxJobs == 32;
+    assert e.config.nix.settings.max-jobs == 32;
+    "t39h-max-jobs-half-measured-cpus-ok";
 
   t39o-builder-is-preferred-oom-victim =
     let
@@ -2773,6 +2846,31 @@ let
     assert builtins.any (a: lib.hasInfix "grokOss.package" a.message) failed;
     "t45c-grok-oss-enable-requires-package-ok";
 
+  t46-tau-default-off =
+    let
+      e = evalSurmount { };
+      pkgsList = e.config.environment.systemPackages;
+      isTau =
+        p:
+        let
+          pname = p.pname or "";
+          name = p.name or "";
+        in
+        pname == "tau"
+        || pname == "dpc-tau"
+        || name == "tau"
+        || lib.hasPrefix "tau-" pname
+        || lib.hasPrefix "tau-" name
+        || lib.hasPrefix "dpc-tau" pname
+        || lib.hasPrefix "dpc-tau" name;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.tau.enable == false;
+    assert !(e.config.systemd.services ? tau);
+    assert !(e.config.systemd.services ? surmount-tau);
+    assert !(builtins.any isTau pkgsList);
+    "t46-tau-default-off-ok";
+
   t50-splora-proxy-default-off =
     let
       e = evalSurmount { managementUi.enable = true; };
@@ -2782,6 +2880,7 @@ let
     assert failedAssertions e == [ ];
     assert e.config.surmount.sploraProxy.enable == false;
     assert !(builtins.any (x: lib.hasPrefix "SURMOUNT_SPLORA_PROXY=1" x) envList);
+    assert !(builtins.any (x: lib.hasPrefix "SURMOUNT_SPLORA_PORTAL_HOST=" x) envList);
     "t50-splora-proxy-default-off-ok";
 
   t51-splora-proxy-enable-env-and-udp-https =
@@ -2794,7 +2893,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2805,6 +2903,13 @@ let
     in
     assert failedAssertions e == [ ];
     assert builtins.any (x: x == "SURMOUNT_SPLORA_PROXY=1") envList;
+    assert builtins.any (x: x == "SURMOUNT_SPLORA_PORTAL_HOST=splora.surmount.systems") envList;
+    assert !(lib.hasInfix "esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "testnet3.esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "testnet4.esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "mutinynet.esplora.surmount.systems" envBlob);
+    assert !(lib.hasInfix "liquid.esplora.surmount.systems" envBlob);
+    assert lib.all (inst: inst.hosts == [ ]) (lib.attrValues e.config.surmount.sploraProxy.instances);
     assert lib.hasInfix "SURMOUNT_SPLORA_INSTANCES=" envBlob;
     assert lib.hasInfix ''"mainnet"'' envBlob;
     assert lib.hasInfix ''"hosts"'' envBlob;
@@ -2822,7 +2927,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.electrum.sock";
           };
         };
@@ -2845,7 +2949,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2866,7 +2969,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2885,7 +2987,6 @@ let
         sploraProxy.unitsMemoryMax = "2G";
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2905,7 +3006,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -2991,7 +3091,6 @@ let
         sploraProxy.enable = true;
         sploraProxy.instances = {
           mainnet = {
-            hosts = [ "esplora.example.test" ];
             socket = "/run/splora/mainnet.http.sock";
           };
         };
@@ -3021,6 +3120,57 @@ let
     ) failed;
     "t60-splora-remote-enable-needs-cookie-path-ok";
 
+  # One public Host. Extra onion Hosts are that Host only when instance
+  # hosts are empty. Esplora Hosts are not in the sample map. Mainnet is absent.
+  t61-splora-portal-host-and-onion-extras =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+        sploraProxy.enable = true;
+        sploraProxy.instances = {
+          testnet3 = { };
+          testnet4 = { };
+          mutinynet = { };
+          liquid = { };
+        };
+      };
+      env = e.config.systemd.services.surmount-management-ui.serviceConfig.Environment;
+      envList = if builtins.isList env then env else [ env ];
+      nickEtc = e.config.environment.etc."surmount/onion-site-nicknames.json" or { };
+      nickJson =
+        if nickEtc ? text && nickEtc.text != null && nickEtc.text != "" then
+          builtins.unsafeDiscardStringContext nickEtc.text
+        else if nickEtc ? source && nickEtc.source != null then
+          builtins.unsafeDiscardStringContext (builtins.readFile nickEtc.source)
+        else
+          "";
+      nickMap = if nickJson == "" then { } else builtins.fromJSON nickJson;
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+      portalNick = nickMap."splora.surmount.systems" or "";
+    in
+    assert failedAssertions e == [ ];
+    assert builtins.any (x: x == "SURMOUNT_SPLORA_PORTAL_HOST=splora.surmount.systems") envList;
+    assert nickMap ? "splora.surmount.systems";
+    assert !(nickMap ? "testnet3.esplora.surmount.systems");
+    assert !(nickMap ? "testnet4.esplora.surmount.systems");
+    assert !(nickMap ? "mutinynet.esplora.surmount.systems");
+    assert !(nickMap ? "liquid.esplora.surmount.systems");
+    assert !(nickMap ? "esplora.surmount.systems");
+    assert lib.all (inst: inst.hosts == [ ]) (lib.attrValues e.config.surmount.sploraProxy.instances);
+    assert !(builtins.any (x: lib.hasInfix "esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "testnet3.esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "testnet4.esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "mutinynet.esplora.surmount.systems" x) envList);
+    assert !(builtins.any (x: lib.hasInfix "liquid.esplora.surmount.systems" x) envList);
+    assert portalNick != "";
+    assert !(nickMap ? "www.surmount.systems");
+    assert lib.hasInfix "[onion_services.\"${portalNick}\"]" toml;
+    assert !(lib.hasInfix "site-www-" toml);
+    assert !(lib.hasInfix "esplora-surmount-systems" toml);
+    "t61-splora-portal-host-and-onion-extras-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -3031,6 +3181,7 @@ let
     t5-arti-enable-no-daemon
     t5b-arti-enable-derives-ui-onion-hostname-env
     t5c-onion-hostname-file-option-wins
+    t5d-per-site-onions-distinct-nicknames
     t6-arti-start-daemon-complete-no-accept
     t6b-arti-start-daemon-ok
     t6c-arti-start-daemon-needs-package
@@ -3113,7 +3264,7 @@ let
     t39e-remote-builder-refuses-lake-unit
     t39f-remote-builder-no-nix-ld
     t39g-nix-daemon-is-the-real-build-cgroup
-    t39h-max-jobs-tracks-cores-not-fake-64
+    t39h-max-jobs-half-measured-cpus
     t39o-builder-is-preferred-oom-victim
     t40-apex-public-root-packaged-site
     t41-static-vhosts-env-and-readonly-paths
@@ -3125,6 +3276,7 @@ let
     t45-grok-oss-default-off
     t45b-grok-oss-enable-user-and-memory-cap
     t45c-grok-oss-enable-requires-package
+    t46-tau-default-off
     t50-splora-proxy-default-off
     t51-splora-proxy-enable-env-and-udp-https
     t52-splora-electrum-socket-asserts
@@ -3136,6 +3288,7 @@ let
     t58-splora-remote-public-health-extra-arg
     t59-splora-remote-ui-extra-groups-when-proxy-on
     t60-splora-remote-enable-needs-cookie-path
+    t61-splora-portal-host-and-onion-extras
   ];
 in
 {

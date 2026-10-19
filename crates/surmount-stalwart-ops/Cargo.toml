@@ -30,6 +30,14 @@ path = "src/bin/bootstrap-stalwart-api-token.rs"
 name = "stalwart-recovery-unlock"
 path = "src/bin/stalwart-recovery-unlock.rs"
 
+[[bin]]
+name = "vm-lab-directory-setup"
+path = "src/bin/vm-lab-directory-setup.rs"
+
+[[bin]]
+name = "vm-lab-smtp-accept"
+path = "src/bin/vm-lab-smtp-accept.rs"
+
 [lib]
 name = "surmount_stalwart_ops"
 path = "src/lib.rs"

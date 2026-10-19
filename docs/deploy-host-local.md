@@ -3,7 +3,9 @@
 How operators keep **box-specific** material off the public Surmount Server
 tree while still rebuilding `#mail-vps` repeatably.
 
-**Last updated:** 2026-08-25 (driver is `nix run .#surmount-deploy-host` /
+**Last updated:** 2026-09-20 (operator procedure through dry-run is
+agent work; real switch is operator. Full list:
+[TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md)). Prior 2026-08-25 (driver is `nix run .#surmount-deploy-host` /
 `just deploy-host`; crate tests in `checks.*.ci`. No product `nix run .#surmount-deploy-host --`.)
 **Companions:** [OPS.md](OPS.md) (cutover gates), [hygiene.md](hygiene.md),
 [SECRETS.md](SECRETS.md), [SECURITY.md](SECURITY.md), sample
@@ -194,9 +196,13 @@ file. That check is **necessary but not sufficient** for lockout safety:
 
 With the known-name layout (no custom `default.nix`), flake auto-import sets
 `authorizedKeys.keyFiles` from `host-local/authorized_keys` on path: rebuild.
-If you ship a custom `default.nix`, you must import keys yourself; otherwise
-password auth off still means **lockout**. The driver prints this note after a
-passing key-file check.
+If you ship a custom `default.nix`, you must set `authorizedKeys` in that
+file; otherwise password auth off still means **lockout**. The driver prints
+a note only when that entry module exists and does not mention
+`authorizedKeys` or `authorized_keys`. A `default.nix` that already sets
+`users.users.root.openssh.authorizedKeys` does not print the note. The
+known-name layout with no `default.nix` auto-wires `authorized_keys` and
+does not print the note either.
 
 ---
 
@@ -227,7 +233,7 @@ nix run .#surmount-deploy-host -- --dry-run --target root@example.test \
 |----------|--------|
 | Target | **Required** (`--target` or `SURMOUNT_DEPLOY_TARGET`). No committed real host default. Rejects values starting with `-` (OpenSSH option-shaped). |
 | Host-local check | Requires dir; **fails loud** if no usable SSH public key (lockout with password auth off). **Not sufficient alone:** keys must also be in evaluated NixOS config (see B0 above). |
-| Public sync | rsync of public tree; excludes `host-local/`, `.git`, `crates/target`, secret basenames (`.env`, `*.pem`, `*.agekey`, `secrets.yaml`, `secrets/`, SSH private key names, ...). **Not** a substitute for `surmount-private-data` admission control. |
+| Public sync | rsync of public tree; excludes `host-local/`, `.git`, the workspace `target/` cargo cache, `crates/target`, secret basenames (`.env`, `*.pem`, `*.agekey`, `secrets.yaml`, `secrets/`, SSH private key names, ...). The guest Nix build uses the remote store. It does not use the laptop cargo cache. **Not** a substitute for `surmount-private-data` admission control. |
 | Host-local remote | Optional rsync to `REMOTE/host-local/` only; **refuses** `--sync-host-local-into` under `hosts/` or `secrets/` (path segments, missing parents, and symlink targets). Default **without** rsync `--delete`; pass `--host-local-delete` to opt in (incomplete local can wipe remote-only files if delete is on). |
 | `--skip-host-local-check` | Skips key-file checks **and** remote host-local rsync (documented side effect; not recommended). |
 | **`--install-secrets` (S4)** | **Opt-in only.** Validates source/host-id/staging **before** any rsync; runs `nix run .#secrets-install-host` after sync and before rebuild. Staging must be **outside** the public git work tree (refuse in-tree so public rsync cannot copy payloads). Default **off**. Never logs secret values. See [SECRETS.md](SECRETS.md). |

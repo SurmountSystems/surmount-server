@@ -76,7 +76,8 @@ in
 
     # Laptop ssh-ng SSHes as this user. Do not add nixbuilder to wheel.
     nix.settings.extra-trusted-users = [ rb.user ];
-    # Job slots stay under MemoryMax. Laptop machines max-jobs must match.
+    # Job slots stay under MemoryMax. Half the measured mail-host CPUs,
+    # not one slot per CPU. Laptop machines max-jobs must match.
     nix.settings.max-jobs = rb.maxJobs;
     nix.settings.cores = lib.mkIf (rb.buildCores != null) rb.buildCores;
     # Client machines-file already lists surmount-remote. The builder

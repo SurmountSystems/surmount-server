@@ -403,23 +403,43 @@ pub async fn create_account_via_directory(
             description: body.description,
         })
         .await;
-    if !result.ok {
+    // A name that is already stored comes back with a mailbox address and
+    // ok false. The password step reads that address. Fail closed only when
+    // there is no address (forbidden and every other create failure).
+    let stored_address = result.account.as_ref().and_then(|account| {
+        let addr = account.address.trim();
+        if addr.is_empty() || !addr.contains('@') {
+            None
+        } else {
+            Some(addr.to_string())
+        }
+    });
+    if !result.ok && stored_address.is_none() {
         return mutation_result_to_response(result);
     }
+    let mailbox_already_present = !result.ok;
 
     let mut password_set = false;
     let mut password_note = None;
     if let Some(secret) = password {
-        let lookup_addr = result
-            .account
-            .as_ref()
+        // Stalwart 0.16 created objects have no emailAddress. The address
+        // field is then the id or the local-part, and password set refuses
+        // that string. Keep a real mailbox address for the echo, and set the
+        // credential on the created principal id so lookup is not required.
+        let created = result.account.as_ref();
+        let lookup_addr = created
             .map(|a| a.address.clone())
+            .filter(|addr| addr.contains('@'))
             .unwrap_or_else(|| address.clone());
+        let account_id = created
+            .map(|a| a.id.trim().to_string())
+            .filter(|id| !id.is_empty());
         let pw = state
             .directory
             .set_mailbox_password(SetMailboxPasswordInput {
                 mailbox: lookup_addr,
                 password: secret.to_string(),
+                account_id,
             })
             .await;
         password_set = pw.ok;
@@ -439,7 +459,21 @@ pub async fn create_account_via_directory(
         console_note = Some(format!("Mailbox exists; console login was not saved. {e}"));
     }
 
-    let mut note = if password.is_some() && !password_set {
+    let mut note = if mailbox_already_present {
+        let addr = stored_address.clone().unwrap_or_else(|| address.clone());
+        if password_set {
+            format!(
+                "The mailbox {addr} already exists. The password was set on that existing mailbox."
+            )
+        } else if password.is_some() {
+            let why = password_note
+                .clone()
+                .unwrap_or_else(|| "Finish on the password card.".into());
+            format!("The mailbox {addr} already exists. The password was not set. {why}")
+        } else {
+            result.note.clone()
+        }
+    } else if password.is_some() && !password_set {
         password_note.unwrap_or_else(|| {
             "Mailbox exists; password was not set. Finish on the password card.".into()
         })
@@ -448,7 +482,7 @@ pub async fn create_account_via_directory(
     } else if password_set {
         format!("Created {address} and set the password. Evolution User Name is the full address.")
     } else {
-        result.note
+        result.note.clone()
     };
     if password.is_some() && !password_set && !note.to_ascii_lowercase().contains("mailbox exists")
     {
@@ -458,16 +492,28 @@ pub async fn create_account_via_directory(
         note.push_str(" No npub: IMAP/SMTP only.");
     }
 
+    // Fresh create reports local@primary_domain. That is the console mailbox
+    // and the address in the note. A directory row that already contains @
+    // may be the hermetic mock label, not that mailbox. An existing mailbox
+    // still reports the stored address.
+    let reported_address = if mailbox_already_present {
+        stored_address.clone().unwrap_or_else(|| address.clone())
+    } else {
+        address.clone()
+    };
     let mut body = json!({
         "ok": true,
-        "created": true,
+        "created": !mailbox_already_present,
         "password_set": password_set,
         "console_saved": console_saved,
-        "address": address,
+        "address": reported_address,
         "source": result.source,
         "note": note,
     });
-    if let Some(acc) = result.account {
+    if let Some(mut acc) = result.account {
+        if !acc.address.contains('@') {
+            acc.address = address.clone();
+        }
         body["account"] = json!(acc);
     }
     if !console_saved || (password.is_some() && !password_set) {
@@ -744,6 +790,7 @@ pub async fn set_mailbox_password_via_directory(
         .set_mailbox_password(SetMailboxPasswordInput {
             mailbox,
             password: body.password,
+            account_id: None,
         })
         .await;
     if result.ok
@@ -1202,13 +1249,18 @@ mod tests {
         let url = "http://abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion";
         cfg.onion_url = Some(url.into());
         cfg.onion_surface = crate::config::OnionSurface::Configured { url: url.into() };
+        let extra = crate::onion_discovery::per_site_mappings(
+            &cfg.primary_domain,
+            &cfg.services_hostname,
+            &[] as &[&str],
+        );
         cfg.onion_discovery = crate::onion_discovery::build_onion_discovery(
             &cfg.primary_domain,
             &cfg.services_hostname,
             Some(url),
             true,
             true,
-            Vec::new(),
+            extra,
             &[],
             &[],
             &[] as &[&str],
@@ -1228,6 +1280,19 @@ mod tests {
         assert!(hosts.contains(&"www.example.test"));
         assert!(hosts.contains(&"services.example.test"));
         assert!(!hosts.contains(&"mail.example.test"));
+        let apex = s
+            .onion_discovery
+            .mappings
+            .iter()
+            .find(|m| m.clearnet_host == "example.test")
+            .unwrap();
+        let www = s
+            .onion_discovery
+            .mappings
+            .iter()
+            .find(|m| m.clearnet_host == "www.example.test")
+            .unwrap();
+        assert_ne!(apex.onion_host, www.onion_host);
         let blob = serde_json::to_string(&s).unwrap();
         assert!(
             blob.contains("\"onion_discovery\""),

@@ -231,10 +231,10 @@ fn btop_dry_run_tty() {
     assert!(t.contains("-c") && t.contains("btop"), "{t}");
     assert!(t.contains("example.test"), "{t}");
     assert!(!t.contains(" ssh "), "{t}");
-    // -e is et --noexit: after btop the session would drop to a guest shell.
+    // -e is et --noexit: after btop the session stays and drops to a shell.
     assert!(
-        !t.split_whitespace().any(|w| w == "-e"),
-        "just btop must not pass et --noexit (-e): {t}"
+        t.split_whitespace().any(|w| w == "-e"),
+        "just btop must pass et --noexit (-e) with -c btop: {t}"
     );
 }
 
@@ -253,8 +253,8 @@ fn btop_fake_et() {
     assert!(args.contains("-c") && args.contains("btop"), "{args}");
     assert!(args.contains("example.test"), "{args}");
     assert!(
-        !args.split_whitespace().any(|w| w == "-e"),
-        "et --noexit (-e) leaves a guest shell after btop: {args}"
+        args.split_whitespace().any(|w| w == "-e"),
+        "et --noexit (-e) must stay with -c btop so the session drops to a shell: {args}"
     );
 }
 

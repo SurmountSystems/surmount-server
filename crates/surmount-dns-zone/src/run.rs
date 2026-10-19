@@ -1,4 +1,5 @@
 //! CLI: list / set-* / delete-host. Default dry-run.
+//! `--live` without MOCK_DIR: Namecheap getHosts, merge, setHosts.
 
 use std::ffi::OsString;
 use std::net::Ipv4Addr;
@@ -332,23 +333,79 @@ fn parse_ttl_tail(
     Ok((host.to_string(), val.unwrap_or("").to_string(), ttl))
 }
 
-fn load_zone(mock: Option<&std::path::Path>) -> Result<Zone> {
-    let Some(dir) = mock else {
-        return Err(die(
-            "live Namecheap API is not used in tests; set SURMOUNT_DNS_ZONE_NAMECHEAP_MOCK_DIR (ClientIp required for live API)",
-        ));
-    };
-    load_mock(dir)
+const LIVE_PREFIX: &str = "dns-zone-namecheap";
+
+fn acme_cred(cred: &crate::cred::Credentials) -> surmount_acme_namecheap::cred::Credentials {
+    surmount_acme_namecheap::cred::Credentials {
+        api_user: cred.api_user.clone(),
+        api_key: cred.api_key.clone(),
+        user_name: cred.user_name.clone(),
+        client_ip: cred.client_ip.clone(),
+        sld: cred.sld.clone(),
+        tld: cred.tld.clone(),
+        settle_secs: 0,
+        txt_ttl: DEFAULT_TTL,
+        path: cred.path.clone(),
+    }
 }
 
-fn save_zone(mock: Option<&std::path::Path>, zone: &Zone) -> Result<()> {
+fn record_from_acme(r: surmount_acme_namecheap::zone::Record) -> Record {
+    Record {
+        name: r.name,
+        r#type: r.r#type,
+        address: r.address,
+        mx_pref: r.mx_pref,
+        ttl: r.ttl,
+    }
+}
+
+fn record_to_acme(r: &Record) -> surmount_acme_namecheap::zone::Record {
+    surmount_acme_namecheap::zone::Record {
+        name: r.name.clone(),
+        r#type: r.r#type.clone(),
+        address: r.address.clone(),
+        mx_pref: r.mx_pref.clone(),
+        ttl: r.ttl.clone(),
+    }
+}
+
+fn zone_from_hosts(h: surmount_acme_namecheap::hook::live::Hosts) -> Zone {
+    Zone {
+        records: h.records.into_iter().map(record_from_acme).collect(),
+        email_type: h.email_type,
+    }
+}
+
+fn hosts_from_zone(zone: &Zone) -> surmount_acme_namecheap::hook::live::Hosts {
+    surmount_acme_namecheap::hook::live::Hosts {
+        records: zone.records.iter().map(record_to_acme).collect(),
+        email_type: zone.email_type.clone(),
+    }
+}
+
+fn load_zone(cred: &crate::cred::Credentials, mock: Option<&std::path::Path>) -> Result<Zone> {
+    if let Some(dir) = mock {
+        return load_mock(dir);
+    }
+    let hosts =
+        surmount_acme_namecheap::hook::live::get_hosts_with_prefix(&acme_cred(cred), LIVE_PREFIX)?;
+    Ok(zone_from_hosts(hosts))
+}
+
+fn save_zone(
+    cred: &crate::cred::Credentials,
+    mock: Option<&std::path::Path>,
+    zone: &Zone,
+) -> Result<()> {
     refuse_sha1_ds(&zone.records)?;
-    let Some(dir) = mock else {
-        return Err(die(
-            "live Namecheap API write refused without MOCK_DIR in this binary path",
-        ));
-    };
-    save_mock(dir, zone)
+    if let Some(dir) = mock {
+        return save_mock(dir, zone);
+    }
+    surmount_acme_namecheap::hook::live::set_hosts_with_prefix(
+        &acme_cred(cred),
+        &hosts_from_zone(zone),
+        LIVE_PREFIX,
+    )
 }
 
 fn assert_ttl(t: &str) -> Result<String> {
@@ -379,7 +436,7 @@ fn assert_ipv6(ip: &str) -> Result<()> {
 }
 
 fn cmd_list(cred: &crate::cred::Credentials, mock: Option<&std::path::Path>) -> Result<u8> {
-    let zone = load_zone(mock)?;
+    let zone = load_zone(cred, mock)?;
     let mode = if mock.is_some() { "mock" } else { "live-api" };
     let et = if zone.email_type.is_empty() {
         "unset"
@@ -397,6 +454,7 @@ fn cmd_list(cred: &crate::cred::Credentials, mock: Option<&std::path::Path>) -> 
 }
 
 fn apply_or_dry(
+    cred: &crate::cred::Credentials,
     live: bool,
     mock: Option<&std::path::Path>,
     zone: &Zone,
@@ -408,7 +466,7 @@ fn apply_or_dry(
         println!("dns-zone-namecheap: dry-run only (no setHosts). Pass --live to apply.");
         return Ok(0);
     }
-    save_zone(mock, zone)?;
+    save_zone(cred, mock, zone)?;
     println!("dns-zone-namecheap: applied setHosts for host={host}{extra_applied}");
     Ok(0)
 }
@@ -450,7 +508,7 @@ fn cmd_set_records(
     if let Some(v) = aaaa {
         assert_ipv6(v)?;
     }
-    let mut zone = load_zone(mock)?;
+    let mut zone = load_zone(cred, mock)?;
     let before = zone.records.len();
     if let Some(v) = a {
         drop_type_at_host(&mut zone, &host, "A");
@@ -487,7 +545,7 @@ fn cmd_set_records(
     }
     println!("  planned zone:");
     print!("{}", print_hosts(&zone));
-    apply_or_dry(live, mock, &zone, &host, "")
+    apply_or_dry(cred, live, mock, &zone, &host, "")
 }
 
 fn cmd_set_txt(
@@ -517,7 +575,7 @@ fn cmd_set_txt(
     } else {
         "all-txt"
     };
-    let mut zone = load_zone(mock)?;
+    let mut zone = load_zone(cred, mock)?;
     let before = zone.records.len();
     match merge {
         "spf" => drop_txt_prefix_at_host(&mut zone, &host, "v=spf1"),
@@ -543,7 +601,7 @@ fn cmd_set_txt(
     println!("  set TXT  {host} -> {preview} (ttl={ttl}; merge={merge})");
     println!("  planned zone:");
     print!("{}", print_hosts(&zone));
-    apply_or_dry(live, mock, &zone, &host, " type=TXT")
+    apply_or_dry(cred, live, mock, &zone, &host, " type=TXT")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -586,7 +644,7 @@ fn cmd_set_caa(
     let ttl = assert_ttl(ttl)?;
     let host = to_hostname(host_raw, &cred.sld, &cred.tld)?;
     let caa_addr = format!("{flags_v} {tag} \"{value}\"");
-    let mut zone = load_zone(mock)?;
+    let mut zone = load_zone(cred, mock)?;
     let before = zone.records.len();
     drop_caa_tag_at_host(&mut zone, &host, tag);
     append(
@@ -604,7 +662,14 @@ fn cmd_set_caa(
     println!("  note: CAA is RecordType=CAA (not TXT)");
     println!("  planned zone:");
     print!("{}", print_hosts(&zone));
-    apply_or_dry(live, mock, &zone, &host, &format!(" type=CAA tag={tag}"))
+    apply_or_dry(
+        cred,
+        live,
+        mock,
+        &zone,
+        &host,
+        &format!(" type=CAA tag={tag}"),
+    )
 }
 
 fn cmd_set_mx(
@@ -643,7 +708,7 @@ fn cmd_set_mx(
     }
     let ttl = assert_ttl(ttl)?;
     let host = to_hostname(host_raw, &cred.sld, &cred.tld)?;
-    let mut zone = load_zone(mock)?;
+    let mut zone = load_zone(cred, mock)?;
     let before = zone.records.len();
     let et = if zone.email_type.is_empty() {
         "unset"
@@ -678,7 +743,7 @@ fn cmd_set_mx(
     }
     println!("  planned zone:");
     print!("{}", print_hosts(&zone));
-    apply_or_dry(live, mock, &zone, &host, " type=MX")
+    apply_or_dry(cred, live, mock, &zone, &host, " type=MX")
 }
 
 fn cmd_delete_host(
@@ -710,7 +775,7 @@ fn cmd_delete_host(
         )));
     }
     let host = to_hostname(host_raw, &cred.sld, &cred.tld)?;
-    let mut zone = load_zone(mock)?;
+    let mut zone = load_zone(cred, mock)?;
     let before = zone.records.len();
     if before == 0 {
         return Err(die("getHosts returned no records (refuse setHosts wipe)"));
@@ -733,6 +798,7 @@ fn cmd_delete_host(
     println!("  planned zone:");
     print!("{}", print_hosts(&zone));
     apply_or_dry(
+        cred,
         live,
         mock,
         &zone,

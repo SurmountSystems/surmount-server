@@ -36,7 +36,9 @@ craneLib'.buildPackage (
   commonArgs
   // {
     inherit cargoArtifacts;
-    # Hermetic mock tests only. Never live Namecheap as CI green.
+    # Hermetic mock tests plus local HTTP listener. Never live Namecheap as CI green.
+    # reqwest rustls still loads the OS CA bundle inside Client::build.
+    SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
     cargoTestExtraArgs = "-p surmount-dns-zone";
     meta = {
       description = "Namecheap forward-zone helper (A/AAAA/TXT/CAA/MX). Dry-run default.";

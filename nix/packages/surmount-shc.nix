@@ -37,6 +37,8 @@ craneLib'.buildPackage (
   // {
     inherit cargoArtifacts;
     # Hermetic mock tests only. Never live SHC as CI green.
+    # reqwest rustls still loads the OS CA bundle inside Client::build.
+    SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
     cargoTestExtraArgs = "-p surmount-shc";
     meta = {
       description = "Sovereign Hybrid Compute customer user-api client (rDNS and tickets)";

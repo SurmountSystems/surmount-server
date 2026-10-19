@@ -267,6 +267,10 @@
   boot.loader.grub = {
     # Common cloud / VPS default. Adjust for your hoster once hardware is real.
     device = lib.mkDefault "/dev/sda";
+    # Keep only a few boot menu entries. Every past generation copies a
+    # kernel and initrd onto the boot partition, and that partition filled
+    # up and rejected the switch.
+    configurationLimit = 3;
   };
 
   # Install-time root FS placeholder. Replace with nixos-generate-config /
@@ -318,6 +322,10 @@
     ];
     trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+    ];
+    # Host cargo cache. An administrator creates the directory.
+    extra-sandbox-paths = [
+      "/var/cache/grok-oss-cargo-target"
     ];
   };
 

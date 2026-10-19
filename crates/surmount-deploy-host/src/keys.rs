@@ -93,11 +93,32 @@ pub fn check_host_local(dir: &Path, notes: &mut dyn std::io::Write) -> Result<()
             "deploy-host: note: no hardware-configuration.nix under host-local (ok if already on host)"
         );
     }
-    let _ = writeln!(
-        notes,
-        "deploy-host: note: host-local key files present; flake path: rebuild auto-wires authorized_keys into evaluated config when using known-name layout (or host-local/default.nix that imports them). File presence alone is not enough / not sufficient if default.nix omits keys. See docs/deploy-host-local.md"
-    );
+    // Known-name layout (no default.nix) auto-wires authorized_keys.
+    // A custom default.nix that already sets authorizedKeys is enough.
+    // Warn only when that entry module exists and does not mention keys.
+    if entry_module_omits_keys(dir) {
+        let _ = writeln!(
+            notes,
+            "deploy-host: note: host-local default.nix does not mention authorizedKeys. File presence alone is not enough. Wire users.users.root.openssh.authorizedKeys in that file or drop default.nix so the flake auto-wires host-local/authorized_keys. See docs/deploy-host-local.md"
+        );
+    }
     Ok(())
+}
+
+/// True when default.nix or host-local.nix exists and never mentions SSH keys.
+fn entry_module_omits_keys(dir: &Path) -> bool {
+    for name in ["default.nix", "host-local.nix"] {
+        let path = dir.join(name);
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            return true;
+        };
+        let mentions = text.contains("authorizedKeys") || text.contains("authorized_keys");
+        return !mentions;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -116,6 +137,50 @@ mod tests {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("testdata/deploy-host/empty-keys-host-local");
         assert_eq!(count_authorized_key_lines(&dir).unwrap(), 0);
+    }
+
+    #[test]
+    fn wired_default_nix_does_not_warn() {
+        let dir = std::env::temp_dir().join(format!("surmount-keys-wired-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("authorized_keys"),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILEpaPf6ltFz4UT0qajfxQojuKuVF8FVE4Kj5U54k+gM test\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("default.nix"),
+            "{ users.users.root.openssh.authorizedKeys.keys = [ \"ssh-ed25519 AAAA\" ]; }\n",
+        )
+        .unwrap();
+        let mut notes = Vec::new();
+        check_host_local(&dir, &mut notes).unwrap();
+        let text = String::from_utf8(notes).unwrap();
+        assert!(!text.contains("does not mention authorizedKeys"), "{text}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn default_nix_without_keys_warns() {
+        let dir = std::env::temp_dir().join(format!("surmount-keys-omit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("authorized_keys"),
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILEpaPf6ltFz4UT0qajfxQojuKuVF8FVE4Kj5U54k+gM test\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("default.nix"),
+            "{ networking.hostName = \"x\"; }\n",
+        )
+        .unwrap();
+        let mut notes = Vec::new();
+        check_host_local(&dir, &mut notes).unwrap();
+        let text = String::from_utf8(notes).unwrap();
+        assert!(text.contains("does not mention authorizedKeys"), "{text}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

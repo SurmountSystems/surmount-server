@@ -40,10 +40,11 @@ let
     );
 
   # Named contract: Surmount owns current upstream Arti (not nixpkgs 1.4.2 lag).
+  # Exact pin is the package binding in arti-onion-service.nix (2.7.0).
   t0 =
-    assert pkg.version == "2.5.1";
+    assert pkg.version == "2.7.0";
     assert !(lib.hasPrefix "1.4" pkg.version);
-    "t0-version-2.5.1-ok";
+    "t0-version-2.7.0-ok";
 
   t1 =
     assert builtins.elem "onion-service-service" buildFeatures;
