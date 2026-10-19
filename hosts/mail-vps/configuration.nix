@@ -267,6 +267,10 @@
   boot.loader.grub = {
     # Common cloud / VPS default. Adjust for your hoster once hardware is real.
     device = lib.mkDefault "/dev/sda";
+    # Keep only a few boot menu entries. Every past generation copies a
+    # kernel and initrd onto the boot partition, and that partition filled
+    # up and rejected the switch.
+    configurationLimit = 3;
   };
 
   # Install-time root FS placeholder. Replace with nixos-generate-config /
