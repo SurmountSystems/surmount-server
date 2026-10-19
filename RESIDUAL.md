@@ -432,7 +432,7 @@ self-signed PEMs are not host ownership or public cutover.
   inventory (empty + `source: unavailable`; no fake `admin@`). Domains from
   config labeled as inventory, not Stalwart directory. Live Stalwart probe on
   overview/mail. Hermetic tests: SSR markers, DOGE palette, nav, no skeleton,
-  accounts honesty, `/health`. No NPM. Crane rustc is 1.99.0 from
+  accounts honesty, `/health`. No NPM. Crane rustc is 1.99.1 from
   `nixpkgs-rust`, not host-channel `rustPackages_1_95` (nixos-26.05
   `pkgs.rustc` is still 1.95.0).
   **DOGE theme (2026-08-01):** pure 3-bit RGB eight-color palette only
@@ -996,7 +996,7 @@ a host **stop** at docs, tree wiring, and local e2e. Ladder detail:
 
 - [x] Version currency audit vs network latest (Stalwart family at tip;
       crane rustc 1.88 vs stable 1.97.1 noted in pre-26.05 audit; living
-      crane is 1.99.0 from `nixpkgs-rust`, not host `rustPackages_1_95`, see
+      crane is 1.99.1 from `nixpkgs-rust`, not host `rustPackages_1_95`, see
       [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)). Snapshot:
       [docs/research/version-audit.md](docs/research/version-audit.md)
 - [x] **Arti packaging currency:** Surmount-owned **2.5.1** source build

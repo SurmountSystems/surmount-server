@@ -646,8 +646,7 @@ pub fn build_single_line_secret(secret: &str) -> Result<String> {
 /// Generate a session HMAC secret (`openssl rand -hex 32` shape: 64 hex chars).
 pub fn generate_session_secret_hex() -> Result<String> {
     let mut buf = [0u8; 32];
-    getrandom::getrandom(&mut buf)
-        .map_err(|e| anyhow::anyhow!("getrandom for session-secret: {e}"))?;
+    getrandom::fill(&mut buf).map_err(|e| anyhow::anyhow!("getrandom for session-secret: {e}"))?;
     let mut hex = String::with_capacity(64);
     for b in buf {
         use std::fmt::Write as _;

@@ -180,6 +180,8 @@ let
     assert e.config.surmount.grokOss.package == null;
     assert e.config.surmount.grokOss.user == "grok";
     assert e.config.surmount.grokOss.memoryMax == "4G";
+    # Tau coding agent is opt-in (host-local). Scaffold off; no daemon.
+    assert e.config.surmount.tau.enable == false;
     assert e.config.surmount.logging.rateLimitBurst == "50000";
     # Domain C Vaultwarden stays off on sample defaults (no production footgun).
     assert e.config.surmount.vaultwarden.enable == false;
@@ -2844,6 +2846,31 @@ let
     assert builtins.any (a: lib.hasInfix "grokOss.package" a.message) failed;
     "t45c-grok-oss-enable-requires-package-ok";
 
+  t46-tau-default-off =
+    let
+      e = evalSurmount { };
+      pkgsList = e.config.environment.systemPackages;
+      isTau =
+        p:
+        let
+          pname = p.pname or "";
+          name = p.name or "";
+        in
+        pname == "tau"
+        || pname == "dpc-tau"
+        || name == "tau"
+        || lib.hasPrefix "tau-" pname
+        || lib.hasPrefix "tau-" name
+        || lib.hasPrefix "dpc-tau" pname
+        || lib.hasPrefix "dpc-tau" name;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.tau.enable == false;
+    assert !(e.config.systemd.services ? tau);
+    assert !(e.config.systemd.services ? surmount-tau);
+    assert !(builtins.any isTau pkgsList);
+    "t46-tau-default-off-ok";
+
   t50-splora-proxy-default-off =
     let
       e = evalSurmount { managementUi.enable = true; };
@@ -3249,6 +3276,7 @@ let
     t45-grok-oss-default-off
     t45b-grok-oss-enable-user-and-memory-cap
     t45c-grok-oss-enable-requires-package
+    t46-tau-default-off
     t50-splora-proxy-default-off
     t51-splora-proxy-enable-env-and-udp-https
     t52-splora-electrum-socket-asserts

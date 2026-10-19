@@ -92,9 +92,10 @@ paste or proc-macro-error. The crates run inside rustc while the UI is
 compiled. They are not in the mail server process and not in the running
 management UI process. A lockfile pin means a later crates.io upload
 does not enter the build until someone updates the lock. Do not vendor
-Leptos to clear these two ids. Do not ignore any other advisory.
-`checks.*.cargo-audit` passes `--ignore RUSTSEC-2024-0436` and
-`--ignore RUSTSEC-2026-0173`, and it still passes `--deny warnings`.
+Leptos to clear paste. Do not ignore any other advisory.
+`checks.*.cargo-audit` passes `--ignore RUSTSEC-2024-0436` only, and it
+still passes `--deny warnings`. `RUSTSEC-2026-0173` is not in this lock,
+so that ignore is gone.
 proc-macro-error3 stays because i18n-embed-fl 0.10.1 uses it. See
 `.cargo/audit.toml` and
 [research/cargo-audit-2026-08-26.md](research/cargo-audit-2026-08-26.md).
@@ -123,6 +124,11 @@ On 2026-10-10, after `cargo update` (cargo 1.99.0, menhera index, 0 packages mov
 See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
 and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
 (accessed: 2026-10-10).
+
+On 2026-10-18, `cargo update -p paste -p leptos -p either_of -p reactive_graph -p reactive_stores -p tachys` on the menhera-cooldown index locked 0 packages. `paste` stayed 1.0.15. `proc-macro-error2` is not in `Cargo.lock`. The locked advisory for RUSTSEC-2024-0436 has `patched = []`. The locked advisory for RUSTSEC-2026-0173 has `patched = []` and names `proc-macro-error2`. cargo-audit 0.22.1 with `--deny warnings` and no ignore, against that advisory database and this lock, exited 1 and reported only RUSTSEC-2024-0436. The same command with `--ignore RUSTSEC-2024-0436` is what `checks.*.cargo-audit` runs. A `[patch.crates-io]` of paste to pastey 0.2.3 was rejected as the same source, and a path patch of package `pastey` version 1.0.15 was not used in the crate graph. Leptos 0.8.22 and 0.9.0-rc0 still depend on `paste` 1.0. Do not vendor Leptos to clear paste.
+See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
+and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
+(accessed: 2026-10-18).
 
 ## Non-goals (this doc)
 

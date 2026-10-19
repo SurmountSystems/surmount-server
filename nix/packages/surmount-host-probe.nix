@@ -18,8 +18,8 @@ let
     src = craneLib'.path ../..;
     filter =
       path: type:
-        (craneLib'.filterCargoSources path type)
-        || (type == "regular" && builtins.baseNameOf path == "justfile");
+      (craneLib'.filterCargoSources path type)
+      || (type == "regular" && builtins.baseNameOf path == "justfile");
   };
 
   commonArgs = {

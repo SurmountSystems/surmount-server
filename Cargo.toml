@@ -77,13 +77,13 @@ rustls-pki-types = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
-# Leptos SSR admin shell (ssr only; no csr/hydrate dual build). Current stable
-# 0.8 is 0.8.20. Upstream still names unmaintained paste (RUSTSEC-2024-0436)
-# and proc-macro-error2 (RUSTSEC-2026-0173). Both are RustSec INFO records,
-# not CVEs. Ignored on 2026-09-26. Do not vendor Leptos to clear them.
-# 0.9 is beta, not a product bump this turn.
-# https://rustsec.org/advisories/RUSTSEC-2024-0436 (accessed: 2026-09-26).
-# https://rustsec.org/advisories/RUSTSEC-2026-0173 (accessed: 2026-09-26).
+# Leptos SSR admin shell (ssr only; no csr/hydrate dual build). Locked
+# 0.8.22 still depends on paste 1.0.15 (RUSTSEC-2024-0436). That advisory
+# has no patched version. proc-macro-error2 (RUSTSEC-2026-0173) is not in
+# this lock. Do not vendor Leptos to clear paste. 0.9 is a release
+# candidate, not a product bump, and its workspace still depends on paste 1.0.
+# https://rustsec.org/advisories/RUSTSEC-2024-0436 (accessed: 2026-10-18).
+# https://rustsec.org/advisories/RUSTSEC-2026-0173 (accessed: 2026-10-18).
 leptos = { version = "0.8", default-features = false, features = ["ssr"] }
 # Self-signed PEMs for hermetic ACME mock issuer + unit tests.
 # 0.14 keeps CertificateParams::new, KeyPair::generate, self_signed,
@@ -106,15 +106,15 @@ libc = "0.2"
 # menhera 10d lists chacha20 0.10.2, so the git patch for that crate is gone.
 # https://rustsec.org/advisories/RUSTSEC-2024-0384 (accessed: 2026-10-17).
 nostr = { version = "0.45.3", default-features = false, features = ["std", "nip98", "os-rng"] }
-hmac = "0.12"
-sha2 = "0.10"
-base64 = "0.22"
+hmac = "0.13"
+sha2 = "0.11"
+base64 = "0.23"
 # CSRF tokens + CSP nonces (already in lock via other crates; direct dep for auth).
-getrandom = "0.2"
+getrandom = "0.4"
 # rage CLI is built on this library (age-encryption.org). Used by just rekey.
 # 0.12.1+ pulls i18n-embed-fl 0.10.1, which uses proc-macro-error3.
-# RUSTSEC-2026-0173 is proc-macro-error2, not age. Identity::generate /
-# to_public / to_string stay.
+# RUSTSEC-2026-0173 is proc-macro-error2, which is not in this lock.
+# Identity::generate / to_public / to_string stay.
 age = { version = "0.12", default-features = false }
 
 # menhera 10d lists chacha20 0.10.2 and faster-hex 0.10.1 (checked

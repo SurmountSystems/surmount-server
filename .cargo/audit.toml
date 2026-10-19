@@ -1,8 +1,9 @@
-# Decision 2026-09-26.
+# Decision 2026-09-26. Updated 2026-10-18.
 #
-# Ignore only RUSTSEC-2024-0436 (paste) and RUSTSEC-2026-0173
-# (proc-macro-error2). Do not ignore any other advisory. Do not turn
-# off the whole unmaintained class.
+# Ignore only RUSTSEC-2024-0436 (paste 1.0.15). Do not ignore any other
+# advisory. Do not turn off the whole unmaintained class.
+# RUSTSEC-2026-0173 (proc-macro-error2) is not in this lock, so it is
+# not ignored.
 #
 # Both records are RustSec type INFO, informational "unmaintained".
 # They are not CVEs. The OSV records have cvss null and no CVE alias.
@@ -19,22 +20,22 @@
 # proc-macro-error2, not age.
 # https://rustsec.org/advisories/RUSTSEC-2026-0173
 #
-# Both entered this lock only through Leptos. The management UI is the
-# only product crate that depends on Leptos. Its source does not call
-# paste or proc-macro-error. The crates run inside rustc while the UI is
-# compiled. They are not in the mail server process and not in the
-# running management UI process. A lockfile pin means a later crates.io
-# upload does not enter the build until someone updates the lock.
+# paste entered this lock through Leptos. proc-macro-error2 did not
+# remain. The management UI is the only product crate that depends on
+# Leptos. Its source does not call paste. paste runs inside rustc while
+# the UI is compiled. It is not in the mail server process and not in
+# the running management UI process. A lockfile pin means a later
+# crates.io upload does not enter the build until someone updates the
+# lock.
 #
-# Do not vendor Leptos to clear these two ids.
+# Do not vendor Leptos to clear paste.
 #
 # The hermetic check is flake.nix checks.*.cargo-audit. That derivation
-# does not see this file. It passes --ignore for these two ids and still
-# passes --deny warnings. This file is the same list for a local
+# does not see this file. It passes --ignore RUSTSEC-2024-0436 only and
+# still passes --deny warnings. This file is the same list for a local
 # cargo-audit that reads .cargo/audit.toml.
 
 [advisories]
 ignore = [
   "RUSTSEC-2024-0436",
-  "RUSTSEC-2026-0173",
 ]

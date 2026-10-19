@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -294,10 +294,7 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
     }
 
     let rebuild_flake_ref = format!("path:{}#{}", opts.remote_dir, opts.flake_attr);
-    let rebuild_remote_cmd = format!(
-        "nixos-rebuild switch --flake {}",
-        shell_quote(&rebuild_flake_ref)
-    );
+    let rebuild_remote_cmd = switch_remote_command(&rebuild_flake_ref);
     let smoke_name = smoke_remote_name();
     let smoke_remote_cmd = format!(
         "if command -v {smoke} >/dev/null 2>&1; then {smoke}; else echo 'deploy-host: remote smoke missing (surmount-deploy-host-post-switch-smoke not on PATH after switch)' >&2; exit 1; fi",
@@ -306,6 +303,7 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
 
     let mut rebuild_rc = 0i32;
     let mut smoke_rc = 0i32;
+    let mut built_generation: Option<u64> = None;
     if opts.dry_run {
         println!(
             "deploy-host: dry-run: ssh keepalives ServerAliveInterval=30 ServerAliveCountMax=10 TCPKeepAlive=yes"
@@ -331,7 +329,10 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
         );
     } else {
         // One switch attempt. A drop after this starts may have changed the host.
-        let finish = ssh_finish(&opts.target, &rebuild_remote_cmd);
+        // Capture stdout so the built-generation line can be read, and copy
+        // both streams through so a non-zero rebuild's own error stays visible.
+        let (finish, rebuild_stdout) = ssh_captured(&opts.target, &rebuild_remote_cmd);
+        built_generation = parse_built_generation(&rebuild_stdout);
         if let RemoteFinish::Connection { code } = &finish {
             eprintln!(
                 "deploy-host: nixos-rebuild exit={}",
@@ -369,6 +370,19 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
         )));
     }
     if rebuild_rc != 0 {
+        // Smoke 0 is not success by itself. Exit 0 only when the later
+        // readlink generation is the generation the switch reported it built.
+        // Unknown, unchanged, or a generation that did not move stays exit 1.
+        if smoke_rc == 0 {
+            if let Some(built_n) = built_generation {
+                if read_profile_generation(&opts.target) == Some(built_n) {
+                    eprintln!(
+                        "deploy-host: generation {built_n} is the generation the switch built; nixos-rebuild exit={rebuild_rc}; post-switch smoke exit={smoke_rc}"
+                    );
+                    return Ok(());
+                }
+            }
+        }
         return Err(ToolError::fail(format!(
             "nixos-rebuild failed (exit {rebuild_rc}); post-switch smoke exit={smoke_rc} (activation may still have applied; inspect host)"
         )));
@@ -512,6 +526,142 @@ fn ssh_status_label(code: Option<i32>) -> String {
     match code {
         Some(code) => code.to_string(),
         None => "signal".to_string(),
+    }
+}
+
+/// One remote switch. Prints `synthetic-built-generation:` after the rebuild.
+/// A new profile link (`system-N-link`) is the generation the switch built.
+/// The same link name as before the switch is `unchanged`, not a generation.
+/// The fake ssh matches `*nixos-rebuild*` before `*readlink*` and does not run
+/// this script; it prints the same generation line itself.
+fn switch_remote_command(flake_ref: &str) -> String {
+    let flake_q = shell_quote(flake_ref);
+    [
+        "before=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
+        &format!("nixos-rebuild switch --flake {flake_q}"),
+        "rc=$?",
+        "after=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
+        "if [ -n \"$after\" ] && [ \"$after\" != \"$before\" ]; then printf '%s\\n' \"synthetic-built-generation: $after\"; else printf '%s\\n' \"synthetic-built-generation: unchanged\"; fi",
+        "exit \"$rc\"",
+    ]
+    .join("; ")
+}
+
+/// Later readlink. The fake ssh prints the booted generation number for any
+/// command whose last argument contains `readlink`. On the host this is the
+/// profile link `system-N-link`, which switch updates. `/run/booted-system`
+/// stays on the previous boot until reboot, so it is not that generation.
+const PROFILE_GENERATION_REMOTE: &str = "readlink /nix/var/nix/profiles/system";
+
+fn parse_generation_token(token: &str) -> Option<u64> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    if token.bytes().all(|b| b.is_ascii_digit()) {
+        return token.parse::<u64>().ok().filter(|n| *n > 0);
+    }
+    let name = token.rsplit('/').next().unwrap_or(token);
+    let rest = name.strip_prefix("system-")?;
+    let num = rest.strip_suffix("-link")?;
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    num.parse::<u64>().ok().filter(|n| *n > 0)
+}
+
+fn parse_generation_text(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        return parse_generation_token(line);
+    }
+    None
+}
+
+fn parse_built_generation(stdout: &str) -> Option<u64> {
+    for line in stdout.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("synthetic-built-generation:") else {
+            continue;
+        };
+        return parse_generation_token(rest);
+    }
+    None
+}
+
+fn read_tee(mut src: impl Read, mut sink: impl Write) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match src.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let _ = sink.write_all(&chunk[..n]);
+                let _ = sink.flush();
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
+/// Run one SSH. Copy stdout and stderr through as they arrive so a long
+/// rebuild stays visible, and return stdout for the generation line.
+/// Stderr is not dropped.
+fn ssh_captured(host: &str, remote_cmd: &str) -> (RemoteFinish, String) {
+    let extra = ssh_extra_args(host);
+    let mut child = match Command::new(ssh_bin())
+        .args(&extra)
+        .arg("--")
+        .arg(host)
+        .arg(remote_cmd)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            return (
+                RemoteFinish::Local(format!("ssh failed: {e}")),
+                String::new(),
+            );
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        return (
+            RemoteFinish::Local("ssh stdout missing".to_string()),
+            String::new(),
+        );
+    };
+    let Some(stderr) = child.stderr.take() else {
+        return (
+            RemoteFinish::Local("ssh stderr missing".to_string()),
+            String::new(),
+        );
+    };
+    let err_thread = std::thread::spawn(move || {
+        let _ = read_tee(stderr, io::stderr());
+    });
+    let out_buf = read_tee(stdout, io::stdout());
+    let _ = err_thread.join();
+    let finish = match child.wait() {
+        Ok(status) => classify_ssh_code(status.code()),
+        Err(e) => RemoteFinish::Local(format!("ssh failed: {e}")),
+    };
+    (finish, String::from_utf8_lossy(&out_buf).into_owned())
+}
+
+fn read_profile_generation(host: &str) -> Option<u64> {
+    let (finish, text) = ssh_captured(host, PROFILE_GENERATION_REMOTE);
+    match finish {
+        RemoteFinish::Exited(0) => parse_generation_text(&text),
+        _ => None,
     }
 }
 
@@ -768,5 +918,41 @@ mod tests {
         assert!(err.message.contains("255"), "{}", err.message);
         assert_eq!(switch_outcome(RemoteFinish::Exited(1)).unwrap(), 1);
         assert_eq!(switch_outcome(RemoteFinish::Exited(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn built_generation_line_ignores_unchanged() {
+        assert_eq!(
+            parse_built_generation("synthetic-built-generation: 67\n"),
+            Some(67)
+        );
+        assert_eq!(
+            parse_built_generation("synthetic-built-generation: unchanged\n"),
+            None
+        );
+        assert_eq!(
+            parse_built_generation("noise\nsynthetic-built-generation: system-66-link\n"),
+            Some(66)
+        );
+        assert_eq!(
+            parse_built_generation("synthetic-booted-generation: 67\n"),
+            None
+        );
+        assert_eq!(parse_generation_text("67\n"), Some(67));
+        assert_eq!(parse_generation_text("system-66-link\n"), Some(66));
+        assert_eq!(parse_generation_text(""), None);
+        assert_eq!(parse_generation_text("unchanged\n"), None);
+    }
+
+    #[test]
+    fn generation_probe_is_not_a_second_switch() {
+        assert!(!PROFILE_GENERATION_REMOTE.contains("nixos-rebuild"));
+        assert!(!PROFILE_GENERATION_REMOTE.contains("post-switch-smoke"));
+        assert!(PROFILE_GENERATION_REMOTE.contains("readlink"));
+        let cmd = switch_remote_command("path:/tmp/repo#mail-vps");
+        assert!(cmd.contains("nixos-rebuild switch --flake"));
+        assert!(cmd.contains("path:/tmp/repo#mail-vps"));
+        assert!(cmd.contains("synthetic-built-generation:"));
+        assert!(!cmd.contains("post-switch-smoke"));
     }
 }

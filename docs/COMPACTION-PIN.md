@@ -154,8 +154,8 @@ Source of truth for FODs: `nix/packages/*.nix`. Audit:
 | vandelay | **1.0.12** | Latest tag on 2026-10-17 (`v1.0.12`, 2026-10-11). Official 0.16 Maildir++ / JMAP import |
 | Stalwart WebUI | **1.0.11** | Latest tag on 2026-10-17 (`v1.0.11`, 2026-09-15) |
 | spam-filter rules | **3.0.2** | Latest tag on 2026-10-17 (`v3.0.2`, 2026-09-22) |
-| Arti (HS package) | Surmount-owned source **2.7.0** (`arti-onion-service.nix`, GitLab `arti-v2.7.0`) + `onion-service-service` | Matches nixpkgs-rust `pkgs.arti.version` **2.7.0** (lock `c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81`, nixpkgs master 2026-10-18). Not stock nixpkgs 1.4.2 lag. rustc via `nixpkgs-rust` is **1.99.0**. Upstream stable rustc 1.99.1 (2026-10-15) is not in nixpkgs. Live Tor verify still residual |
-| management-ui rustc (crane) | **1.99.0** from `nixpkgs-rust` `pkgs.rustc` (`nix/rust-toolchain.nix`, lock `c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81`) | Host channel nixos-26.05 `pkgs.rustc` is still **1.95.0**. grok-oss uses the same `surmount-rust-1.99.0` toolchain, not host cargo 1.95.0. Not `rustPackages_1_95`. Leptos MSRV is >=1.88 |
+| Arti (HS package) | Surmount-owned source **2.7.0** (`arti-onion-service.nix`, GitLab `arti-v2.7.0`) + `onion-service-service` | Matches nixpkgs-rust `pkgs.arti.version` **2.7.0** (lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`). Not stock nixpkgs 1.4.2 lag. rustc via `nixpkgs-rust` is **1.99.1**. Prior lock `c46e6c9a` was rustc 1.99.0. Live Tor verify still residual |
+| management-ui rustc (crane) | **1.99.1** from `nixpkgs-rust` `pkgs.rustc` (`nix/rust-toolchain.nix`, lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`) | Host channel nixos-26.05 `pkgs.rustc` is still **1.95.0**. grok-oss uses the same `surmount-rust-1.99.1` toolchain, not host cargo 1.95.0. Not `rustPackages_1_95`. Leptos MSRV is >=1.88 |
 | Host nixpkgs channel | **nixos-26.05** lock | Engine is **not** from channel; channel lag is separate |
 | Stock Stalwart modules | dual `disabledModules` | `stalwart-mail.nix` + `stalwart.nix`; Surmount option `services.stalwart` (not stock TOML body) |
 | PQConnect upstream | **1.2.x** Python (tree saw **1.2.3**) | Sibling path packaging; not Rust |
@@ -441,8 +441,8 @@ deploy-secrets fail-loud options, hardening/networking + optional
 accessControl nft sets, docs, scripts, local/host end-to-end harnesses
 (`nix run .#e2e` / `nix run .#e2e-host`, thin `just e2e` / `just e2e-host`),
 VM and pure contract checks. Crane management-ui and grok-oss use
-`nixpkgs-rust` `pkgs.rustc` 1.99.0 (`nix/rust-toolchain.nix`, lock
-`c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81`), not host-channel `rustPackages_1_95`. Host nixos-26.05
+`nixpkgs-rust` `pkgs.rustc` 1.99.1 (`nix/rust-toolchain.nix`, lock
+`9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`), not host-channel `rustPackages_1_95`. Host nixos-26.05
 `pkgs.rustc` is still 1.95.0.
 E2E SoT is flake apps + Rust `crates/surmount-e2e`
 (not free-floating bash). Host e2e is never in `checks.*.ci`. Tor deep row is

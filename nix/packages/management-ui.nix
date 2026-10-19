@@ -3,7 +3,7 @@
 # or via the flake overlay which injects craneLib.
 #
 # Leptos 0.8 SSR MSRV is rustc 1.88+. Toolchain comes from
-# nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.0).
+# nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.1).
 
 {
   lib,
@@ -48,6 +48,8 @@ craneLib'.buildPackage (
   commonArgs
   // {
     inherit cargoArtifacts;
+    # reqwest rustls still loads the OS CA bundle inside Client::build.
+    SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
     meta = {
       description = "Surmount management UI (Axum + Leptos SSR)";
       mainProgram = "surmount-management-ui";

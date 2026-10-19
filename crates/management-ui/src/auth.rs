@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use nostr::nips::nip19::ToBech32;
 pub use nostr::nips::nip98::{HttpData, HttpMethod};
 use nostr::prelude::{
@@ -552,7 +552,7 @@ pub fn session_clear_cookie_header(secure: bool) -> String {
 /// Cryptographically random token (32 bytes, base64url no pad) for CSRF or CSP nonce.
 pub fn random_urlsafe_token() -> Result<String, AuthError> {
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes).map_err(|_| AuthError::Config)?;
+    getrandom::fill(&mut bytes).map_err(|_| AuthError::Config)?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 

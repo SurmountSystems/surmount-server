@@ -117,7 +117,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   buildInputs = [
     sqlite
     zstd
-  ] ++ lib.optionals stdenv.hostPlatform.isLinux [ openssl ];
+  ]
+  ++ lib.optionals stdenv.hostPlatform.isLinux [ openssl ];
 
   # Lean HS publish surface (not nixpkgs-unstable `full`).
   # buildRustPackage maps buildFeatures -> cargoBuildFeatures on the drv.

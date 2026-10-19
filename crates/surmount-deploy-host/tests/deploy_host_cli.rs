@@ -594,3 +594,123 @@ fn smoke_ssh_drop_does_not_start_a_second_switch() {
     assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 3, "{log}");
 }
+
+/// Fake ssh that records whether the booted generation moved.
+/// nixos-rebuild prints `synthetic-rebuild-error: switch exit 1` on stderr
+/// and `synthetic-built-generation:` / `synthetic-booted-generation:` on stdout.
+/// A later `readlink` or `surmount-test-booted-generation` prints the booted number.
+fn fake_ssh_generation(dir: &Path) -> (PathBuf, PathBuf) {
+    let log = dir.join("ssh.log");
+    let script = write_exec(
+        dir,
+        "fake-ssh-generation",
+        r#"#!/bin/sh
+log="$SURMOUNT_TEST_SSH_LOG"
+state="$SURMOUNT_TEST_GENERATION_STATE"
+printf '%s\n' "$*" >> "$log"
+last=""
+for a in "$@"; do
+  last=$a
+done
+case "$last" in
+  *nixos-rebuild*)
+    echo "synthetic-rebuild-error: switch exit 1" >&2
+    if [ "${SURMOUNT_TEST_GENERATION_CHANGED:-0}" = "1" ]; then
+      printf '%s\n' 67 > "$state/booted"
+      printf '%s\n' 67 > "$state/built"
+      echo "synthetic-built-generation: 67"
+      echo "synthetic-booted-generation: 67"
+    else
+      printf '%s\n' 66 > "$state/booted"
+      printf '%s\n' unchanged > "$state/built"
+      echo "synthetic-built-generation: unchanged"
+      echo "synthetic-booted-generation: 66"
+    fi
+    exit "${SURMOUNT_TEST_REBUILD_EXIT:-1}"
+    ;;
+  *post-switch-smoke*|*surmount-deploy-host-post-switch-smoke*)
+    exit "${SURMOUNT_TEST_SMOKE_EXIT:-0}"
+    ;;
+  *readlink*|*surmount-test-booted-generation*)
+    cat "$state/booted"
+    exit 0
+    ;;
+  *)
+    exit "${SURMOUNT_TEST_OTHER_EXIT:-0}"
+    ;;
+esac
+"#,
+    );
+    (script, log)
+}
+
+fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
+    let dir = temp_dir("fake-ssh-gen");
+    let state = dir.join("state");
+    fs::create_dir_all(&state).unwrap();
+    fs::write(state.join("booted"), "66\n").unwrap();
+    fs::write(state.join("built"), "unchanged\n").unwrap();
+    let (script, log) = fake_ssh_generation(&dir);
+    let out = cmd()
+        .env("SURMOUNT_DEPLOY_SSH", &script)
+        .env("SURMOUNT_TEST_SSH_LOG", &log)
+        .env("SURMOUNT_TEST_GENERATION_STATE", &state)
+        .env("SURMOUNT_TEST_GENERATION_CHANGED", changed)
+        .env("SURMOUNT_TEST_REBUILD_EXIT", "1")
+        .env("SURMOUNT_TEST_SMOKE_EXIT", "0")
+        .args([
+            "--target",
+            "example.test",
+            "--skip-sync",
+            "--skip-host-local-check",
+        ])
+        .output()
+        .unwrap();
+    let logged = fs::read_to_string(&log).unwrap_or_default();
+    (out, logged, state)
+}
+
+#[test]
+fn smoke_exit_0_and_changed_generation_is_recipe_exit_0() {
+    let (out, log, state) = deploy_with_generation("1");
+    let s = combined(&out);
+    let booted = fs::read_to_string(state.join("booted")).unwrap_or_default();
+    assert!(
+        booted.contains("67"),
+        "fixture must move the booted generation to 67: {booted}"
+    );
+    assert!(
+        out.status.success(),
+        "smoke exit 0 and a booted generation that changed to the generation the switch built must be recipe exit 0: {s}"
+    );
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert!(lines_containing(&log, "post-switch-smoke") >= 1, "{log}");
+}
+
+#[test]
+fn smoke_exit_0_and_unchanged_generation_stays_exit_1_with_rebuild_error() {
+    let (out, _log, state) = deploy_with_generation("0");
+    let s = combined(&out);
+    let booted = fs::read_to_string(state.join("booted")).unwrap_or_default();
+    assert!(
+        booted.contains("66"),
+        "fixture must leave the booted generation at 66: {booted}"
+    );
+    assert!(
+        !booted.contains("67"),
+        "unchanged fixture must not publish 67: {booted}"
+    );
+    assert!(
+        !out.status.success(),
+        "smoke exit 0 must stay recipe exit 1 when the booted generation did not change: {s}"
+    );
+    assert!(
+        s.contains("nixos-rebuild failed"),
+        "nixos-rebuild failure must stay visible: {s}"
+    );
+    assert!(
+        s.contains("synthetic-rebuild-error: switch exit 1"),
+        "nixos-rebuild error text must not be swallowed: {s}"
+    );
+    assert!(!s.contains("connection failed"), "{s}");
+}

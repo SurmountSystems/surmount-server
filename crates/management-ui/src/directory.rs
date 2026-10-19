@@ -728,6 +728,68 @@ impl StalwartDirectory {
             .ok_or_else(|| "No mailbox with that address.".into())
     }
 
+    /// The submitted name is already stored. Return that principal.
+    ///
+    /// Address is the stored email when it contains `@`, otherwise
+    /// `local-part@domain` from the domain id the create already sent.
+    /// [`CreateAccountInput`] has no password, so this step does not set one.
+    async fn existing_account_after_name_taken(
+        &self,
+        input: &CreateAccountInput,
+    ) -> AccountMutationResult {
+        match self
+            .stored_account_for_name_and_domain(&input.name, &input.domain_id)
+            .await
+        {
+            Ok(account) => {
+                let address = account.address.clone();
+                AccountMutationResult {
+                    ok: false,
+                    account: Some(account),
+                    source: "stalwart",
+                    note: format!(
+                        "The mailbox {address} already exists. The password was not set \
+because the create input has no password."
+                    ),
+                }
+            }
+            Err(why) => AccountMutationResult {
+                ok: false,
+                account: None,
+                source: "stalwart",
+                note: format!(
+                    "The mailbox name {} already exists. The password was not set \
+because the create input has no password. The stored account was not hooked up. {why}",
+                    input.name
+                ),
+            },
+        }
+    }
+
+    async fn stored_account_for_name_and_domain(
+        &self,
+        local: &str,
+        domain_id: &str,
+    ) -> Result<AccountEntry, String> {
+        let domain_body = self.post_jmap(&jmap_domain_list_request()).await?;
+        let domain_name = domain_name_for_id(&domain_body, domain_id)?;
+        let built = format!("{local}@{domain_name}");
+        let entry = self.lookup_by_mailbox(&built).await?;
+        if entry.id.trim().is_empty() {
+            return Err("stored account id is empty".into());
+        }
+        let address = if entry.address.contains('@') {
+            entry.address
+        } else {
+            built
+        };
+        Ok(AccountEntry {
+            id: entry.id,
+            address,
+            status: entry.status,
+        })
+    }
+
     async fn set_password_credential(&self, id: &str, password: &str) -> Result<(), String> {
         let body = jmap_account_set_password_request(id, password);
         let value = self.post_jmap(&body).await?;
@@ -802,12 +864,21 @@ impl Directory for StalwartDirectory {
 Set the mailbox password from Mail on this console."
                         .into(),
                 },
-                Err(err) => AccountMutationResult {
-                    ok: false,
-                    account: None,
-                    source: "stalwart",
-                    note: format!("Stalwart create failed (fail-closed). {err}"),
-                },
+                Err(err) => {
+                    // That submitted name is already a principal. Hook up the
+                    // stored account. Other notCreated types keep the type name
+                    // and still return no account.
+                    if err == "JMAP set notCreated type=primaryKeyViolation" {
+                        self.existing_account_after_name_taken(&input).await
+                    } else {
+                        AccountMutationResult {
+                            ok: false,
+                            account: None,
+                            source: "stalwart",
+                            note: format!("Stalwart create failed (fail-closed). {err}"),
+                        }
+                    }
+                }
             }
         })
     }
@@ -1186,6 +1257,55 @@ pub fn domain_id_from_jmap(body: &Value, domain_name: &str) -> Result<Option<Str
                 .unwrap_or("unknown");
             return Err(format!("JMAP error response type={err_type}"));
         }
+    }
+    Err("JMAP response had no x:Domain/get list".into())
+}
+
+/// Domain name whose `id` matches `domain_id`. Never invents a name.
+fn domain_name_for_id(body: &Value, domain_id: &str) -> Result<String, String> {
+    let want = domain_id.trim();
+    if want.is_empty() {
+        return Err("domain id required".into());
+    }
+    let responses = body
+        .get("methodResponses")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "JMAP response missing methodResponses array".to_string())?;
+    for entry in responses {
+        let arr = match entry.as_array() {
+            Some(a) if a.len() >= 2 => a,
+            _ => continue,
+        };
+        let method = arr[0].as_str().unwrap_or("");
+        if method != "x:Domain/get" && method != "Domain/get" {
+            continue;
+        }
+        let args = &arr[1];
+        if let Some(err_type) = args.get("type").and_then(|t| t.as_str())
+            && args.get("list").is_none()
+        {
+            return Err(format!("JMAP method error type={err_type}"));
+        }
+        let list = args
+            .get("list")
+            .and_then(|l| l.as_array())
+            .ok_or_else(|| "x:Domain/get response missing list array".to_string())?;
+        for item in list {
+            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();
+            if id != want {
+                continue;
+            }
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if name.is_empty() || name.contains('@') {
+                return Err("domain name missing for that domain id".into());
+            }
+            return Ok(name.to_string());
+        }
+        return Err("domain id not found in directory".into());
     }
     Err("JMAP response had no x:Domain/get list".into())
 }
@@ -3308,6 +3428,324 @@ mod tests {
                 && !c.contains("nsec")),
             "create must hit /jmap User set; calls={calls:?}"
         );
+        serve.abort();
+        let _ = serve.await;
+    }
+
+    /// Named contract: a new mailbox name is sent once, as the submitted
+    /// name, create-map key `new1`. On JMAP Set notCreated type
+    /// primaryKeyViolation the result must not dead-end with no account.
+    /// The password step reads `AccountEntry.address` into
+    /// `SetMailboxPasswordInput.mailbox`. That mailbox address is non-empty,
+    /// contains `@`, and includes the submitted local-part and the domain
+    /// when both are known. An empty mailbox is what produces
+    /// `password set refused: mailbox address required`. The operator note
+    /// must not contain `primaryKeyViolation`. It says the mailbox already
+    /// exists, includes that address, and says whether the password was set
+    /// on that existing mailbox or why it was not. `ok` may stay false when
+    /// the password was not set. Type `forbidden` still fail-closes: the
+    /// note starts with `Stalwart create failed (fail-closed)`, contains
+    /// `forbidden`, does not say the mailbox already exists, and returns
+    /// no account.
+    #[tokio::test]
+    async fn new_mailbox_name_is_sent_once_and_primary_key_violation_reports_that_name_already_exists()
+     {
+        const SUBMITTED: &str = "submitted-name";
+        const OTHER: &str = "other-local";
+        const DOMAIN: &str = "known.example";
+        const DOMAIN_ID: &str = "dom-fresh";
+        const STORED_ID: &str = "stored-1";
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen_h = seen.clone();
+        let app = Router::new().route(
+            "/jmap",
+            post(move |req: Request| {
+                let seen = seen_h.clone();
+                async move {
+                    let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024)
+                        .await
+                        .unwrap_or_default();
+                    let raw = String::from_utf8_lossy(&bytes).to_string();
+                    seen.lock().await.push(raw.clone());
+                    let incoming: Value = serde_json::from_slice(&bytes).unwrap_or(json!({}));
+                    let stored_address = format!("{SUBMITTED}@{DOMAIN}");
+                    // Existing principal for this name and domain. Create still
+                    // answers notCreated. `new1` stays the client creation id.
+                    let body = if incoming.pointer("/methodCalls/0/1/create").is_some() {
+                        let sent_name = incoming
+                            .pointer("/methodCalls/0/1/create/new1/name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let err_type = match sent_name {
+                            OTHER => "forbidden",
+                            SUBMITTED => "primaryKeyViolation",
+                            _ => "invalidArguments",
+                        };
+                        json!({
+                            "methodResponses": [
+                                ["x:Account/set", {
+                                    "notCreated": {
+                                        "new1": {
+                                            "type": err_type,
+                                            "description": "upstream-description-not-for-the-caller"
+                                        }
+                                    }
+                                }, "c1"]
+                            ]
+                        })
+                    } else if raw.contains("x:Domain/") {
+                        json!({
+                            "methodResponses": [
+                                ["x:Domain/query", {"ids": [DOMAIN_ID]}, "dq1"],
+                                ["x:Domain/get", {
+                                    "list": [{
+                                        "id": DOMAIN_ID,
+                                        "name": DOMAIN
+                                    }]
+                                }, "dg1"]
+                            ]
+                        })
+                    } else if raw.contains("x:Account/") {
+                        json!({
+                            "methodResponses": [
+                                ["x:Account/query", {"ids": [STORED_ID]}, "q1"],
+                                ["x:Account/get", {
+                                    "list": [{
+                                        "id": STORED_ID,
+                                        "name": SUBMITTED,
+                                        "emailAddress": stored_address,
+                                        "domainId": DOMAIN_ID,
+                                        "@type": "User"
+                                    }]
+                                }, "g1"]
+                            ]
+                        })
+                    } else {
+                        json!({
+                            "methodResponses": [
+                                ["x:Account/set", {
+                                    "notCreated": {
+                                        "new1": {
+                                            "type": "invalidArguments",
+                                            "description": "upstream-description-not-for-the-caller"
+                                        }
+                                    }
+                                }, "c1"]
+                            ]
+                        })
+                    };
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            // Loopback HTTP only. Skip the system CA store: this client
+            // never opens TLS, and the remote test sandbox has no CA bundle.
+            .tls_danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+        let dir = StalwartDirectory::new(http, format!("http://{addr}"), "test-token");
+
+        let stored_address = format!("{SUBMITTED}@{DOMAIN}");
+        let exists = dir
+            .create_account(CreateAccountInput {
+                name: SUBMITTED.into(),
+                domain_id: DOMAIN_ID.into(),
+                description: None,
+            })
+            .await;
+        {
+            let calls = seen.lock().await;
+            let creates: Vec<&String> = calls
+                .iter()
+                .filter(|raw| {
+                    serde_json::from_str::<Value>(raw.as_str())
+                        .ok()
+                        .is_some_and(|posted| {
+                            posted.pointer("/methodCalls/0/1/create/new1").is_some()
+                                && posted
+                                    .pointer("/methodCalls/0/1/create/new1/name")
+                                    .and_then(|v| v.as_str())
+                                    == Some(SUBMITTED)
+                        })
+                })
+                .collect();
+            assert_eq!(
+                creates.len(),
+                1,
+                "a new mailbox name is still sent once, as the submitted name, \
+create-map key new1; calls={calls:?}"
+            );
+            let raw = creates[0];
+            assert_eq!(
+                raw.matches(SUBMITTED).count(),
+                1,
+                "the submitted name must be sent once, not also as a primary key; raw={raw}"
+            );
+            let posted: Value = serde_json::from_str(raw).expect("create body is JSON");
+            let method_calls = posted["methodCalls"].as_array().expect("methodCalls");
+            assert_eq!(method_calls.len(), 1, "one set call, not a second create");
+            assert_eq!(method_calls[0][0], "x:Account/set");
+            let create = method_calls[0][1]["create"]
+                .as_object()
+                .expect("create map");
+            assert_eq!(
+                create.len(),
+                1,
+                "one creation id, not a hardcoded existing primary key"
+            );
+            assert!(
+                create.contains_key("new1"),
+                "creation id is new1, not the mailbox name as the primary key"
+            );
+            assert!(
+                !create.contains_key(SUBMITTED),
+                "must not use the submitted name as the JMAP create primary key"
+            );
+            assert_eq!(create["new1"]["name"], SUBMITTED);
+            assert_eq!(create["new1"]["domainId"], DOMAIN_ID);
+        }
+        assert_eq!(exists.source, "stalwart");
+        assert!(
+            !exists
+                .note
+                .contains("upstream-description-not-for-the-caller"),
+            "caller note must not reflect the upstream description: {}",
+            exists.note
+        );
+
+        let forbidden = dir
+            .create_account(CreateAccountInput {
+                name: OTHER.into(),
+                domain_id: DOMAIN_ID.into(),
+                description: None,
+            })
+            .await;
+        assert!(!forbidden.ok);
+        assert!(
+            forbidden.account.is_none(),
+            "type forbidden still returns no account"
+        );
+        assert!(
+            forbidden
+                .note
+                .starts_with("Stalwart create failed (fail-closed)"),
+            "other notCreated types still fail-close. note={}",
+            forbidden.note
+        );
+        assert!(
+            forbidden.note.contains("forbidden"),
+            "fail-closed message must include the type name `forbidden`. note={}",
+            forbidden.note
+        );
+        assert!(
+            !forbidden.note.contains("already exists"),
+            "forbidden must not say the mailbox already exists. note={}",
+            forbidden.note
+        );
+        {
+            let calls = seen.lock().await;
+            let other_posts: Vec<&String> = calls
+                .iter()
+                .filter(|raw| {
+                    serde_json::from_str::<Value>(raw.as_str())
+                        .ok()
+                        .is_some_and(|posted| {
+                            posted
+                                .pointer("/methodCalls/0/1/create/new1/name")
+                                .and_then(|v| v.as_str())
+                                == Some(OTHER)
+                        })
+                })
+                .collect();
+            assert_eq!(other_posts.len(), 1, "the other name is sent once");
+            assert_eq!(
+                other_posts[0].matches(OTHER).count(),
+                1,
+                "other name appears once in its create body"
+            );
+        }
+
+        // `ok` may stay false when the password was not set. The account
+        // field must still be present so the password step can read it.
+        let hooked = exists.account.as_ref().unwrap_or_else(|| {
+            panic!(
+                "primaryKeyViolation must not dead-end with no account. \
+The password step reads AccountEntry.address into SetMailboxPasswordInput.mailbox. \
+An empty mailbox is what produces `password set refused: mailbox address required`. \
+Expected mailbox address `{stored_address}` (local-part `{SUBMITTED}` and domain `{DOMAIN}`). \
+The operator note must not contain `primaryKeyViolation`. note={}",
+                exists.note
+            );
+        });
+        let mailbox_for_password_step = hooked.address.as_str();
+        assert!(
+            !mailbox_for_password_step.is_empty(),
+            "SetMailboxPasswordInput.mailbox must not be the empty address that produces \
+`password set refused: mailbox address required`. address={mailbox_for_password_step:?}"
+        );
+        assert!(
+            mailbox_for_password_step.contains('@'),
+            "SetMailboxPasswordInput.mailbox must contain @. Without @, set_mailbox_password \
+returns `password set refused: mailbox address required`. address={mailbox_for_password_step}"
+        );
+        assert!(
+            mailbox_for_password_step
+                .to_ascii_lowercase()
+                .contains(SUBMITTED),
+            "mailbox address must include the submitted local-part `{SUBMITTED}`. \
+address={mailbox_for_password_step}"
+        );
+        assert!(
+            mailbox_for_password_step
+                .to_ascii_lowercase()
+                .contains(DOMAIN),
+            "mailbox address must include the domain `{DOMAIN}` because that domain is known \
+for the stored mailbox. address={mailbox_for_password_step}"
+        );
+        assert!(
+            mailbox_for_password_step.eq_ignore_ascii_case(&stored_address),
+            "mailbox address passed toward the password step must be `{stored_address}`. \
+address={mailbox_for_password_step}"
+        );
+        assert!(
+            !hooked.id.trim().is_empty(),
+            "hooked account id must be non-empty so the password step is not given a blank principal"
+        );
+        assert!(
+            !exists.note.contains("primaryKeyViolation"),
+            "operator-facing note must not contain `primaryKeyViolation` and must not lead with \
+`JMAP set notCreated type=primaryKeyViolation`. note={}",
+            exists.note
+        );
+        let note_lower = exists.note.to_ascii_lowercase();
+        assert!(
+            note_lower.contains("already exists"),
+            "note must say the mailbox already exists. note={}",
+            exists.note
+        );
+        assert!(
+            exists.note.contains(&stored_address),
+            "note must include the mailbox address `{stored_address}`. note={}",
+            exists.note
+        );
+        assert!(
+            note_lower.contains("password was set") || note_lower.contains("password was not set"),
+            "note must say whether the password was set on that existing mailbox or why it was \
+not. note={}",
+            exists.note
+        );
+
         serve.abort();
         let _ = serve.await;
     }

@@ -70,8 +70,7 @@ pub const BTOP_ET_CLIENT: &str = "$HOME/.nix-profile/bin/et";
 
 /// Shell default for the root identity `operator_ssh_identity` already
 /// selects: `SURMOUNT_DEPLOY_SSH_IDENTITY`, else `$HOME/.ssh/id_ed25519`.
-pub const BTOP_ET_IDENTITY_SHELL: &str =
-    "${SURMOUNT_DEPLOY_SSH_IDENTITY:-$HOME/.ssh/id_ed25519}";
+pub const BTOP_ET_IDENTITY_SHELL: &str = "${SURMOUNT_DEPLOY_SSH_IDENTITY:-$HOME/.ssh/id_ed25519}";
 
 /// Laptop `just btop` argv. The program is `$HOME/.nix-profile/bin/et`.
 /// Does not nix-run, nix-build, or copy a store path.
@@ -346,10 +345,7 @@ mod tests {
         let extra = btop_et_extra();
         let argv = build_et_argv(BTOP_ET_CLIENT, "root@surmount-1", &extra, None);
         let just = include_str!("../../../justfile");
-        let recipe = just
-            .split("btop *args:")
-            .nth(1)
-            .expect("just btop recipe");
+        let recipe = just.split("btop *args:").nth(1).expect("just btop recipe");
         let body = recipe.split("\n\n").next().expect("recipe body");
         assert!(body.contains(BTOP_ET_CLIENT), "{body}");
         assert!(!body.contains("nix run"), "{body}");

@@ -403,9 +403,21 @@ pub async fn create_account_via_directory(
             description: body.description,
         })
         .await;
-    if !result.ok {
+    // A name that is already stored comes back with a mailbox address and
+    // ok false. The password step reads that address. Fail closed only when
+    // there is no address (forbidden and every other create failure).
+    let stored_address = result.account.as_ref().and_then(|account| {
+        let addr = account.address.trim();
+        if addr.is_empty() || !addr.contains('@') {
+            None
+        } else {
+            Some(addr.to_string())
+        }
+    });
+    if !result.ok && stored_address.is_none() {
         return mutation_result_to_response(result);
     }
+    let mailbox_already_present = !result.ok;
 
     let mut password_set = false;
     let mut password_note = None;
@@ -447,7 +459,21 @@ pub async fn create_account_via_directory(
         console_note = Some(format!("Mailbox exists; console login was not saved. {e}"));
     }
 
-    let mut note = if password.is_some() && !password_set {
+    let mut note = if mailbox_already_present {
+        let addr = stored_address.clone().unwrap_or_else(|| address.clone());
+        if password_set {
+            format!(
+                "The mailbox {addr} already exists. The password was set on that existing mailbox."
+            )
+        } else if password.is_some() {
+            let why = password_note
+                .clone()
+                .unwrap_or_else(|| "Finish on the password card.".into());
+            format!("The mailbox {addr} already exists. The password was not set. {why}")
+        } else {
+            result.note.clone()
+        }
+    } else if password.is_some() && !password_set {
         password_note.unwrap_or_else(|| {
             "Mailbox exists; password was not set. Finish on the password card.".into()
         })
@@ -456,7 +482,7 @@ pub async fn create_account_via_directory(
     } else if password_set {
         format!("Created {address} and set the password. Evolution User Name is the full address.")
     } else {
-        result.note
+        result.note.clone()
     };
     if password.is_some() && !password_set && !note.to_ascii_lowercase().contains("mailbox exists")
     {
@@ -466,12 +492,21 @@ pub async fn create_account_via_directory(
         note.push_str(" No npub: IMAP/SMTP only.");
     }
 
+    // Fresh create reports local@primary_domain. That is the console mailbox
+    // and the address in the note. A directory row that already contains @
+    // may be the hermetic mock label, not that mailbox. An existing mailbox
+    // still reports the stored address.
+    let reported_address = if mailbox_already_present {
+        stored_address.clone().unwrap_or_else(|| address.clone())
+    } else {
+        address.clone()
+    };
     let mut body = json!({
         "ok": true,
-        "created": true,
+        "created": !mailbox_already_present,
         "password_set": password_set,
         "console_saved": console_saved,
-        "address": address,
+        "address": reported_address,
         "source": result.source,
         "note": note,
     });

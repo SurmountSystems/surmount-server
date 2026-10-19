@@ -3,7 +3,7 @@
 # Fail-closed: missing packages.grok-oss throws. Do not enable the NixOS
 # module without this package.
 # pkgs stays the host channel for C libraries. rustToolchain is
-# nixpkgs-rust (rustc 1.99.0). Do not use host pkgs.rustc / pkgs.cargo.
+# nixpkgs-rust (rustc 1.99.1). Do not use host pkgs.rustc / pkgs.cargo.
 
 {
   grokOssFlake,
