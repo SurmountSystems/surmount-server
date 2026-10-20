@@ -19,5 +19,6 @@ symlinkJoin {
   meta = ookla-speedtest.meta // {
     description = "Ookla Speedtest CLI with license and GDPR flags accepted";
     mainProgram = "speedtest";
+    outputsToInstall = [ "out" ];
   };
 }

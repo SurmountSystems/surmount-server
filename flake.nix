@@ -486,7 +486,8 @@
             let
               pkgsOokla = import nixpkgs {
                 inherit system;
-                config.allowUnfreePredicate = pkg: lib.getName pkg == "ookla-speedtest";
+                config.allowUnfreePredicate =
+                  pkg: builtins.elem (lib.getName pkg) [ "ookla-speedtest" "speedtest" ];
               };
             in
             pkgsOokla.callPackage ./nix/packages/speedtest.nix { };

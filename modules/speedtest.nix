@@ -79,7 +79,9 @@ in
 
   config = mkMerge [
     (mkIf cfg.enable {
-      nixpkgs.config.allowUnfreePredicate = pkg: lib.getName pkg == "ookla-speedtest";
+      # Wrapper getName is speedtest; upstream attr is ookla-speedtest.
+      nixpkgs.config.allowUnfreePredicate =
+        pkg: builtins.elem (lib.getName pkg) [ "ookla-speedtest" "speedtest" ];
       environment.systemPackages = [ cfg.package ];
     })
     (mkIf (cfg.enable && cfg.periodic.enable) {
