@@ -339,7 +339,11 @@
     dig
     tcpdump
     git
+    scc
   ];
+
+  # Wrapped Ookla CLI on PATH. Periodic JSON timer stays off.
+  surmount.speedtest.enable = true;
 
   # Journal persistence + size cap live in modules/logging.nix
   # (surmount.logging; Storage=persistent, SystemMaxUse scaffold 1G).

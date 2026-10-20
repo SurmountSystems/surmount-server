@@ -10,6 +10,9 @@
 # GHA: .github/workflows/ci.yml job display name is `just ci` (required-check footgun)
 # End-to-end: nix run .#e2e (local) / nix run .#e2e-host (env-gated; never in ci)
 # Operator bins: nix run .#<app> -- args (just aliases only nix-run).
+# Speedtest: nix run .#speedtest (Ookla CLI; --accept-license --accept-gdpr).
+# Module: surmount.speedtest.enable ; timer: surmount.speedtest.periodic.enable
+# (default off, interval 6h, JSON to the journal, optional logFile).
 # Heavy: mail-vm-test, mail-vps-eval, stalwart-mail package are optional.
 
 {
@@ -82,13 +85,14 @@
     # Grok OSS TUI (bin/grok-oss).
     # Commit pin, not a floating main ref. The repo stays
     # github:SurmountSystems/grok-oss. This rev is
-    # 525538172dc21391bc690a4cc4a8706a5c554e47. Prior lock was
+    # 6703706cc7419ba71af549c1562017f302173c19. Prior lock was
+    # 525538172dc21391bc690a4cc4a8706a5c554e47. Earlier lock was
     # 182293cb30fa5414dd47686b92708103519b7462. Earlier lock was
     # decb052744d25b63dbca8a95ca65b4ad794b9ad5. Earlier lock was
     # 7dc3685277bb65c4a0634e91a6e2596e48ad882f (main).
     # Do not retarget this input to a side branch.
     # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/525538172dc21391bc690a4cc4a8706a5c554e47";
+    grok-oss.url = "github:SurmountSystems/grok-oss/6703706cc7419ba71af549c1562017f302173c19";
 
     # Tau (bin/tau). SurmountSystems/tau master at
     # d2e1955b0491f538a486007d0d3ab779d95a828f (committer
@@ -197,6 +201,8 @@
         # (laptop cargo still uses Menhera). Do not wrap src again here.
         splora = self.packages.${system}.splora;
         splora-liquid = self.packages.${system}.splora-liquid;
+        # Wrapped Ookla CLI. Unfree allowlist is only ookla-speedtest.
+        speedtest = self.packages.${system}.speedtest;
       };
 
       mkPkgs =
@@ -474,6 +480,18 @@
           # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
           # bootstrap without a host just install. Same pattern as grok-oss.
           just = pkgs.just;
+          # Ookla Speedtest CLI with --accept-license --accept-gdpr.
+          # Unfree predicate is only ookla-speedtest. nix run .#speedtest
+          speedtest =
+            let
+              pkgsOokla = import nixpkgs {
+                inherit system;
+                config.allowUnfreePredicate = pkg: lib.getName pkg == "ookla-speedtest";
+              };
+            in
+            pkgsOokla.callPackage ./nix/packages/speedtest.nix { };
+          # boyter/scc from the host nixpkgs channel.
+          scc = pkgs.scc;
           default = self.packages.${system}.management-ui;
         }
       );
@@ -646,6 +664,14 @@
         surmount-rekey = {
           type = "app";
           program = "${self.packages.${system}.surmount-rekey}/bin/surmount-rekey";
+        };
+        speedtest = {
+          type = "app";
+          program = "${self.packages.${system}.speedtest}/bin/speedtest";
+        };
+        scc = {
+          type = "app";
+          program = "${self.packages.${system}.scc}/bin/scc";
         };
       });
 

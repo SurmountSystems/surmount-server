@@ -1838,8 +1838,9 @@ management-ui or on :443.
 `surmount.grokOss.enable` stays default false. Enable only from private
 host-local. The module does not start a boot TUI unit. Do not set `Nice=`
 on grok-oss (sshd class). Flake input grok-oss is commit pin
-`525538172dc21391bc690a4cc4a8706a5c554e47` on
+`6703706cc7419ba71af549c1562017f302173c19` on
 `github:SurmountSystems/grok-oss`. Prior lock was
+`525538172dc21391bc690a4cc4a8706a5c554e47`. Earlier lock was
 `182293cb30fa5414dd47686b92708103519b7462`. Earlier lock was
 `decb052744d25b63dbca8a95ca65b4ad794b9ad5`. Operator 2026-10-14 locked
 `b7ab91532c9e8008081b4f281794be43ecae73a6` (HB-1 merged as GitHub pull

@@ -42,5 +42,7 @@
     ./grok-oss.nix
     # Optional Tau coding agent: default off, no daemon, no extensions.
     ./tau.nix
+    # Wrapped Ookla Speedtest CLI. Mail host enables the package; timer stays off.
+    ./speedtest.nix
   ];
 }

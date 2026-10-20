@@ -38,8 +38,8 @@ just deploy
 `nix flake update` moves branch inputs: nixpkgs `nixos-26.05`,
 `advisory-db`, Splora, and `surmount-site`. It does
 not move commit-pinned `nixpkgs-rust`, `crane`, `sops-nix`, or grok-oss.
-grok-oss is commit pin `525538172dc21391bc690a4cc4a8706a5c554e47`, not
-floating `main`. Stalwart versions are the fixed-output files under
+grok-oss is commit pin `6703706cc7419ba71af549c1562017f302173c19`, not
+floating `main`. Prior pin was `525538172dc21391bc690a4cc4a8706a5c554e47`. Stalwart versions are the fixed-output files under
 `nix/packages/`, not this command.
 
 `cargo update` uses the menhera index already configured on the laptop.

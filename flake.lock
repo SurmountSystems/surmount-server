@@ -3295,17 +3295,17 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1792446292,
-        "narHash": "sha256-fS7jeduc9h4kTQN+7j8eo1H73OCTgCUhxpbP2HFIf+c=",
+        "lastModified": 1792529825,
+        "narHash": "sha256-T1tHT+d8v6NuZHeJnUJd1UHQgQHe5XhiNeZYbEoahcM=",
         "owner": "SurmountSystems",
         "repo": "grok-oss",
-        "rev": "525538172dc21391bc690a4cc4a8706a5c554e47",
+        "rev": "6703706cc7419ba71af549c1562017f302173c19",
         "type": "github"
       },
       "original": {
         "owner": "SurmountSystems",
         "repo": "grok-oss",
-        "rev": "525538172dc21391bc690a4cc4a8706a5c554e47",
+        "rev": "6703706cc7419ba71af549c1562017f302173c19",
         "type": "github"
       }
     },
