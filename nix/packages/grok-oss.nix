@@ -24,7 +24,8 @@ let
       -e 's/pkgs\.stdenv\.isLinux/pkgs.stdenv.hostPlatform.isLinux/g' \
       -e 's/pkgs\.stdenv\.isDarwin/pkgs.stdenv.hostPlatform.isDarwin/g' \
       -e 's/stdenv\.isLinux/stdenv.hostPlatform.isLinux/g' \
-      -e 's/stdenv\.isDarwin/stdenv.hostPlatform.isDarwin/g'
+      -e 's/stdenv\.isDarwin/stdenv.hostPlatform.isDarwin/g' \
+      -e 's/CARGO_BUILD_JOBS = "2";/CARGO_BUILD_JOBS = "32";/'
   '';
   craneLib = (grokOssFlake.inputs.crane.mkLib pkgs).overrideToolchain rustToolchain;
   built = import "${patchedSrc}/flake/grok-oss.nix" {

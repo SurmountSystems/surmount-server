@@ -538,7 +538,12 @@ fn switch_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
     [
         "before=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
-        &format!("nixos-rebuild switch --flake {flake_q}"),
+        // Live nix.conf still has max-jobs 8 until this generation
+        // switches. 32 matches surmount.remoteBuilder.maxJobs. cores 0
+        // is auto so one drv can use the machine.
+        &format!(
+            "nixos-rebuild switch --flake {flake_q} --option max-jobs 32 --option cores 0"
+        ),
         "rc=$?",
         "after=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
         "if [ -n \"$after\" ] && [ \"$after\" != \"$before\" ]; then printf '%s\\n' \"synthetic-built-generation: $after\"; else printf '%s\\n' \"synthetic-built-generation: unchanged\"; fi",
@@ -951,6 +956,8 @@ mod tests {
         assert!(PROFILE_GENERATION_REMOTE.contains("readlink"));
         let cmd = switch_remote_command("path:/tmp/repo#mail-vps");
         assert!(cmd.contains("nixos-rebuild switch --flake"));
+        assert!(cmd.contains("--option max-jobs 32"));
+        assert!(cmd.contains("--option cores 0"));
         assert!(cmd.contains("path:/tmp/repo#mail-vps"));
         assert!(cmd.contains("synthetic-built-generation:"));
         assert!(!cmd.contains("post-switch-smoke"));
