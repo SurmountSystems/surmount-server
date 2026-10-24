@@ -422,6 +422,9 @@ test-eternal-terminal-eval:
 test-inxi-eval:
     nix eval --impure --json --file tests/inxi-contract.nix
 
+test-btop-eval:
+    nix eval --impure --json --file tests/btop-contract.nix
+
 test-perf-tools-eval:
     nix eval --impure --json --file tests/perf-tools-contract.nix
 

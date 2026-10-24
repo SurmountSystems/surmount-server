@@ -2252,6 +2252,34 @@ let
     assert builtins.any (r: lib.hasInfix "/root/.config/btop/btop.conf" r) rules;
     "t37-btop-local-config-ok";
 
+  # Host btop disk usage follows fstab (NixOS fileSystems). Extra disks
+  # persist in private host-local, not in this public eval.
+  t37b-btop-use-fstab-true =
+    let
+      e = evalSurmount { };
+      etc = e.config.environment.etc;
+      entry = etc."xdg/btop/btop.conf" or null;
+      text =
+        if entry == null then
+          ""
+        else if entry ? source then
+          builtins.readFile entry.source
+        else if entry ? text then
+          entry.text
+        else
+          "";
+    in
+    assert entry != null;
+    assert lib.hasInfix "use_fstab = true" text;
+    assert lib.hasInfix ''disks_filter = ""'' text;
+    assert lib.hasInfix "show_disks = true" text;
+    assert lib.hasInfix "only_physical = true" text;
+    assert !(lib.hasInfix "use_fstab = false" text);
+    # Public sample host only. Host-local hardware-configuration.nix
+    # owns fileSystems."/mnt/hdd"; this eval does not import it.
+    assert !(e.config.fileSystems ? "/mnt/hdd");
+    "t37b-btop-use-fstab-true-ok";
+
   t42-guest-root-justfile =
     let
       e = evalSurmount { };
@@ -3282,6 +3310,7 @@ let
     t36-btop-system-package
     t41-inxi-system-package
     t37-btop-local-config
+    t37b-btop-use-fstab-true
     t42-guest-root-justfile
     t43-scram-watch-highest-priority
     t43b-swapfile-enable-without-path-asserts

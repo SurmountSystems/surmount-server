@@ -817,6 +817,14 @@ background, block graphs, square corners). Canonical file is
 `/etc/xdg/btop/btop.conf`. Activation also links
 `/root/.config/btop/btop.conf` (and the same path under any defined
 normal user's home) so `just btop` loads it without extra flags.
+Disk usage follows fstab (`use_fstab = true`). Persist extra disks with
+NixOS `fileSystems` (that is how NixOS writes `/etc/fstab`), not by
+listing every mount. The extra disk is LABEL=hdd at `/mnt/hdd` via
+private host-local `fileSystems` (`/dev/disk/by-label/hdd`, ext4,
+`nofail`). Public sample eval does not import that overlay.
+`disks_filter` stays empty. Targeted eval: `just test-btop-eval`.
+A live `just btop` does not reload a later store conf. Quit btop and
+run `just btop` again after the host switch.
 
 ### Host hardware probe (`just host-inxi`)
 
