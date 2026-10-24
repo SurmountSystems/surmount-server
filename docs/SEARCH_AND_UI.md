@@ -119,8 +119,9 @@ the Leptos app. Live apex/www serve the packaged
 `surmount.systems` / `www.surmount.systems`). `just publish` publishes
 static sites; `just deploy` is the NixOS generation (the host switch).
 `just deploy-host` is that switch with no default target.
-Operator console stays on `services.surmount.systems`. COMING SOON
-leftover is closed.
+Operator console stays on `services.surmount.systems`. Public systems
+dashboard is Host `status.surmount.systems` on the same Axum edge.
+COMING SOON leftover is closed.
 
 ## Phases
 
@@ -147,7 +148,8 @@ leftover is closed.
   **Discovery headers (2026-08-17, every public Host 2026-08-20;
   per-site v3 2026-09-11):**
   Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Map: apex, www,
-  services, `mta-sts.{apex}`, extra static Hosts; one v3 per Host.
+  services, `mta-sts.{apex}`, `status.{apex}`, extra static Hosts; one
+  v3 per Host.
   Onion-Location is `{that-host-onion}{path}`. Mail unmapped. Mapping loaded
   at process start; restart the unit after hostname/env/map/static-vhost
   change (no hot-reload). Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`,

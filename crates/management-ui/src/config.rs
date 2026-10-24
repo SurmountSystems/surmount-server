@@ -512,13 +512,14 @@ impl AppConfig {
             .unwrap_or_else(|| {
                 // Default open-redirect allowlist: services (operator console),
                 // apex + www (public COMING SOON; same-host HTTPS upgrade),
-                // mail name, MTA-STS policy host.
+                // mail name, MTA-STS policy host, systems dashboard Host.
                 vec![
                     services_hostname.clone(),
                     primary_domain.clone(),
                     format!("www.{primary_domain}"),
                     mail_hostname.clone(),
                     format!("mta-sts.{primary_domain}"),
+                    crate::redirect::status_hostname(&primary_domain),
                 ]
             });
 
@@ -554,6 +555,7 @@ impl AppConfig {
         let extra_mail_hostnames = extra_mail_hostnames_from_env();
         let redirect_allowed_hosts =
             union_static_vhost_hosts(redirect_allowed_hosts, &static_vhosts);
+        let redirect_allowed_hosts = union_status_hostname(redirect_allowed_hosts, &primary_domain);
         // Vaultwarden: operator-published URL only. Never invent; no admin token.
         let vaultwarden_url = resolve_vaultwarden_url_from_env();
         // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
@@ -900,6 +902,20 @@ pub fn extra_onion_hosts_union(
     hosts
 }
 
+fn union_status_hostname(mut allowed: Vec<String>, primary_domain: &str) -> Vec<String> {
+    let status = crate::redirect::status_hostname(primary_domain);
+    if status.is_empty() {
+        return allowed;
+    }
+    if !allowed
+        .iter()
+        .any(|a| crate::redirect::host_is_allowlisted(&status, std::slice::from_ref(a)))
+    {
+        allowed.push(status);
+    }
+    allowed
+}
+
 pub fn union_static_vhost_hosts(
     mut allowed: Vec<String>,
     vhosts: &BTreeMap<String, PathBuf>,
@@ -1094,6 +1110,13 @@ mod tests {
     fn splora_proxy_and_http3_default_off_on_plain_http() {
         let _g = EnvGuard::acquire();
         let cfg = AppConfig::from_env().unwrap();
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "status.surmount.systems"),
+            "default :80 allowlist must include systems dashboard Host: {:?}",
+            cfg.redirect_allowed_hosts
+        );
         assert!(!cfg.splora_proxy.enable);
         assert!(cfg.splora_proxy.portal_host.is_none());
         assert!(!cfg.http3.enable);
@@ -1811,6 +1834,7 @@ mod tests {
         );
         assert!(!hosts.contains(&"www.example.test"));
         assert!(!hosts.contains(&"mta-sts.example.test"));
+        assert!(!hosts.contains(&"status.example.test"));
         assert!(!hosts.contains(&"mail.example.test"));
         let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
         assert_eq!(services.onion_port, 443);

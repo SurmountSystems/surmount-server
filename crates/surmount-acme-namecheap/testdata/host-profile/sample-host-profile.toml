@@ -9,4 +9,5 @@ acme_domains = [
   "mail.example.invalid",
   "example.invalid",
   "www.example.invalid",
+  "status.example.invalid",
 ]

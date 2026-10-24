@@ -4,7 +4,11 @@ Defense-in-depth notes for the Surmount mail VPS. Design notes:
 [open-choices.md](open-choices.md). Secrets detail: [SECRETS.md](SECRETS.md).
 Data plane: [DATASTORES.md](DATASTORES.md). Ops: [OPS.md](OPS.md).
 
-**Last updated:** 2026-08-26 (Cargo.lock SHA-1/MD5 inventory: no sha1/md5
+**Last updated:** 2026-10-24 (Cargo.lock git patches for ctutils 0.4.5,
+rustls-webpki 0.103.16, webpki-root-certs 1.0.11, and i18n-config 0.4.8
+without basic-toml, because menhera 10d still stops at the unpatched
+registry versions; do not ignore those advisories; do not fetch crates.io
+to skip the cooldown). Prior 2026-08-26 (Cargo.lock SHA-1/MD5 inventory: no sha1/md5
 crates; product TLS is rustls+aws-lc-rs TLS 1.3; ring is locked as a
 rustls optional dep). Prior 2026-08-20 (extra mailbox domains get the same
 mail-auth DNS **and** the same hosted DNSSEC as the primary; leftover
@@ -64,6 +68,27 @@ pulls i18n-embed-fl 0.10.1, which uses proc-macro-error3.
 RUSTSEC-2026-0173 is proc-macro-error2, not age. `instant`
 (RUSTSEC-2024-0384) left the lock with nostr 0.45 (universal-time, not
 instant).
+
+On 2026-10-24, menhera 10d still stopped at ctutils 0.4.3, rustls-webpki
+0.103.15, and webpki-root-certs 1.0.9. The lock uses git
+`[patch.crates-io]` of ctutils tag `ctutils-v0.4.5` (rev
+`88d6e90d4cfd2fc3333d00e13c99241507d2138f`) for
+[RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385)
+(accessed: 2026-10-24), rustls-webpki tag `v/0.103.16` (rev
+`8ecdcc76f56b68fda67a6adf7976f5eed5006a4c`) for
+[RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382)
+(accessed: 2026-10-24), and webpki-root-certs tag `v/1.0.11` (rev
+`7ebfa0b377fd0c7e0a2848f9d9b2867a4c2198cf`) for
+[RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383)
+(accessed: 2026-10-24). i18n-config 0.4.8 on menhera still depends on
+basic-toml ([RUSTSEC-2026-0374](https://rustsec.org/advisories/RUSTSEC-2026-0374),
+accessed: 2026-10-24; unmaintained, no patched versions). The lock
+patches i18n-config to kellpossible/cargo-i18n rev
+`2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4`, still version 0.4.8, which
+uses the toml crate. Do not ignore those four advisories. Do not fetch
+crates.io to skip menhera. Drop each git line when 10d lists the
+patched registry version. The only cargo-audit ignore stays
+RUSTSEC-2024-0436 (`paste`).
 
 On 2026-09-26 the lock replaced registry faster-hex 0.10.0 with git tag
 v0.10.1 (rev `c817979830ea5be2eafe0b0c99cb83b017ae2b8f`) for

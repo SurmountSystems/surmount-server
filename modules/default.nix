@@ -44,5 +44,7 @@
     ./tau.nix
     # Wrapped Ookla Speedtest CLI. Mail host enables the package; timer stays off.
     ./speedtest.nix
+    # Flexible I/O tester (fio) for operator HDD sequential vs random probes.
+    ./perf-tools.nix
   ];
 }

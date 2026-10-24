@@ -2,7 +2,7 @@
 
 | Path | Role |
 |------|------|
-| `sample-host-profile.toml` | Public sample profile shape (`example.invalid` only). Multi-SAN (H5): services + mail + apex + www. Staging LE directory (H6: production only with explicit flag or profile field). |
+| `sample-host-profile.toml` | Public sample profile shape (`example.invalid` only). Certificate hostnames (H5): services + mail + apex + www + status. Staging LE directory (H6: production only with explicit flag or profile field). |
 | `expected-host-local-acme.nix` | Expected ACME fragment shape for hermetic render test (space-separated Nix `domains` list; durable H-PEM TLS paths; staging directory). |
 
 Real operator profiles live **outside** public git (e.g.

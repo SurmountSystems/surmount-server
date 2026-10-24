@@ -38,7 +38,7 @@
     # nix/packages/arti-onion-service.nix (Surmount-owned 2.7.0 source build).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # rustc/cargo for crane packages and the grok-oss build. Not host
+    # rustc/cargo for crane packages and the Arti source build. Not host
     # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable. Not beta 1.100.
     # Master HEAD 27347cc2965498fa03393739031c9ef8ecd72c0a (2026-10-19)
     # still has pkgs/development/compilers/rust/1_99.nix at rustcVersion
@@ -82,27 +82,6 @@
       flake = false;
     };
 
-    # Grok OSS TUI (bin/grok-oss).
-    # Commit pin, not a floating main ref. The repo stays
-    # github:SurmountSystems/grok-oss. This rev is
-    # 6703706cc7419ba71af549c1562017f302173c19. Prior lock was
-    # 525538172dc21391bc690a4cc4a8706a5c554e47. Earlier lock was
-    # 182293cb30fa5414dd47686b92708103519b7462. Earlier lock was
-    # decb052744d25b63dbca8a95ca65b4ad794b9ad5. Earlier lock was
-    # 7dc3685277bb65c4a0634e91a6e2596e48ad882f (main).
-    # Do not retarget this input to a side branch.
-    # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/6703706cc7419ba71af549c1562017f302173c19";
-
-    # Tau (bin/tau). SurmountSystems/tau master at
-    # d2e1955b0491f538a486007d0d3ab779d95a828f (committer
-    # 2026-10-05T16:18:47Z). This is the operator-synced tree,
-    # not github:dpc/tau. Commit pin, not a floating master ref.
-    # Do not follow their nixpkgs. Their nested nixpkgs-unstable
-    # stays their lock. Default-off NixOS module; package is
-    # fail-closed when enable=true.
-    tau.url = "github:SurmountSystems/tau/d2e1955b0491f538a486007d0d3ab779d95a828f";
-
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
     # JSON-RPC and a cookie; a local bitcoind datadir is not required.
@@ -118,8 +97,6 @@
       sops-nix,
       surmount-site,
       advisory-db,
-      grok-oss,
-      tau,
       splora,
       ...
     }:
@@ -192,11 +169,6 @@
         surmount-secrets-install = self.packages.${system}.surmount-secrets-install;
         surmount-secrets-prompt = self.packages.${system}.surmount-secrets-prompt;
         surmount-rekey = self.packages.${system}.surmount-rekey;
-        grok-oss = self.packages.${system}.grok-oss;
-        # Flake-input bin/tau (packages.tau). Not referenced unless
-        # surmount.tau.enable is true. Default-off eval must not
-        # realize this derivation.
-        tau = self.packages.${system}.tau;
         # Flake-input packages. Upstream crane src omits .cargo/config.toml
         # (laptop cargo still uses Menhera). Do not wrap src again here.
         splora = self.packages.${system}.splora;
@@ -451,19 +423,6 @@
           surmount-rekey = pkgs.callPackage ./nix/packages/surmount-rekey.nix {
             inherit craneLib pkgsRust;
           };
-          # Grok OSS from locked github:SurmountSystems/grok-oss (operator-bump).
-          # Not in checks.ci (heavy crane). Module stays default-off.
-          # rustToolchain is nixpkgs-rust 1.99.1, not host pkgs.rustc 1.95.0.
-          grok-oss = pkgs.callPackage ./nix/packages/grok-oss.nix {
-            grokOssFlake = grok-oss;
-            inherit system rustToolchain;
-          };
-          # Tau from locked github:SurmountSystems/tau (operator-synced
-          # tree, not github:dpc/tau). Consume packages.tau only
-          # (upstream nix/pkgs/tau.nix). Not in checks.ci.
-          # Module stays default-off. Fail-closed when enable=true.
-          tau =
-            tau.packages.${system}.tau or (throw "tau flake input has no packages.${system}.tau (fail-closed)");
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
@@ -478,7 +437,7 @@
           # nixos-26.05: nixfmt-rfc-style is an alias of pkgs.nixfmt (prefer the latter).
           nixfmt = pkgs.nixfmt;
           # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
-          # bootstrap without a host just install. Same pattern as grok-oss.
+          # bootstrap without a host just install.
           just = pkgs.just;
           # Ookla Speedtest CLI with --accept-license --accept-gdpr.
           # Unfree predicate is only ookla-speedtest. nix run .#speedtest
@@ -487,7 +446,11 @@
               pkgsOokla = import nixpkgs {
                 inherit system;
                 config.allowUnfreePredicate =
-                  pkg: builtins.elem (lib.getName pkg) [ "ookla-speedtest" "speedtest" ];
+                  pkg:
+                  builtins.elem (lib.getName pkg) [
+                    "ookla-speedtest"
+                    "speedtest"
+                  ];
               };
             in
             pkgsOokla.callPackage ./nix/packages/speedtest.nix { };
@@ -545,10 +508,6 @@
         surmount-et = {
           type = "app";
           program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-et";
-        };
-        surmount-grok-oss = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-grok-oss";
         };
         surmount-deploy-static-sites = {
           type = "app";

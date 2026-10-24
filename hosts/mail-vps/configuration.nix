@@ -280,7 +280,7 @@
     fsType = "ext4";
   };
 
-  time.timeZone = "UTC";
+  time.timeZone = "America/Denver";
   i18n.defaultLocale = "en_US.UTF-8";
 
   # ---- Networking (provider-specific) --------------------------------------
@@ -323,10 +323,6 @@
     trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
     ];
-    # Host cargo cache. An administrator creates the directory.
-    extra-sandbox-paths = [
-      "/var/cache/grok-oss-cargo-target"
-    ];
   };
 
   nixpkgs.config.allowUnfree = false;
@@ -340,6 +336,8 @@
     tcpdump
     git
     scc
+    fio
+    sysstat
   ];
 
   # Wrapped Ookla CLI on PATH. Periodic JSON timer stays off.

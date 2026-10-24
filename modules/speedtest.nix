@@ -81,7 +81,11 @@ in
     (mkIf cfg.enable {
       # Wrapper getName is speedtest; upstream attr is ookla-speedtest.
       nixpkgs.config.allowUnfreePredicate =
-        pkg: builtins.elem (lib.getName pkg) [ "ookla-speedtest" "speedtest" ];
+        pkg:
+        builtins.elem (lib.getName pkg) [
+          "ookla-speedtest"
+          "speedtest"
+        ];
       environment.systemPackages = [ cfg.package ];
     })
     (mkIf (cfg.enable && cfg.periodic.enable) {

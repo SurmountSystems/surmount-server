@@ -60,6 +60,13 @@ let
     else
       "${pkgs.writeText "surmount-static-vhosts.json" (builtins.toJSON staticVhostsJsonMap)}";
   extraMailHostnamesCsv = lib.concatStringsSep "," (lib.filter (h: h != "") ui.extraMailHostnames);
+  # Union status.{primaryDomain} onto a non-empty ACME identifier list so the
+  # systems dashboard Host is on the certificate hostname set for this edge.
+  acmeDomains =
+    let
+      statusHost = lib.optional (cfg.primaryDomain != "") "status.${cfg.primaryDomain}";
+    in
+    if ui.acme.domains == [ ] then [ ] else lib.unique (ui.acme.domains ++ statusHost);
   hs = cfg.artiHiddenService;
   ac = cfg.accessControl;
   vw = cfg.vaultwarden;
@@ -172,6 +179,8 @@ let
     "SURMOUNT_PRIMARY_DOMAIN=${cfg.primaryDomain}"
     "SURMOUNT_MAIL_HOSTNAME=${cfg.mailHostname}"
     "SURMOUNT_SERVICES_HOSTNAME=${cfg.servicesHostname}"
+    # status.{primaryDomain} is the public systems dashboard Host (Rust-derived).
+    # ACME identifiers also union that name (acmeDomains) when a list is set.
     # Stalwart 0.16 default HTTP management listener.
     "SURMOUNT_STALWART_URL=http://127.0.0.1:8080"
     "SURMOUNT_REDIRECT_HTTP_TO_HTTPS=${if ui.redirectHttpToHttps then "true" else "false"}"
@@ -201,9 +210,7 @@ let
     ]
     ++ optional (ui.acme.directory != "") "SURMOUNT_ACME_DIRECTORY=${ui.acme.directory}"
     ++ optional (ui.acme.email != "") "SURMOUNT_ACME_EMAIL=${ui.acme.email}"
-    ++ optional (
-      ui.acme.domains != [ ]
-    ) "SURMOUNT_ACME_DOMAINS=${lib.concatStringsSep "," ui.acme.domains}"
+    ++ optional (acmeDomains != [ ]) "SURMOUNT_ACME_DOMAINS=${lib.concatStringsSep "," acmeDomains}"
     ++ optional (
       ui.acme.accountCredentialsPath != ""
     ) "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH=${ui.acme.accountCredentialsPath}"

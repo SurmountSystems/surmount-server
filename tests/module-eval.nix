@@ -43,6 +43,9 @@ let
     # systemPackages walk) forces that attr; keep it a cheap fake.
     vandelay = prev.writeShellScriptBin "vandelay" "exit 0";
     surmount-mail-import = prev.writeShellScriptBin "surmount-mail-import-maildir" "exit 0";
+    # mail-vps sample enables wrapped speedtest. Keep it a cheap fake so
+    # t47 does not pull ookla.
+    speedtest = prev.writeShellScriptBin "speedtest" "exit 0";
     surmount-deploy-host = prev.writeShellScriptBin "surmount-deploy-host" "exit 0";
     surmount-management-ui = prev.writeShellScriptBin "surmount-management-ui" "exit 0";
     # Packaged DNS-01 hook **code** (fake; real package is nix/packages/...).
@@ -175,12 +178,12 @@ let
     assert e.config.surmount.remoteBuilder.diskGuardPercent == 95;
     assert e.config.surmount.lake.enable == false;
     assert e.config.surmount.lake.jobs == 4;
-    # Grok OSS is opt-in (host-local). Scaffold off; no grok user.
+    # grok-oss is not in the mail-host closure. Enable stays false.
     assert e.config.surmount.grokOss.enable == false;
     assert e.config.surmount.grokOss.package == null;
     assert e.config.surmount.grokOss.user == "grok";
     assert e.config.surmount.grokOss.memoryMax == "4G";
-    # Tau coding agent is opt-in (host-local). Scaffold off; no daemon.
+    # tau is not in the mail-host closure. Enable stays false.
     assert e.config.surmount.tau.enable == false;
     assert e.config.surmount.logging.rateLimitBurst == "50000";
     # Domain C Vaultwarden stays off on sample defaults (no production footgun).
@@ -2802,49 +2805,26 @@ let
     assert !(builtins.any isTmux pkgsList);
     "t45-grok-oss-default-off-ok";
 
-  t45b-grok-oss-enable-user-and-memory-cap =
+  t45b-grok-oss-enable-refused =
     let
-      e = evalSurmount {
+      failed = failedAssertions (evalSurmount {
         grokOss.enable = true;
         grokOss.package = pkgs.writeShellScriptBin "grok-oss" "exit 0";
-      };
-      userSlice = e.config.systemd.slices."user-1988".sliceConfig or { };
-      grok = e.config.users.users.grok or { };
-      pkgsList = e.config.environment.systemPackages;
-      isGrokOss =
-        p:
-        (p.pname or "") == "grok-oss"
-        || (p.name or "") == "grok-oss"
-        || lib.hasPrefix "grok-oss-" (p.name or "")
-        || lib.hasSuffix "-grok-oss" (p.name or "");
-      isTmux =
-        p: (p.pname or "") == "tmux" || (p.name or "") == "tmux" || lib.hasPrefix "tmux-" (p.name or "");
-      tmp = e.config.systemd.tmpfiles.rules or [ ];
+      });
     in
-    assert failedAssertions e == [ ];
-    assert e.config.users.users ? grok;
-    assert grok.isNormalUser == true;
-    assert grok.uid == 1988;
-    assert grok.home == "/home/grok";
-    assert grok.linger == false;
-    assert userSlice.MemoryMax or null == "4G";
-    assert !(userSlice ? Nice);
-    assert !(e.config.systemd.services ? surmount-grok-oss);
-    assert builtins.any isGrokOss pkgsList;
-    assert builtins.any isTmux pkgsList;
-    assert builtins.any (r: lib.hasInfix "/home/grok/.grok" r) tmp;
-    assert serviceNice e "stalwart-mail" == null;
-    assert serviceNice e "sshd" == null;
-    "t45b-grok-oss-enable-user-and-memory-cap-ok";
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "grokOss.enable" a.message) failed;
+    "t45b-grok-oss-enable-refused-ok";
 
-  t45c-grok-oss-enable-requires-package =
+  t45c-grok-oss-enable-without-package-refused =
     let
       failed = failedAssertions (evalSurmount {
         grokOss.enable = true;
       });
     in
-    assert builtins.any (a: lib.hasInfix "grokOss.package" a.message) failed;
-    "t45c-grok-oss-enable-requires-package-ok";
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "grokOss.enable" a.message) failed;
+    "t45c-grok-oss-enable-without-package-refused-ok";
 
   t46-tau-default-off =
     let
@@ -2870,6 +2850,54 @@ let
     assert !(e.config.systemd.services ? surmount-tau);
     assert !(builtins.any isTau pkgsList);
     "t46-tau-default-off-ok";
+
+  t46b-tau-enable-refused =
+    let
+      failed = failedAssertions (evalSurmount {
+        tau.enable = true;
+      });
+    in
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "tau.enable" a.message) failed;
+    "t46b-tau-enable-refused-ok";
+
+  # Public sample host (hosts/mail-vps/configuration.nix, no host-local).
+  # Fail if grokOss/tau are enabled or those packages appear on PATH.
+  t47-mail-vps-no-grok-tau =
+    let
+      e = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      pkgsList = e.config.environment.systemPackages;
+      isGrokOss =
+        p:
+        (p.pname or "") == "grok-oss"
+        || (p.name or "") == "grok-oss"
+        || lib.hasPrefix "grok-oss-" (p.name or "")
+        || lib.hasSuffix "-grok-oss" (p.name or "");
+      isTau =
+        p:
+        let
+          pname = p.pname or "";
+          name = p.name or "";
+        in
+        pname == "tau"
+        || pname == "dpc-tau"
+        || name == "tau"
+        || lib.hasPrefix "tau-" pname
+        || lib.hasPrefix "tau-" name
+        || lib.hasPrefix "dpc-tau" pname
+        || lib.hasPrefix "dpc-tau" name;
+      isFio =
+        p: (p.pname or "") == "fio" || (p.name or "") == "fio" || lib.hasPrefix "fio-" (p.name or "");
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.grokOss.enable == false;
+    assert e.config.surmount.tau.enable == false;
+    assert !(builtins.any isGrokOss pkgsList);
+    assert !(builtins.any isTau pkgsList);
+    assert builtins.any isFio pkgsList;
+    "t47-mail-vps-no-grok-tau-ok";
 
   t50-splora-proxy-default-off =
     let
@@ -3274,9 +3302,11 @@ let
     t44-lake-default-off
     t44b-lake-enable-memory-cap
     t45-grok-oss-default-off
-    t45b-grok-oss-enable-user-and-memory-cap
-    t45c-grok-oss-enable-requires-package
+    t45b-grok-oss-enable-refused
+    t45c-grok-oss-enable-without-package-refused
     t46-tau-default-off
+    t46b-tau-enable-refused
+    t47-mail-vps-no-grok-tau
     t50-splora-proxy-default-off
     t51-splora-proxy-enable-env-and-udp-https
     t52-splora-electrum-socket-asserts

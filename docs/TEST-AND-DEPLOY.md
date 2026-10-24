@@ -9,7 +9,8 @@ Those failures belong on the agent. The operator runs the real switch
 in section 5 after the agent has already reported those gates green,
 and keeps Eternal Terminal open so activation cannot strand the box.
 
-**Last updated:** 2026-10-12. Update, audit, test, and switch is the
+**Last updated:** 2026-10-23 (this flake does not take grok-oss or tau
+inputs). Prior 2026-10-12. Update, audit, test, and switch is the
 command block below. `just publish` publishes static sites.
 `just deploy` is the host switch. `just deploy-dry-run` is the agent
 dry-run. `just deploy-host` stays the explicit equivalent.
@@ -37,10 +38,9 @@ just deploy
 
 `nix flake update` moves branch inputs: nixpkgs `nixos-26.05`,
 `advisory-db`, Splora, and `surmount-site`. It does
-not move commit-pinned `nixpkgs-rust`, `crane`, `sops-nix`, or grok-oss.
-grok-oss is commit pin `6703706cc7419ba71af549c1562017f302173c19`, not
-floating `main`. Prior pin was `525538172dc21391bc690a4cc4a8706a5c554e47`. Stalwart versions are the fixed-output files under
-`nix/packages/`, not this command.
+not move commit-pinned `nixpkgs-rust`, `crane`, or `sops-nix`.
+This flake does not take grok-oss or tau inputs. Stalwart versions are
+the fixed-output files under `nix/packages/`, not this command.
 
 `cargo update` uses the menhera index already configured on the laptop.
 `just audit` and `just audit-remote` run the same RustSec check.
@@ -368,8 +368,8 @@ just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/sh
 ```
 
 That rsyncs, then runs `nixos-rebuild switch` on the guest. A generation
-that compiles grok-oss or Splora can sit on one `building ...drv` line
-for a long time. Check guest rustc before killing it.
+that compiles Splora can sit on one `building ...drv` line for a long
+time. Check guest rustc before killing it.
 
 After rebuild, the driver always runs
 `surmount-deploy-host-post-switch-smoke` on the guest, even if rebuild

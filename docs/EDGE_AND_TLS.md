@@ -4,7 +4,10 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-09-22 (one public Host `splora.surmount.systems`.
+**Last updated:** 2026-10-23 (Host `status.surmount.systems` is the public
+systems dashboard on the product Axum HTTPS edge, not nginx and not the
+operator console. Intended certificate hostname list includes that name.)
+Prior 2026-09-22 (one public Host `splora.surmount.systems`.
 Network paths on that Host, not per-network esplora Hosts. The network
 prefix is stripped before the Unix socket. The query string is kept.
 `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is the WebSocket upgrade.
@@ -286,8 +289,18 @@ nginx features. Module file remains until operators no longer need dual-run.
   nonce CSP.
   Open-redirect safe: empty allowlist or non-listed Host never builds a
   Location from untrusted input. Default allowlist: services, apex, www,
-  mail, mta-sts.<primary>, plus any extra static Hosts from
+  mail, mta-sts.<primary>, status.<primary>, plus any extra static Hosts from
   `SURMOUNT_STATIC_VHOSTS` / `SURMOUNT_STATIC_VHOSTS_FILE`.
+- **Systems dashboard Host (2026-10-23):** `status.{primaryDomain}`
+  (production: `status.surmount.systems`) is a public systems status
+  surface on this same Axum process. GET `/` is HTML; GET `/status.json`
+  is JSON. Named fields: `surface`, `service`, `version`, `host`,
+  `primary_domain`, and `systems` rows `mail`, `edge`, `tls`, `mta_sts`,
+  `console` (config-derived states, not RAM/disk/IP). Not the operator
+  console. `/health` and `/api/health` stay edge probes. Other `/api/*`
+  is 404. Laptop DNS-01 intended leaf includes `status.surmount.systems`.
+  Live HTTPS after switch is operator-owned. Do not put nginx back as
+  product edge.
 - **Extra static Hosts (DS3018xs trees, 2026-08-19):** proven public HTML
   sites are served from the same Axum process via a Host -> document root
   map (`SURMOUNT_STATIC_VHOSTS` JSON, or Nix
@@ -297,7 +310,8 @@ nginx features. Module file remains until operators no longer need dual-run.
   never the operator console. Do **not** overload `SURMOUNT_APEX_PUBLIC_ROOT`.
   `services.surmount.systems` stays the operator console. Extra Hosts
   each get a distinct v3 onion (2026-09-11), not a shared onion.
-  Onion-Location for extra Hosts, apex/www, and `mta-sts.{primary}` is
+  Onion-Location for extra Hosts, apex/www, `mta-sts.{primary}`, and
+  `status.{primary}` is
   `http://{that-host-onion}{path}` (empty path becomes `/`). The services
   onion root stays the console. Mail stays unmapped. Do not put nginx
   back as product edge.

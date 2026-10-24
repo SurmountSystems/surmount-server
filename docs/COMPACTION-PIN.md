@@ -91,6 +91,7 @@ flake-owned host.
 |-------|------|
 | Primary domain | `surmount.systems` |
 | Management UI host | `services.surmount.systems` |
+| Systems dashboard host | `status.surmount.systems` (Axum, not nginx) |
 | Mail host / MX | `mail.surmount.systems` |
 | Form factor | **Single operator-chosen VPS** until the operator says otherwise |
 | Public awareness | Treat the tree as **public-domain / public**. Zero secrets in git. |

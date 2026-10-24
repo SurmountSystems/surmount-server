@@ -108,6 +108,29 @@ pub fn is_services_host(host_header: &str, services_hostname: &str) -> bool {
     host_for_url_authority(host_header).eq_ignore_ascii_case(&services)
 }
 
+/// Derived systems-dashboard Host: `status.{primary}`.
+///
+/// Empty primary => empty string. Production primary `surmount.systems`
+/// yields `status.surmount.systems`.
+pub fn status_hostname(primary_domain: &str) -> String {
+    let primary = host_for_url_authority(primary_domain);
+    if primary.is_empty() {
+        return String::new();
+    }
+    format!("status.{}", primary.to_ascii_lowercase())
+}
+
+/// True when Host is the public systems dashboard (`status.{primary}`).
+///
+/// Case-insensitive DNS labels; port stripped. Empty primary => never true.
+pub fn is_status_host(host_header: &str, primary_domain: &str) -> bool {
+    let want = status_hostname(primary_domain);
+    if want.is_empty() {
+        return false;
+    }
+    host_for_url_authority(host_header).eq_ignore_ascii_case(&want)
+}
+
 /// Which public product surface a request Host maps to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostSurface {
@@ -117,6 +140,8 @@ pub enum HostSurface {
     StaticVhost,
     /// Services hostname: operator management console.
     ServicesConsole,
+    /// `status.{primary}`: public systems dashboard (not operator console).
+    SystemsStatus,
     /// Other Host (mail, mta-sts, lab IP, empty, unknown): no public remap.
     Other,
 }
@@ -157,7 +182,8 @@ pub fn host_surface(
 /// Classify Host including extra static vhosts (Host -> document root map).
 ///
 /// Services wins over everything. Apex/www stay ApexPublic even if listed in
-/// the extra map (do not overload those names). Unknown Host stays Other
+/// the extra map (do not overload those names). `status.{primary}` is
+/// SystemsStatus even if listed as a static vhost. Unknown Host stays Other
 /// (no static leak onto the console).
 pub fn classify_host_surface(
     host_header: &str,
@@ -170,6 +196,9 @@ pub fn classify_host_surface(
     }
     if is_apex_or_www(host_header, primary_domain) {
         return HostSurface::ApexPublic;
+    }
+    if is_status_host(host_header, primary_domain) {
+        return HostSurface::SystemsStatus;
     }
     if static_vhost_mapped(host_header, static_vhosts) {
         return HostSurface::StaticVhost;
@@ -198,6 +227,14 @@ pub fn static_vhost_document_root<'a>(
 /// True when this surface serves public static files (apex site or extra vhost).
 pub fn is_public_static_surface(surface: HostSurface) -> bool {
     matches!(surface, HostSurface::ApexPublic | HostSurface::StaticVhost)
+}
+
+/// True when this surface is public and must not use operator-console CSP.
+pub fn is_public_non_console_surface(surface: HostSurface) -> bool {
+    matches!(
+        surface,
+        HostSurface::ApexPublic | HostSurface::StaticVhost | HostSurface::SystemsStatus
+    )
 }
 
 /// Paths that stay available on apex/www (health probes, ACME/MTA-STS well-known).
@@ -690,6 +727,75 @@ mod tests {
         assert_eq!(
             host_surface("evil.example", "example.test", "services.example.test"),
             HostSurface::Other
+        );
+        assert_eq!(
+            host_surface(
+                "status.example.test",
+                "example.test",
+                "services.example.test"
+            ),
+            HostSurface::SystemsStatus
+        );
+        assert_eq!(
+            host_surface(
+                "status.surmount.systems",
+                "surmount.systems",
+                "services.surmount.systems"
+            ),
+            HostSurface::SystemsStatus
+        );
+    }
+
+    /// Named contract: dashboard Host maps to SystemsStatus, not Other/console.
+    #[test]
+    fn host_surface_status_is_systems_status() {
+        assert_eq!(
+            status_hostname("surmount.systems"),
+            "status.surmount.systems"
+        );
+        assert_eq!(status_hostname("Example.TEST"), "status.example.test");
+        assert!(is_status_host("STATUS.example.test:443", "example.test"));
+        assert!(!is_status_host("services.example.test", "example.test"));
+        let mut map = BTreeMap::new();
+        map.insert(
+            "status.example.test".into(),
+            std::path::PathBuf::from("/var/lib/surmount/static-sites/wrong"),
+        );
+        assert_eq!(
+            classify_host_surface(
+                "status.example.test",
+                "example.test",
+                "services.example.test",
+                &map
+            ),
+            HostSurface::SystemsStatus
+        );
+        assert_eq!(
+            classify_host_surface(
+                "status.example.test",
+                "example.test",
+                "services.example.test",
+                &BTreeMap::new()
+            ),
+            HostSurface::SystemsStatus
+        );
+        assert_ne!(
+            classify_host_surface(
+                "status.example.test",
+                "example.test",
+                "services.example.test",
+                &BTreeMap::new()
+            ),
+            HostSurface::Other
+        );
+        assert_ne!(
+            classify_host_surface(
+                "status.example.test",
+                "example.test",
+                "services.example.test",
+                &BTreeMap::new()
+            ),
+            HostSurface::ServicesConsole
         );
     }
 

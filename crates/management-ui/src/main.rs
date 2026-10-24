@@ -14,7 +14,8 @@
 //!   when that directory has index.html; otherwise UNDER CONSTRUCTION
 //!   (same-host HTTP->HTTPS). Extra Hosts from `SURMOUNT_STATIC_VHOSTS` (or
 //!   `_FILE`) use the same path/MIME/CSP rules with a Host -> root map.
-//!   Operator console only on the services hostname.
+//!   Operator console only on the services hostname. `status.{primary}`
+//!   (production: status.surmount.systems) is the public systems dashboard.
 //! - Optional MTA-STS policy at `/.well-known/mta-sts.txt` (default off)
 //! - Optional loopback cleartext **full API** listener (`SURMOUNT_LOCAL_CLEARTEXT_LISTEN`)
 //!   for local reverse-proxies (Arti HS lean path) when primary is https
@@ -36,6 +37,7 @@ mod onion_discovery;
 mod pages;
 mod proxy_vaultwarden;
 mod redirect;
+mod status;
 mod tls;
 
 use std::net::SocketAddr;
@@ -68,7 +70,7 @@ use crate::mta_sts::{mta_sts_policy_body, should_serve_mta_sts_policy};
 use crate::redirect::{
     HostSurface, HttpToHttps, RedirectBindDecision, RedirectStatus,
     apex_public_path_is_edge_exception, classify_host_surface, https_port_for_redirect,
-    is_public_static_surface, redirect_bind_decision, redirect_http_to_https,
+    is_public_non_console_surface, redirect_bind_decision, redirect_http_to_https,
     request_authority_host, should_reject_public_static_api, should_serve_apex_coming_soon,
     static_vhost_document_root,
 };
@@ -735,7 +737,7 @@ async fn security_headers_middleware(
     };
     let vault_proxy = state.config.vaultwarden_proxy.enable
         && state.config.vaultwarden_proxy.matches_path(&vault_path);
-    let public_static = is_public_static_surface(classify_host_surface(
+    let public_static = is_public_non_console_surface(classify_host_surface(
         &csp_host,
         state.config.primary_domain.as_str(),
         state.config.services_hostname.as_str(),
@@ -1648,6 +1650,14 @@ async fn apex_public_host_middleware(
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     let surface = classify_host_surface(&host, primary, services, &state.config.static_vhosts);
+    if surface == HostSurface::SystemsStatus && path_only != "/health" && path_only != "/api/health"
+    {
+        return crate::status::serve_systems_status(
+            &state.config,
+            path_only,
+            header_str(request.headers(), "accept"),
+        );
+    }
     if surface == HostSurface::ApexPublic
         && !apex_public_path_is_edge_exception(path)
         && let Some(root) = state.config.apex_public_root.as_deref()
@@ -2063,6 +2073,7 @@ mod edge_wire_tests {
                 "example.test".into(),
                 "www.example.test".into(),
                 "mta-sts.example.test".into(),
+                "status.example.test".into(),
             ],
             https_allow_cleartext_escape: false,
             acme: crate::acme::AcmeConfig::default(),
@@ -2126,6 +2137,7 @@ mod edge_wire_tests {
                 "example.test".into(),
                 "www.example.test".into(),
                 "mta-sts.example.test".into(),
+                "status.example.test".into(),
             ],
             https_allow_cleartext_escape: false,
             acme: crate::acme::AcmeConfig::default(),
@@ -3429,6 +3441,126 @@ mod edge_wire_tests {
             api_redir.status(),
             reqwest::StatusCode::PERMANENT_REDIRECT,
             "redirect port must not serve cleartext API"
+        );
+
+        serve.abort();
+        let _ = serve.await;
+    }
+
+    /// Named contract: Host status.{primary} is the systems dashboard on Axum.
+    /// Hermetic GET calls the shipped handler (build_router), not a stub.
+    #[tokio::test]
+    async fn status_host_serves_systems_dashboard_not_console() {
+        let state = test_state(0);
+        let app = build_router(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .ok();
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+
+        let res = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "status.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let body = res.text().await.unwrap();
+        assert!(!body.is_empty(), "systems dashboard body must be non-empty");
+        assert!(
+            body.contains("data-surface=\"systems-status\"") || body.contains("systems_status"),
+            "must mark systems status surface: {body}"
+        );
+        for field in ["mail", "edge", "tls", "mta_sts", "console"] {
+            assert!(
+                body.contains(field),
+                "handler must emit named system {field}: {body}"
+            );
+        }
+        let lower = body.to_ascii_lowercase();
+        assert!(
+            !lower.contains("dashboard overview"),
+            "must not be the operator console: {body}"
+        );
+        assert!(
+            !body.contains("UNDER CONSTRUCTION"),
+            "status Host is not coming-soon: {body}"
+        );
+
+        let json_res = client
+            .get(format!("http://{addr}/status.json"))
+            .header("Host", "status.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(json_res.status(), reqwest::StatusCode::OK);
+        let json: serde_json::Value = json_res.json().await.unwrap();
+        assert_eq!(json["surface"], "systems_status");
+        assert_eq!(json["service"], "surmount");
+        assert_eq!(json["host"], "status.example.test");
+        let systems = json["systems"].as_array().expect("systems array");
+        assert!(
+            !systems.is_empty(),
+            "systems array must be non-empty: {json}"
+        );
+        let names: Vec<&str> = systems.iter().filter_map(|s| s["name"].as_str()).collect();
+        for must in ["mail", "edge", "tls", "mta_sts", "console"] {
+            assert!(
+                names.contains(&must),
+                "JSON must name system {must}: {json}"
+            );
+        }
+
+        let api = client
+            .get(format!("http://{addr}/api/v1/system"))
+            .header("Host", "status.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            api.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "status Host must not serve the operator system API"
+        );
+        let api_body = api.text().await.unwrap();
+        assert!(
+            !api_body.contains("onion_discovery"),
+            "status Host must not dump operator system JSON: {api_body}"
+        );
+
+        let console = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "services.example.test")
+            .send()
+            .await
+            .unwrap();
+        let console_body = console.text().await.unwrap();
+        assert!(
+            !console_body.contains("data-surface=\"systems-status\""),
+            "services Host must not serve the public systems dashboard"
+        );
+
+        let other = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "mail.example.test")
+            .send()
+            .await
+            .unwrap();
+        let other_body = other.text().await.unwrap();
+        assert!(
+            !other_body.contains("data-surface=\"systems-status\""),
+            "mail Host must not map to the systems dashboard"
         );
 
         serve.abort();
@@ -5625,6 +5757,10 @@ mod edge_wire_tests {
         assert!(
             hosts.contains(&"mta-sts.example.test"),
             "auto-map dump must include mta-sts: {hosts:?}"
+        );
+        assert!(
+            hosts.contains(&"status.example.test"),
+            "auto-map dump must include systems dashboard Host: {hosts:?}"
         );
         serve.abort();
         let _ = serve.await;

@@ -422,6 +422,9 @@ test-eternal-terminal-eval:
 test-inxi-eval:
     nix eval --impure --json --file tests/inxi-contract.nix
 
+test-perf-tools-eval:
+    nix eval --impure --json --file tests/perf-tools-contract.nix
+
 test-remote-builder-eval:
     nix eval --impure --json --file tests/remote-builder-contract.nix
 
