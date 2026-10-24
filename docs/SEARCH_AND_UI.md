@@ -121,7 +121,9 @@ static sites; `just deploy` is the NixOS generation (the host switch).
 `just deploy-host` is that switch with no default target.
 Operator console stays on `services.surmount.systems`. Public systems
 dashboard is Host `status.surmount.systems` on the same Axum edge.
-COMING SOON leftover is closed.
+That page links public hosts over https, shows ordinary unit/HTTP
+status text, and prints host uptime from `/proc/uptime`. COMING SOON
+leftover is closed.
 
 ## Phases
 

@@ -7,7 +7,14 @@ real user mail. Validate send path with
 [mail-tester.com](https://www.mail-tester.com/) and your provider's
 blocklist checks.
 
-**Last updated:** 2026-10-10. Operator direction: Google may send as
+**Last updated:** 2026-10-24. Host `status.surmount.systems` is a
+mail-host vhost A on the same records as apex / `mail` / `services`
+(no CNAME, no AAAA while the other names have none). It is the public
+systems dashboard on the Axum HTTPS edge, not the operator console.
+Laptop DNS-01 intended leaf includes that name. See
+[EDGE_AND_TLS.md](EDGE_AND_TLS.md).
+
+**Prior update:** 2026-10-10. Operator direction: Google may send as
 `surmount.systems`. Live SPF is
 `v=spf1 a:mail.surmount.systems include:_spf.google.com -all`.
 Public resolvers (including `1.1.1.1`) return that TXT. Our host
@@ -415,6 +422,7 @@ send. Full ordered boxes: [Earn-trust checklist](#earn-trust-checklist-order-of-
 - [ ] **A** (and **AAAA** if you have v6) for `services.<domain>` -> VPS
 - [ ] **A/AAAA** for apex and/or `www` if you serve them from this VPS
 - [ ] **A/AAAA** for `mail.<domain>` -> same VPS (when mail or mail cert needs it)
+- [ ] **A** for `status.<domain>` -> same records as apex / mail / services when the systems dashboard Host is served from this VPS
 - [ ] **MX** on apex -> `mail.<domain>` priority 10 (when accepting mail)
 - [ ] No orange-cloud / required CDN proxy on MX or submission names
 - [ ] Records match what host-local / sample config expects (direct to VPS)
@@ -575,6 +583,7 @@ notes as you go.
 | **A / AAAA** | `mail.surmount.systems` | Mail host address(es) | Where MX points |
 | **A / AAAA** | `surmount.systems` | Apex (web / redirect) | Web + sometimes SPF `a` |
 | **A / AAAA** | `services.surmount.systems` | Management UI | Admin HTTPS |
+| **A / AAAA** | `status.surmount.systems` | Public systems dashboard (Axum Host, not the operator console) | Same A as apex / mail / services; no AAAA while those names have none |
 | **A / AAAA** | `www.surmount.systems` | Optional www | Web |
 | **MX** | `surmount.systems` | Prefer `mail.surmount.systems` priority 10 | Inbound routing |
 | **PTR / rDNS** | Provider reverse zone for the VPS IP | Must match `mail.surmount.systems` | IP reputation |
@@ -664,6 +673,8 @@ mail    IN  A       203.0.113.10
 mail    IN  AAAA    2001:db8::10
 services IN A       203.0.113.10
 services IN AAAA    2001:db8::10
+status  IN A       203.0.113.10
+; status is the public systems dashboard Host. Same A as apex/mail/services.
 
 ; --- SPF (adjust includes if you use a relay) ---
 @       IN  TXT     "v=spf1 mx a:mail.surmount.systems ip4:203.0.113.10 ip6:2001:db8::10 -all"
@@ -721,25 +732,15 @@ Do **not** `enforce` until the operator asks. Dual-pin: [EDGE_AND_TLS.md](EDGE_A
 
 **Certificate hostnames (not a storage area network):** intended
 production leaf is **one** Let's Encrypt PEM pair (`with_single_cert`)
-covering **20** names. Live leaf as of 2026-09-07 (LE production YE2,
-laptop DNS-01, host ACME off, public CT) is still **18** names:
-`baxterartworks.com`, `www.baxterartworks.com`, `btcfur.com`,
-`www.btcfur.com`, `exophiles.org`, `www.exophiles.org`,
-`iantuckerstudios.com`, `www.iantuckerstudios.com`, `nostrfurs.com`,
-`www.nostrfurs.com`, `yiffa.app`, `www.yiffa.app`, `surmount.systems`,
-`www.surmount.systems`, `mail.surmount.systems`,
-`services.surmount.systems`, `mta-sts.surmount.systems`,
-`mail.cryptoquick.com`.
-The two names still missing from the live leaf are `cryptoquick.com` and
-`www.cryptoquick.com`. That hostname mismatch is why cryptoquick HTTPS
-fails verify. Validating A for those names succeeds (AD true). Leftover
-parent DS key tag 2368 is gone. `mail.surmount.systems` and
-`mail.cryptoquick.com` **are** on the live leaf (IMAP/SMTPS). Six extra
-static zones are **live** HTTPS 200. After the tree lists the two missing
-names, laptop `--issue` is operator-gated (Namecheap custody). `--live`
-does **not** detect missing certificate hostnames. Do **not**
-re-issue just to add a name already on that leaf. Esplora Hosts stay off
-this leaf. Renew path: private host-profile `acme_domains` +
+covering the private host-profile list plus the laptop floor
+(`status.surmount.systems` is on that floor). Live leaf as of
+2026-10-24 after laptop `--issue` (LE production YE1, DNS-01, host ACME
+off) includes `status.surmount.systems`, cryptoquick apex/www,
+`splora.surmount.systems`, the six extra static zones, and the
+mail-host names. `--live` does **not** detect missing certificate
+hostnames. Do **not** re-issue just to add a name already on that leaf.
+Esplora Hosts stay off this leaf except the one Splora Host already on
+it. Renew path: private host-profile `acme_domains` +
 `just laptop-renew-cert -- --issue --directory production`
 (Namecheap ClientIp = laptop egress). Extra-zone names need
 `--hook` from `nix run .#acme-dns-hook-namecheap-dispatch`. Mail-plane apply:

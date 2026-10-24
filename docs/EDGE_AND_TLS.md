@@ -4,9 +4,14 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-10-23 (Host `status.surmount.systems` is the public
+**Last updated:** 2026-10-24 (Host `status.surmount.systems` is the public
 systems dashboard on the product Axum HTTPS edge, not nginx and not the
-operator console. Intended certificate hostname list includes that name.)
+operator console. Names and public hosts are https links. Status text
+comes from systemd ActiveState / HTTP samples in ordinary English.
+Host uptime comes from `/proc/uptime`. The inventory names mail,
+services, this dashboard, Arti, SSH, and Splora testnet units that
+exist; it does not invent Vaultwarden, Lake, or Splora mainnet.
+Intended certificate hostname list includes `status.surmount.systems`.)
 Prior 2026-09-22 (one public Host `splora.surmount.systems`.
 Network paths on that Host, not per-network esplora Hosts. The network
 prefix is stripped before the Unix socket. The query string is kept.
@@ -291,16 +296,24 @@ nginx features. Module file remains until operators no longer need dual-run.
   Location from untrusted input. Default allowlist: services, apex, www,
   mail, mta-sts.<primary>, status.<primary>, plus any extra static Hosts from
   `SURMOUNT_STATIC_VHOSTS` / `SURMOUNT_STATIC_VHOSTS_FILE`.
-- **Systems dashboard Host (2026-10-23):** `status.{primaryDomain}`
+- **Systems dashboard Host (2026-10-24):** `status.{primaryDomain}`
   (production: `status.surmount.systems`) is a public systems status
   surface on this same Axum process. GET `/` is HTML; GET `/status.json`
   is JSON. Named fields: `surface`, `service`, `version`, `host`,
-  `primary_domain`, and `systems` rows `mail`, `edge`, `tls`, `mta_sts`,
-  `console` (config-derived states, not RAM/disk/IP). Not the operator
-  console. `/health` and `/api/health` stay edge probes. Other `/api/*`
-  is 404. Laptop DNS-01 intended leaf includes `status.surmount.systems`.
-  Live HTTPS after switch is operator-owned. Do not put nginx back as
-  product edge.
+  `primary_domain`, `uptime`, and `systems` rows including `mail`,
+  `edge`, `tls`, `mta_sts`, `console`, `status`, `site`, `arti`, `sshd`,
+  and Splora testnet names (`splora-testnet3`, `splora-testnet4`,
+  `splora-mutinynet`, `splora-liquid`). Names and public hosts are
+  clickable `https://` hostname links (mail, services, apex, status,
+  `splora.{primary}` testnet paths, MTA-STS policy). Status text is
+  ordinary English from systemd ActiveState / SubState and optional HTTP
+  samples (running, failed, inactive, listening, HTTP 502), not a
+  constant ok and not RAM/disk/IP. Host uptime is `/proc/uptime` formatted
+  as seconds, minutes (at most 60 minutes), N.N hours (through 24 hours),
+  or N.N days. Not the operator console. `/health` and `/api/health`
+  stay edge probes. Other `/api/*` is 404. Laptop DNS-01 intended leaf
+  includes `status.surmount.systems`. Live HTTPS after switch is
+  operator-owned. Do not put nginx back as product edge.
 - **Extra static Hosts (DS3018xs trees, 2026-08-19):** proven public HTML
   sites are served from the same Axum process via a Host -> document root
   map (`SURMOUNT_STATIC_VHOSTS` JSON, or Nix
