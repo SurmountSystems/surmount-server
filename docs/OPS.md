@@ -850,34 +850,49 @@ product docs.
 
 ### Mail-host compiler CPU (x86-64-v3)
 
-The mail host compiles its own Rust and C/C++ source builds for
-`x86-64-v3`. That is the measured guest CPU: avx, avx2, bmi1, bmi2,
-f16c, fma, lzcnt (kernel flag `abm`), movbe, popcnt, sse4.1, sse4.2,
-and ssse3. AVX-512 is absent, so this is not `x86-64-v4`. QEMU iothread
-was not sampled. Do not claim `iothread=1`.
+The mail host compiles C and C++ for `x86-64-v3`, including libraries
+those packages build, not only a named list of top-level derivations.
+That is the measured guest CPU: avx, avx2, bmi1, bmi2, f16c, fma, lzcnt
+(kernel flag `abm`), movbe, popcnt, sse4.1, sse4.2, and ssse3. AES is
+present on that guest. This module does not add a separate `-maes` or
+any flag above `x86-64-v3`. AVX-512 is absent, so this is not
+`x86-64-v4`. QEMU iothread was not sampled. Do not claim `iothread=1`.
 
 `hosts/mail-vps/configuration.nix` sets `surmount.mailHostCpu.enable`.
-`modules/mail-host-cpu.nix` then sets `gccArch` and `rustTargetCpu` to
-`x86-64-v3`, `NIX_CFLAGS_COMPILE` and `NIX_CXXFLAGS_COMPILE` to
-`-march=x86-64-v3`, and `CARGO_BUILD_RUSTFLAGS` to
-`-C target-cpu=x86-64-v3`. The nixpkgs cc-wrapper applies
-`NIX_CFLAGS_COMPILE` to both C and C++. This nixpkgs does not map
-`gcc.arch` onto rustc, so the Rust flag is set on the derivation.
+`modules/mail-host-cpu.nix` then sets `nixpkgs.hostPlatform` to this
+host's system with `gcc.arch = "x86-64-v3"`. The nixpkgs cc-wrapper
+reads `targetPlatform.gcc.arch` and writes `-march=x86-64-v3` into
+`cc-cflags-before`. That flag applies to every C and C++ compile that
+uses this host's stdenv, including dependencies such as nixpkgs
+RocksDB, libsodium, and bitcoind or elementsd libraries when those
+derivations are built. The next switch rebuilds that C and C++ closure.
+The module is opt-in. Generic CI eval does not enable it.
 
-`nixpkgs.hostPlatform.gcc.arch` stays unset. The cc-wrapper bakes
-`gcc.arch` into the stdenv, and that would rebuild the NixOS closure
-and force the same march onto every package. Generic CI eval
-(`tests/module-eval.nix` without the mail-vps host file) leaves
-`surmount.mailHostCpu.enable` false, so those flags are empty. Flake
-`packages.*` (GitHub Actions `checks.*.ci`, laptop `nix build`) are
-built from `mkPkgsBare` and are not wrapped.
+The same module still sets `gccArch` and `rustTargetCpu` to
+`x86-64-v3`, and it still prefixes `NIX_CFLAGS_COMPILE`,
+`NIX_CXXFLAGS_COMPILE`, and `CARGO_BUILD_RUSTFLAGS` on a named
+top-level list. The nixpkgs cc-wrapper applies `NIX_CFLAGS_COMPILE` to
+both C and C++. This nixpkgs does not map `gcc.arch` onto rustc, so
+the Rust `-C target-cpu=x86-64-v3` flag stays on those named
+derivations only. The host platform march is what covers C and C++
+dependency builds.
 
-Do not use `-march=native` in this public flake. Stalwart stays a
-release binary (`dontBuild`); this march does not recompile that
-tarball or the RocksDB inside it. Splora and bitcoind or elementsd are
-on the tune list only when a derivation references those attributes.
-The sample host does not enable `surmount.sploraIndexer` and does not
-start bitcoind.
+Generic CI eval (`tests/module-eval.nix` without the mail-vps host
+file) leaves `surmount.mailHostCpu.enable` false, so
+`nixpkgs.hostPlatform.gcc.arch` stays unset and the named flags are
+empty. Flake `packages.*` (GitHub Actions `checks.*.ci`, laptop
+`nix build`) are built from `mkPkgsBare` and are not wrapped. Do not
+set this march on those package sets.
+
+Do not use `-march=native` in this public flake. Do not request
+`x86-64-v4` or `-mavx512`. Stalwart stays a release binary
+(`dontBuild`). This march does not recompile that tarball or the
+RocksDB inside it. A nixpkgs RocksDB built as a dependency of something
+this host compiles is in scope. The vendored RocksDB inside the
+Stalwart release tarball is not. Splora and bitcoind or elementsd are
+on the named tune list only when a derivation references those
+attributes. The sample host does not enable `surmount.sploraIndexer`
+and does not start bitcoind.
 
 Contract: `t62-mail-host-cpu-v3` in `tests/module-eval.nix`.
 

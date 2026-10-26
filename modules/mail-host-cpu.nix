@@ -1,12 +1,17 @@
-# Mail-host source builds request x86-64-v3. CI and generic laptop
-# package builds do not. nixpkgs.hostPlatform.gcc.arch stays unset:
-# the cc-wrapper bakes that into every NixOS derivation and would
-# rebuild the closure. Per-derivation NIX_CFLAGS_COMPILE is the same
-# -march the wrapper would add from gcc.arch, and this nixpkgs does
-# not map gcc.arch to rustc -C target-cpu.
+# Mail-host C and C++ builds, including their libraries, request
+# x86-64-v3. When this module is enabled it sets
+# nixpkgs.hostPlatform.gcc.arch. The cc-wrapper reads that into
+# cc-cflags-before, so dependency builds (nixpkgs RocksDB, libsodium,
+# bitcoind and elementsd libraries, and the rest of this host's
+# stdenv) get -march=x86-64-v3. The next switch rebuilds that closure.
+# CI, the generic eval host, and flake packages.* (mkPkgsBare) leave
+# the module off, so they stay untuned.
 #
-# Stalwart is a release binary (dontBuild). Do not retune it.
-# Do not use -march=native. Do not request x86-64-v4 or avx512.
+# This nixpkgs does not map gcc.arch to rustc -C target-cpu. Named
+# top-level derivations still get CARGO_BUILD_RUSTFLAGS. Stalwart is
+# a release binary (dontBuild). Do not retune that tarball or the
+# RocksDB inside it. Do not use -march=native. Do not request
+# x86-64-v4 or avx512.
 
 {
   config,
@@ -127,8 +132,9 @@ in
 {
   options.surmount.mailHostCpu = {
     enable = lib.mkEnableOption ''
-      compile mail-host Rust and C/C++ source builds for x86-64-v3.
-      Off for the generic CI host. Does not set nixpkgs.hostPlatform.
+      compile mail-host C and C++ for x86-64-v3, including libraries
+      built for this host. Sets nixpkgs.hostPlatform.gcc.arch when
+      enabled. Off for the generic CI host and for flake packages.*.
     '';
 
     gccArch = mkOption {
@@ -136,7 +142,9 @@ in
       default = "";
       description = ''
         gcc.arch token for mail-host source builds. Empty when enable
-        is false. Not nixpkgs.hostPlatform.gcc.arch.
+        is false. When enable is true this is also
+        nixpkgs.hostPlatform.gcc.arch, which the cc-wrapper applies
+        to every C and C++ compile in this host's package set.
       '';
     };
 
@@ -186,6 +194,15 @@ in
     surmount.mailHostCpu.cargoBuildRustflags = cargoBuildRustflags;
     surmount.mailHostCpu.tunedPackages = tunedPackages;
 
+    # cc-wrapper machineFlags reads targetPlatform.gcc.arch and writes
+    # -march into nix-support/cc-cflags-before. That covers dependency
+    # builds. It does not retune a dontBuild release binary. The named
+    # overlay below still sets Rust target-cpu; gcc.arch does not.
+    nixpkgs.hostPlatform = {
+      system = config.nixpkgs.system;
+      gcc.arch = march;
+    };
+
     nixpkgs.overlays = lib.mkAfter [ mailHostCpuOverlay ];
 
     assertions = [
@@ -200,6 +217,15 @@ in
           && !(lib.hasInfix "x86-64-v4" cfg.gccArch)
           && !(lib.hasInfix "avx512" cfg.cargoBuildRustflags);
         message = "surmount.mailHostCpu must request x86-64-v3, not native, v4, or avx512.";
+      }
+      {
+        assertion =
+          (config.nixpkgs.hostPlatform.gcc.arch or null) == march
+          && (config.nixpkgs.hostPlatform.system or "") == "x86_64-linux"
+          && !(lib.hasInfix "native" (config.nixpkgs.hostPlatform.gcc.arch or ""))
+          && (config.nixpkgs.hostPlatform.gcc.arch or "") != "x86-64-v4"
+          && !(lib.hasInfix "avx512" (config.nixpkgs.hostPlatform.gcc.arch or ""));
+        message = "surmount.mailHostCpu must set nixpkgs.hostPlatform.gcc.arch to x86-64-v3 on x86_64-linux, not native, v4, or avx512.";
       }
     ];
   };

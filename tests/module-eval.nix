@@ -3227,10 +3227,12 @@ let
     assert !(lib.hasInfix "esplora-surmount-systems" toml);
     "t61-splora-portal-host-and-onion-extras-ok";
 
-  # Mail sample host requests x86-64-v3 for Rust and for C/C++.
-  # The generic CI host (no hosts/mail-vps/configuration.nix) must not.
-  # nixpkgs.hostPlatform.gcc.arch stays unset: that flag is baked into the
-  # cc-wrapper and would rebuild the whole NixOS closure.
+  # Mail sample host requests x86-64-v3 for Rust named attrs and for
+  # every C/C++ compile in that host package set. The cc-wrapper reads
+  # hostPlatform.gcc.arch into cc-cflags-before, which covers dependency
+  # builds, not only tunedPackages. The generic CI host must not.
+  # localSystem.gcc.arch stays unset: hostPlatform is the knob, and the
+  # legacy localSystem option is ignored once hostPlatform is set.
   t62-mail-host-cpu-v3 =
     let
       mail = evalSurmount {
@@ -3240,7 +3242,7 @@ let
       mailCpu = mail.config.surmount.mailHostCpu;
       genericCpu = generic.config.surmount.mailHostCpu;
       # nixosSystem passes nixpkgs.system. hostPlatform stays unset unless
-      # a module sets it. localSystem is the elaborated build platform.
+      # a module sets it. localSystem is the legacy elaborated platform.
       hostArch =
         e:
         if e.options.nixpkgs.hostPlatform.isDefined then
@@ -3248,6 +3250,9 @@ let
         else
           null;
       localArch = e: e.config.nixpkgs.localSystem.gcc.arch or null;
+      # Package-set platform the cc-wrapper consults for -march.
+      # This is not the named tunedPackages overlay.
+      stdenvArch = e: e.pkgs.stdenv.hostPlatform.gcc.arch or null;
     in
     assert mailCpu.enable == true;
     assert mailCpu.gccArch == "x86-64-v3";
@@ -3266,7 +3271,11 @@ let
     assert !(builtins.elem "stalwart-mail" mailCpu.tunedPackages);
     assert mail.config.surmount.sploraIndexer.enable == false;
     assert mail.config.surmount.lake.enable == false;
-    assert hostArch mail != "x86-64-v3";
+    assert stdenvArch mail == "x86-64-v3";
+    assert hostArch mail == "x86-64-v3";
+    assert hostArch mail != "x86-64-v4";
+    assert !(lib.hasInfix "native" (if hostArch mail == null then "" else hostArch mail));
+    assert !(lib.hasInfix "avx512" (if hostArch mail == null then "" else hostArch mail));
     assert localArch mail != "x86-64-v3";
     assert genericCpu.enable == false;
     assert genericCpu.gccArch == "";
@@ -3276,6 +3285,10 @@ let
     assert genericCpu.tunedPackages == [ ];
     assert hostArch generic != "x86-64-v3";
     assert localArch generic != "x86-64-v3";
+    assert stdenvArch generic != "x86-64-v3";
+    assert stdenvArch generic != "x86-64-v4";
+    assert !(lib.hasInfix "native" (if stdenvArch generic == null then "" else stdenvArch generic));
+    assert !(lib.hasInfix "avx512" (if stdenvArch generic == null then "" else stdenvArch generic));
     "t62-mail-host-cpu-v3-ok";
 
   results = [
