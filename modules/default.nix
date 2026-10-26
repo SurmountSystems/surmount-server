@@ -46,5 +46,7 @@
     ./speedtest.nix
     # Flexible I/O tester (fio) for operator HDD sequential vs random probes.
     ./perf-tools.nix
+    # Mail-host source builds: x86-64-v3. Default off (CI / generic).
+    ./mail-host-cpu.nix
   ];
 }

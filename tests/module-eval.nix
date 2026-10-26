@@ -3227,6 +3227,57 @@ let
     assert !(lib.hasInfix "esplora-surmount-systems" toml);
     "t61-splora-portal-host-and-onion-extras-ok";
 
+  # Mail sample host requests x86-64-v3 for Rust and for C/C++.
+  # The generic CI host (no hosts/mail-vps/configuration.nix) must not.
+  # nixpkgs.hostPlatform.gcc.arch stays unset: that flag is baked into the
+  # cc-wrapper and would rebuild the whole NixOS closure.
+  t62-mail-host-cpu-v3 =
+    let
+      mail = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      generic = evalSurmount { };
+      mailCpu = mail.config.surmount.mailHostCpu;
+      genericCpu = generic.config.surmount.mailHostCpu;
+      # nixosSystem passes nixpkgs.system. hostPlatform stays unset unless
+      # a module sets it. localSystem is the elaborated build platform.
+      hostArch =
+        e:
+        if e.options.nixpkgs.hostPlatform.isDefined then
+          e.config.nixpkgs.hostPlatform.gcc.arch or null
+        else
+          null;
+      localArch = e: e.config.nixpkgs.localSystem.gcc.arch or null;
+    in
+    assert mailCpu.enable == true;
+    assert mailCpu.gccArch == "x86-64-v3";
+    assert mailCpu.rustTargetCpu == "x86-64-v3";
+    assert mailCpu.nixCflagsCompile == "-march=x86-64-v3";
+    assert mailCpu.cargoBuildRustflags == "-C target-cpu=x86-64-v3";
+    assert !(lib.hasInfix "native" mailCpu.nixCflagsCompile);
+    assert !(lib.hasInfix "native" mailCpu.cargoBuildRustflags);
+    assert !(lib.hasInfix "x86-64-v4" mailCpu.gccArch);
+    assert !(lib.hasInfix "avx512" mailCpu.cargoBuildRustflags);
+    assert builtins.elem "surmount-management-ui" mailCpu.tunedPackages;
+    assert builtins.elem "splora" mailCpu.tunedPackages;
+    assert builtins.elem "splora-liquid" mailCpu.tunedPackages;
+    assert builtins.elem "bitcoind" mailCpu.tunedPackages;
+    assert builtins.elem "elementsd" mailCpu.tunedPackages;
+    assert !(builtins.elem "stalwart-mail" mailCpu.tunedPackages);
+    assert mail.config.surmount.sploraIndexer.enable == false;
+    assert mail.config.surmount.lake.enable == false;
+    assert hostArch mail != "x86-64-v3";
+    assert localArch mail != "x86-64-v3";
+    assert genericCpu.enable == false;
+    assert genericCpu.gccArch == "";
+    assert genericCpu.rustTargetCpu == "";
+    assert genericCpu.nixCflagsCompile == "";
+    assert genericCpu.cargoBuildRustflags == "";
+    assert genericCpu.tunedPackages == [ ];
+    assert hostArch generic != "x86-64-v3";
+    assert localArch generic != "x86-64-v3";
+    "t62-mail-host-cpu-v3-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -3348,6 +3399,7 @@ let
     t59-splora-remote-ui-extra-groups-when-proxy-on
     t60-splora-remote-enable-needs-cookie-path
     t61-splora-portal-host-and-onion-extras
+    t62-mail-host-cpu-v3
   ];
 in
 {

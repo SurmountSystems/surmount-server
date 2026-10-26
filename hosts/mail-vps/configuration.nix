@@ -100,6 +100,9 @@
   # ---- Surmount stack ------------------------------------------------------
   surmount = {
     enable = true;
+    # Measured guest CPU is x86-64-v3 (no avx512). Source builds only.
+    # Flake packages.* and the generic CI host stay untuned.
+    mailHostCpu.enable = true;
     primaryDomain = "surmount.systems";
     mailHostname = "mail.surmount.systems";
     servicesHostname = "services.surmount.systems";

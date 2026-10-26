@@ -848,6 +848,39 @@ Target comes from `--target`, `SURMOUNT_DEPLOY_TARGET`, or
 plan names in the public tree. Prefer not to paste RAM/swap sizes into
 product docs.
 
+### Mail-host compiler CPU (x86-64-v3)
+
+The mail host compiles its own Rust and C/C++ source builds for
+`x86-64-v3`. That is the measured guest CPU: avx, avx2, bmi1, bmi2,
+f16c, fma, lzcnt (kernel flag `abm`), movbe, popcnt, sse4.1, sse4.2,
+and ssse3. AVX-512 is absent, so this is not `x86-64-v4`. QEMU iothread
+was not sampled. Do not claim `iothread=1`.
+
+`hosts/mail-vps/configuration.nix` sets `surmount.mailHostCpu.enable`.
+`modules/mail-host-cpu.nix` then sets `gccArch` and `rustTargetCpu` to
+`x86-64-v3`, `NIX_CFLAGS_COMPILE` and `NIX_CXXFLAGS_COMPILE` to
+`-march=x86-64-v3`, and `CARGO_BUILD_RUSTFLAGS` to
+`-C target-cpu=x86-64-v3`. The nixpkgs cc-wrapper applies
+`NIX_CFLAGS_COMPILE` to both C and C++. This nixpkgs does not map
+`gcc.arch` onto rustc, so the Rust flag is set on the derivation.
+
+`nixpkgs.hostPlatform.gcc.arch` stays unset. The cc-wrapper bakes
+`gcc.arch` into the stdenv, and that would rebuild the NixOS closure
+and force the same march onto every package. Generic CI eval
+(`tests/module-eval.nix` without the mail-vps host file) leaves
+`surmount.mailHostCpu.enable` false, so those flags are empty. Flake
+`packages.*` (GitHub Actions `checks.*.ci`, laptop `nix build`) are
+built from `mkPkgsBare` and are not wrapped.
+
+Do not use `-march=native` in this public flake. Stalwart stays a
+release binary (`dontBuild`); this march does not recompile that
+tarball or the RocksDB inside it. Splora and bitcoind or elementsd are
+on the tune list only when a derivation references those attributes.
+The sample host does not enable `surmount.sploraIndexer` and does not
+start bitcoind.
+
+Contract: `t62-mail-host-cpu-v3` in `tests/module-eval.nix`.
+
 ### Remote Nix builder (operator 2026-08-17; Lake default-off 2026-08-25)
 
 **surmount-1** is the allowed remote Nix builder (ssh-ng). Mail and builder
