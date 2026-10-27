@@ -103,7 +103,7 @@ let
     lib.foldl' (
       acc: name:
       acc
-      // lib.optionalAttrs (prev ? ${name} && lib.isDerivation prev.${name}) {
+      // lib.optionalAttrs (prev ? ${name}) {
         ${name} = tune prev.${name};
       }
     ) { } rustNames;

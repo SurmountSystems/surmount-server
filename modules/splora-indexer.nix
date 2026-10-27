@@ -73,26 +73,57 @@ in
           }
         ];
       })
-    ]
-    ++ optionals hasSplora [
-      (mkIf (cfg.enable && idx.enable) {
-        services.splora.enable = true;
-        services.splora.instances = mkMerge (
-          map (name: {
-            ${name} = mkIf (idx.instanceName == name) {
-              enable = true;
-              network = idx.network;
-              daemonRpcAddr = idx.daemonRpcAddr;
-              cookieFile = idx.cookieFile;
-              daemonDir = idx.daemonDir;
-              jsonrpcImport = idx.jsonrpcImport;
-              publicHealth = idx.publicHealth;
-              dbBlockCacheMb = idx.dbBlockCacheMb;
-              extraArgs = idx.extraArgs;
-            };
-          }) allowedNames
+      # Nice on units this module's imported splora stack actually starts.
+      # Static instance names. Do not map config.services.splora.instances
+      # into systemd attr keys (that recurses). Instance enable defaults
+      # true even when services.splora.enable is false, so the service
+      # enable is required or those names become Nice-only stubs.
+      (mkIf (hasSplora && config.services.splora.enable) {
+        systemd.services = mkMerge (
+          map (
+            name:
+            let
+              inst = config.services.splora.instances.${name} or { };
+              on = inst.enable or false;
+              daemonName = if name == "liquid" then "elementsd-liquid" else "bitcoind-${name}";
+            in
+            mkMerge [
+              (mkIf on {
+                "splora-${name}" = {
+                  serviceConfig.Nice = 5;
+                };
+              })
+              (mkIf (on && (inst.startLocalDaemon or false)) {
+                ${daemonName} = {
+                  serviceConfig.Nice = 5;
+                };
+              })
+            ]
+          ) allowedNames
         );
       })
     ]
+    ++ optionals hasSplora (
+      [
+        (mkIf (cfg.enable && idx.enable) {
+          services.splora.enable = true;
+          services.splora.instances = mkMerge (
+            map (name: {
+              ${name} = mkIf (idx.instanceName == name) {
+                enable = true;
+                network = idx.network;
+                daemonRpcAddr = idx.daemonRpcAddr;
+                cookieFile = idx.cookieFile;
+                daemonDir = idx.daemonDir;
+                jsonrpcImport = idx.jsonrpcImport;
+                publicHealth = idx.publicHealth;
+                dbBlockCacheMb = idx.dbBlockCacheMb;
+                extraArgs = idx.extraArgs;
+              };
+            }) allowedNames
+          );
+        })
+      ]
+    )
   );
 }

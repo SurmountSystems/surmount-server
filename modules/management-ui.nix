@@ -439,6 +439,8 @@ let
     ExecStart = "${pkg}/bin/surmount-management-ui";
     Restart = "on-failure";
     RestartSec = "5s";
+    # Ordinary CFS. Not fifo, not rr, not idle I/O, not realtime I/O.
+    Nice = -19;
     SyslogIdentifier = "surmount-management-ui";
     StandardOutput = "journal";
     StandardError = "journal";
@@ -859,17 +861,26 @@ in
         serviceConfig = serviceConfig;
       };
     }
+    # Static unit names. Reading config.services.splora.instances while
+    # defining systemd.services recurses. MemoryMax only; Nice stays on
+    # the indexer wrap. The five names are the default indexer units,
+    # including splora-mainnet. splora-queue stays on its own gate.
     // lib.optionalAttrs (sploraServiceOn && splora.unitsMemoryMax != null) (
       let
         cap = {
           serviceConfig.MemoryMax = splora.unitsMemoryMax;
         };
-        inst = lib.filterAttrs (_: i: i.enable or false) config.services.splora.instances;
       in
       lib.optionalAttrs (config.services.splora.queueEnable or false) {
         splora-queue = cap;
       }
-      // lib.mapAttrs' (name: _: lib.nameValuePair "splora-${name}" cap) inst
+      // lib.genAttrs [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+      ] (_: cap)
       // lib.optionalAttrs (config.services.splora.popularScripts.enable or false) {
         splora-popular-scripts = cap;
       }

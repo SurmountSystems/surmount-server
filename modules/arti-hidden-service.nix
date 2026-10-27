@@ -395,6 +395,8 @@ in
         ExecStartPost = "-${hostnamePublishScript}";
         Restart = "on-failure";
         RestartSec = "10s";
+        # Ordinary CFS. Not fifo, not rr, not idle I/O, not realtime I/O.
+        Nice = -18;
         # state_dir is onionServiceStateDir (HS identity + instance state).
         # cache_dir is under stateDir. Both need write for a live publisher.
         ReadWritePaths = [

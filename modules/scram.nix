@@ -25,11 +25,9 @@ in
         ExecStart = "${scram} --watch";
         Restart = "always";
         RestartSec = "1s";
+        # CFS, not SCHED_FIFO. Nice -20 is the last line. Do not set
+        # CPUSchedulingPolicy to fifo or rr, and do not set realtime I/O.
         Nice = -20;
-        CPUSchedulingPolicy = "fifo";
-        CPUSchedulingPriority = 99;
-        IOSchedulingClass = "realtime";
-        IOSchedulingPriority = 0;
         OOMScoreAdjust = -1000;
         # Watchdog must be able to kill other uids.
         User = "root";

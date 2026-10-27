@@ -441,9 +441,10 @@ builder work share that host. That is why niceness and a hard memory
 cap matter. **Lake is optional and default off** (`surmount.lake` in
 `modules/lake.nix`; operator 2026-08-25 supersedes the 2026-08-18
 "never a lake unit" line). Do **not** start Lake on the live guest
-from an agent. When host-local enables it, the unit must be niced,
-`MemoryMax`-capped on `surmount-lake.service`, and journaled. Do not
-Nice= mail.
+from an agent. When that eval or host-local enables Lake, Lake is
+nice 19 with idle I/O, `MemoryMax`-capped on `surmount-lake.service`,
+and journaled. Mail is nice -20. Do not set builder `Nice=19` on mail
+to deprioritize it.
 
 Dev builds (remote Nix store builds, flake check, hygiene compiles) are
 always maximally nice: `nice -n 19` and idle ionice when practical.
@@ -453,11 +454,17 @@ of **one** CPU (that starves the ssh-ng protocol and parks cores).
 `cpuQuota = "auto"` means 95 percent times online CPUs on the niced
 wrapper, and no one-CPU quota on the slices.
 
-Mail and other critical services (`stalwart`, `management-ui`, `sshd`,
-`arti`, networking) are **not** nice. They stay at normal priority. Do
-**not** set `Nice=` on those units. Do **not** globally starve mail by
-nicing the whole machine. Prefer a niced builder user and a niced
-remote-build path.
+Mail and scram are nice -20 on ordinary CFS. They are not fifo. They
+are not realtime I/O. If a separate mail database unit exists, it is
+also nice -20. scram stays root and its start command still contains
+`--watch`. The HTTP management UI is nice -19. Arti is nice -18. An
+enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The Nix daemon is nice 19 with idle
+I/O. Lake, when that eval or host-local enables Lake, is nice 19 with
+idle I/O. sshd stays un-niced (`Nice` unset). Do **not** set `Nice=`
+on sshd. Builds stay nice 19 with idle I/O. No realtime policy on
+product units. Do **not** globally starve mail by nicing the whole
+machine. Prefer a niced builder user and a niced remote-build path.
+Mail is the highest nice priority (-20), not `Nice` unset.
 
 **Hard memory cap (SHC ticket 261, closed 2026-08-18; console evidence
 2026-08-18).** **surmount-1** is mail plus the allowed remote Nix

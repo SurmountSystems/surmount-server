@@ -274,6 +274,8 @@ in
         KillSignal = "SIGINT";
         Restart = "on-failure";
         RestartSec = 5;
+        # Ordinary CFS. Mail is the database process. No fifo, rr, or realtime I/O.
+        Nice = -20;
         SyslogIdentifier = "stalwart-mail";
         StandardOutput = "journal";
         StandardError = "journal";

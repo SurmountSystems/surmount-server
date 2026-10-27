@@ -944,8 +944,17 @@ reboot.**
 **In-guest follow-up (2026-08-25):** Builder `MemoryMax` is a **builder
 budget**, not 95 percent of the whole guest (that lets rustc starve
 mail). `nix-daemon` gets a positive `OOMScoreAdjust` so it is the
-preferred in-guest OOM victim; mail, management-ui, and sshd get a
-negative score and stay un-niced. `surmount.hardening.qemuGuestAgent`
+preferred in-guest OOM victim. Mail and scram are nice -20 on ordinary
+CFS. They are not fifo. They are not realtime I/O. If a separate mail
+database unit exists, it is also nice -20. scram stays root and its
+start command still contains `--watch`. The HTTP management UI is
+nice -19. Arti is nice -18. An enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The
+Nix daemon is nice 19 with idle I/O. Lake, when that eval or host-local
+enables Lake, is nice 19 with idle I/O. sshd stays un-niced (`Nice`
+unset). Do **not** set `Nice=` on sshd. Builds stay nice 19 with idle
+I/O. No realtime policy on product units. Mail, the HTTP management UI,
+and sshd still get a negative OOM score. Do not set builder `Nice=19`
+on mail to deprioritize it. `surmount.hardening.qemuGuestAgent`
 starts `services.qemuGuest` when enabled from host-local so staff can
 inject a command next time. Disk refuse stays at 95 percent. `cpuQuota
 = auto` stays 95 percent times online CPUs on the niced wrapper. Live
@@ -1023,9 +1032,19 @@ real `memoryMax` as the **builder budget**; never publish that number
 as a guest size in git. Do not set it to about 95 percent of the whole
 guest while mail shares the box.
 Mail and other critical units are **not** on this slice and do
-**not** get this `MemoryMax` or `Nice=`. `nix-daemon` **does** get
-`Nice=19` and idle ionice when the module is enabled (dev builds
-only; not mail).
+**not** get this builder `MemoryMax` or this builder `Nice=19`.
+Mail and scram are nice -20 on ordinary CFS. They are not fifo. They
+are not realtime I/O. If a separate mail database unit exists, it is
+also nice -20. scram stays root and its start command still contains
+`--watch`. The HTTP management UI is nice -19. Arti is nice -18. An
+enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The Nix daemon is nice 19 with idle
+I/O. Lake, when that eval or host-local enables Lake, is nice 19 with
+idle I/O. sshd stays un-niced (`Nice` unset). Do **not** set `Nice=`
+on sshd. Builds stay nice 19 with idle I/O. No realtime policy on
+product units. Mail is the highest nice priority (-20), not `Nice`
+unset. Do not set builder `Nice=19` on mail to deprioritize it.
+`nix-daemon` **does** get `Nice=19` and idle I/O when the module is
+enabled (dev builds only; not mail).
 
 Hermetic tests: crate `surmount-niced-builder` in `checks.*.ci`, `just test-remote-builder-eval`,
 `just test-logging-eval`, `nix eval --impure --json --file tests/lake-contract.nix`,
@@ -1061,13 +1080,20 @@ make maximally nice use of cores without also OOMing the guest. That
 is the contract. Do not retarget the question to static-site slowness.
 
 Dev builds (remote Nix store builds, flake check, hygiene compiles) are
-always maximally nice: `nice -n 19` and idle ionice when practical.
-Prefer a niced builder user and a niced remote-build path. Prefer
-build-on-laptop then switch so the host does not compile the UI. Do
-**not** set `Nice=` on mail or other critical units (`stalwart-mail`,
-`surmount-management-ui`, `sshd`, `surmount-arti-hidden-service` / Arti,
-networking). Do **not** nice the whole machine. Starving mail to make a
-compile cheaper is a miss.
+always nice 19 with idle I/O. Prefer a niced builder user and a niced
+remote-build path. Prefer build-on-laptop then switch so the host does
+not compile the UI. Mail and scram are nice -20 on ordinary CFS. They
+are not fifo. They are not realtime I/O. If a separate mail database
+unit exists, it is also nice -20. scram stays root and its start
+command still contains `--watch`. The HTTP management UI is nice -19.
+Arti is nice -18. An enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The Nix daemon
+is nice 19 with idle I/O. Lake, when that eval or host-local enables
+Lake, is nice 19 with idle I/O. sshd stays un-niced (`Nice` unset).
+Do **not** set `Nice=` on sshd. Builds stay nice 19 with idle I/O. No
+realtime policy on product units. Do **not** nice the whole machine.
+Starving mail to make a compile cheaper is a miss. Mail is the highest
+nice priority (-20). Do not set builder `Nice=19` on mail to
+deprioritize it.
 
 **Niceness is not a memory cap.** We already started niced Lake without
 `MemoryMax`; that is why the box went dark (guest OOM / hypervisor
@@ -1641,8 +1667,16 @@ Paper trail is **journald** (operator-only). `surmount.logging.enable` defaults
 true with `surmount.enable`. Persistent journal under `/var/log/journal` with
 a **size cap** so logs cannot fill the disk (SHC ticket 261 class). Scaffold
 `SystemMaxUse=1G` and `RuntimeMaxUse=256M` are not published guest disk or
-RAM. `ForwardToSyslog=no`. Mail, management-ui, sshd, Arti, and networking
-stay at normal priority (not niced). No public log dump on the apex site.
+RAM. `ForwardToSyslog=no`. Mail and scram are nice -20 on ordinary CFS.
+They are not fifo. They are not realtime I/O. If a separate mail
+database unit exists, it is also nice -20. scram stays root and its
+start command still contains `--watch`. The HTTP management UI is
+nice -19. Arti is nice -18. An enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The
+Nix daemon is nice 19 with idle I/O. Lake, when that eval or host-local
+enables Lake, is nice 19 with idle I/O. sshd stays un-niced (`Nice`
+unset). Do **not** set `Nice=` on sshd. Builds stay nice 19 with idle
+I/O. No realtime policy on product units. Mail is the highest nice
+priority (-20), not `Nice` unset. No public log dump on the apex site.
 
 | Source | Where | Notes |
 |--------|-------|-------|

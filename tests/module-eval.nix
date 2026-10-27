@@ -201,6 +201,21 @@ let
     assert e.config.surmount.sploraIndexer.publicHealth == false;
     assert e.config.surmount.managementUi.http3Enable == true;
     assert (e.config.services.splora.enable or false) == false;
+    # Splora off must not define indexer or daemon units. Instance enable
+    # defaults true even when services.splora.enable is false, so a Nice
+    # gate that only reads the instance still invents a Nice-only unit.
+    assert builtins.all (n: !(builtins.hasAttr n e.config.systemd.services)) [
+      "splora-mainnet"
+      "splora-testnet3"
+      "splora-testnet4"
+      "splora-mutinynet"
+      "splora-liquid"
+      "bitcoind-mainnet"
+      "bitcoind-testnet3"
+      "bitcoind-testnet4"
+      "bitcoind-mutinynet"
+      "elementsd-liquid"
+    ];
     assert !(builtins.elem 443 (e.config.networking.firewall.allowedUDPPorts or [ ]));
     assert failedAssertions e == [ ];
     "t1-defaults-ok";
@@ -2308,17 +2323,114 @@ let
 
   t43-scram-watch-highest-priority =
     let
-      e = evalSurmount { };
+      e = evalSurmount {
+        remoteBuilder.enable = true;
+        managementUi.enable = true;
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = true;
+        artiHiddenService.packageIsOnionServiceCapable = true;
+        # Smallest existing splora switch in this suite. Not a mainnet chain.
+        __extraModules = [
+          {
+            services.splora.enable = true;
+          }
+        ];
+      };
       svc = e.config.systemd.services.surmount-scram or { };
       sc = svc.serviceConfig or { };
       wanted = svc.wantedBy or [ ];
+      niceOf =
+        scx:
+        let
+          n = scx.Nice or null;
+        in
+        if n == null then null else toString n;
+      cpuOf = scx: lib.toLower (toString (scx.CPUSchedulingPolicy or ""));
+      ioOf = scx: lib.toLower (toString (scx.IOSchedulingClass or ""));
+      mail = e.config.systemd.services.stalwart-mail.serviceConfig or { };
+      ui = e.config.systemd.services.surmount-management-ui.serviceConfig or { };
+      arti = e.config.systemd.services.surmount-arti-hidden-service.serviceConfig or { };
+      nixd = e.config.systemd.services.nix-daemon.serviceConfig or { };
+      sshd = e.config.systemd.services.sshd.serviceConfig or { };
+      # Indexer units this eval starts: splora-<instance>, bitcoind-*, elementsd-*.
+      # Queue, HTTP front, and popular-scripts are not indexers.
+      indexerName =
+        n:
+        let
+          ln = lib.toLower n;
+        in
+        (lib.hasPrefix "bitcoind-" ln)
+        || (lib.hasPrefix "elementsd-" ln)
+        || (
+          lib.hasPrefix "splora-" ln
+          && ln != "splora-queue"
+          && ln != "splora-http"
+          && ln != "splora-popular-scripts"
+        );
+      indexerOn = lib.filterAttrs (
+        n: unit:
+        indexerName n
+        && (unit.enable or true)
+        && ((unit.wantedBy or [ ]) != [ ] || (unit.requiredBy or [ ]) != [ ])
+      ) e.config.systemd.services;
+      indexerNames = builtins.attrNames indexerOn;
+      indexerNices = map (n: niceOf (indexerOn.${n}.serviceConfig or { })) indexerNames;
+      # 0 through 10 inclusive. One shared value. Null is not a nice.
+      niceInBand = n: n != null && builtins.match "(0|[1-9]|10)" n != null;
+      # services.splora.enable starts these. A missing name is a failure.
+      requiredIndexerUnits = [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+        "bitcoind-mainnet"
+        "bitcoind-testnet3"
+        "bitcoind-testnet4"
+        "bitcoind-mutinynet"
+        "elementsd-liquid"
+      ];
+      indexerStubs = lib.filterAttrs (
+        n: unit:
+        indexerName n
+        && (niceOf (unit.serviceConfig or { }) != null)
+        && (toString (unit.serviceConfig.ExecStart or "") == "")
+      ) e.config.systemd.services;
     in
     assert sc.ExecStart or "" != "";
     assert lib.hasInfix "--watch" (toString (sc.ExecStart or ""));
-    assert sc.Nice or 0 == -20;
+    assert (niceOf sc) == "-20";
     assert sc.OOMScoreAdjust or 0 == -1000;
-    assert sc.CPUSchedulingPolicy or "" == "fifo";
     assert builtins.elem "multi-user.target" wanted;
+    # Old t43 expected SCHED_FIFO. Realtime class and rr are the same miss.
+    assert (cpuOf sc) != "fifo";
+    assert (cpuOf sc) != "rr";
+    assert (ioOf sc) != "realtime";
+    assert (sc.User or "root") == "root";
+    assert (niceOf mail) == "-20";
+    assert (cpuOf mail) != "fifo";
+    assert (cpuOf mail) != "rr";
+    assert (ioOf mail) != "realtime";
+    assert (niceOf ui) == "-19";
+    assert (cpuOf ui) != "fifo";
+    assert (cpuOf ui) != "rr";
+    assert (ioOf ui) != "idle";
+    assert (niceOf arti) == "-18";
+    assert (cpuOf arti) != "fifo";
+    assert (cpuOf arti) != "rr";
+    assert (ioOf arti) != "idle";
+    # Every enabled indexer shares one nice in 0..10. A missing unit fails.
+    assert builtins.all (n: builtins.elem n indexerNames) requiredIndexerUnits;
+    assert indexerNames != [ ];
+    assert builtins.all (n: niceInBand n && n == builtins.head indexerNices) indexerNices;
+    assert indexerStubs == { };
+    assert (niceOf nixd) == "19";
+    assert (ioOf nixd) == "idle";
+    assert (cpuOf nixd) != "fifo";
+    assert (cpuOf nixd) != "rr";
+    # Unset sshd Nice passes. Do not require the attribute.
+    assert (niceOf sshd) != "19";
+    assert (niceOf sshd) != "-20";
     "t43-scram-watch-highest-priority-ok";
 
   t43b-swapfile-enable-without-path-asserts =
@@ -2354,6 +2466,25 @@ let
       sc = svc.serviceConfig or { };
     in
     sc.Nice or null;
+
+  # Null stays null. Int or string both print as the unit-file token.
+  shownNice = n: if n == null then null else toString n;
+
+  serviceCpuPolicy =
+    e: name:
+    let
+      svc = e.config.systemd.services.${name} or { };
+      sc = svc.serviceConfig or { };
+    in
+    lib.toLower (toString (sc.CPUSchedulingPolicy or ""));
+
+  serviceIoClass =
+    e: name:
+    let
+      svc = e.config.systemd.services.${name} or { };
+      sc = svc.serviceConfig or { };
+    in
+    lib.toLower (toString (sc.IOSchedulingClass or ""));
 
   etcText =
     e: name:
@@ -2401,7 +2532,7 @@ let
         in
         (mem == null || mem == "" || mem == "infinity")
         && (sl == null || sl != "surmount-builder.slice")
-        && (serviceNice e name == null)
+        && (shownNice (serviceNice e name) != "19")
       ) critical;
     in
     assert failedAssertions e == [ ];
@@ -2433,9 +2564,24 @@ let
     assert serviceMemoryMax e "surmount-management-ui" != "4G";
     assert serviceSlice e "surmount-management-ui" != "surmount-builder.slice";
     assert serviceMemoryMax e "surmount-arti-hidden-service" != "4G";
-    assert serviceNice e "stalwart-mail" == null;
-    assert serviceNice e "surmount-management-ui" == null;
-    assert serviceNice e "surmount-arti-hidden-service" == null;
+    assert (shownNice (serviceNice e "stalwart-mail")) == "-20";
+    assert (serviceCpuPolicy e "stalwart-mail") != "fifo";
+    assert (serviceCpuPolicy e "stalwart-mail") != "rr";
+    assert (serviceIoClass e "stalwart-mail") != "realtime";
+    assert (shownNice (serviceNice e "surmount-management-ui")) == "-19";
+    assert (serviceCpuPolicy e "surmount-management-ui") != "fifo";
+    assert (serviceCpuPolicy e "surmount-management-ui") != "rr";
+    assert (serviceIoClass e "surmount-management-ui") != "idle";
+    assert (shownNice (serviceNice e "surmount-arti-hidden-service")) == "-18";
+    assert (serviceCpuPolicy e "surmount-arti-hidden-service") != "fifo";
+    assert (serviceCpuPolicy e "surmount-arti-hidden-service") != "rr";
+    assert (serviceIoClass e "surmount-arti-hidden-service") != "idle";
+    assert (shownNice (serviceNice e "sshd")) != "19";
+    assert (shownNice (serviceNice e "sshd")) != "-20";
+    assert (shownNice (serviceNice e "nix-daemon")) == "19";
+    assert (serviceIoClass e "nix-daemon") == "idle";
+    assert (serviceCpuPolicy e "nix-daemon") != "fifo";
+    assert (serviceCpuPolicy e "nix-daemon") != "rr";
     "t39-remote-builder-enable-memory-cap-ok";
 
   t39b-remote-builder-custom-budget-not-sku =
@@ -2526,6 +2672,8 @@ let
     assert d.MemoryMax or null == e.config.surmount.remoteBuilder.memoryMax;
     assert d.Nice or null == 19;
     assert (d.IOSchedulingClass or "") == "idle";
+    assert (lib.toLower (toString (d.CPUSchedulingPolicy or ""))) != "fifo";
+    assert (lib.toLower (toString (d.CPUSchedulingPolicy or ""))) != "rr";
     "t39g-nix-daemon-is-the-real-build-cgroup-ok";
 
   t39h-max-jobs-half-measured-cpus =
@@ -2550,7 +2698,12 @@ let
     assert (mail.OOMScoreAdjust or 0) < 0;
     assert (sshd.OOMScoreAdjust or 0) < 0;
     assert (ui.OOMScoreAdjust or 0) < 0;
-    assert !(mail ? Nice);
+    assert (shownNice (mail.Nice or null)) == "-20";
+    assert (lib.toLower (toString (mail.CPUSchedulingPolicy or ""))) != "fifo";
+    assert (lib.toLower (toString (mail.CPUSchedulingPolicy or ""))) != "rr";
+    assert (lib.toLower (toString (mail.IOSchedulingClass or ""))) != "realtime";
+    assert (shownNice (sshd.Nice or null)) != "19";
+    assert (shownNice (sshd.Nice or null)) != "-20";
     "t39o-builder-is-preferred-oom-victim-ok";
 
   # H3: bad recovery path charset fails closed.
@@ -2804,10 +2957,15 @@ let
     assert failedAssertions e == [ ];
     assert s.MemoryMax or null == "4G";
     assert s.Nice or null == 19;
+    assert (s.IOSchedulingClass or "") == "idle";
     assert (s.OOMScoreAdjust or 0) > 0;
     assert builtins.elem "multi-user.target" (e.config.systemd.services.surmount-lake.wantedBy or [ ]);
-    assert serviceNice e "stalwart-mail" == null;
-    assert serviceNice e "sshd" == null;
+    assert (shownNice (serviceNice e "stalwart-mail")) == "-20";
+    assert (serviceCpuPolicy e "stalwart-mail") != "fifo";
+    assert (serviceCpuPolicy e "stalwart-mail") != "rr";
+    assert (serviceIoClass e "stalwart-mail") != "realtime";
+    assert (shownNice (serviceNice e "sshd")) != "19";
+    assert (shownNice (serviceNice e "sshd")) != "-20";
     "t44b-lake-enable-memory-cap-ok";
 
   t45-grok-oss-default-off =
@@ -3376,7 +3534,6 @@ let
     t37-btop-local-config
     t37b-btop-use-fstab-true
     t42-guest-root-justfile
-    t43-scram-watch-highest-priority
     t43b-swapfile-enable-without-path-asserts
     t39-remote-builder-enable-memory-cap
     t39b-remote-builder-custom-budget-not-sku
@@ -3413,6 +3570,7 @@ let
     t60-splora-remote-enable-needs-cookie-path
     t61-splora-portal-host-and-onion-extras
     t62-mail-host-cpu-v3
+    t43-scram-watch-highest-priority
   ];
 in
 {
