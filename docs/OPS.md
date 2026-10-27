@@ -860,7 +860,8 @@ any flag above `x86-64-v3`. AVX-512 is absent, so this is not
 
 `hosts/mail-vps/configuration.nix` sets `surmount.mailHostCpu.enable`.
 `modules/mail-host-cpu.nix` then sets `nixpkgs.hostPlatform` to this
-host's system with `gcc.arch = "x86-64-v3"`. The nixpkgs cc-wrapper
+host's system with `gcc.arch = "x86-64-v3"`. The host Nix daemon must
+advertise gccarch-x86-64-v3 or the v3 stdenv will not build. The nixpkgs cc-wrapper
 reads `targetPlatform.gcc.arch` and writes `-march=x86-64-v3` into
 `cc-cflags-before`. That flag applies to every C and C++ compile that
 uses this host's stdenv, including dependencies such as nixpkgs

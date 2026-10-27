@@ -3449,6 +3449,49 @@ let
     assert !(lib.hasInfix "avx512" (if stdenvArch generic == null then "" else stdenvArch generic));
     "t62-mail-host-cpu-v3-ok";
 
+  # v3 stdenv sets requiredSystemFeatures to gccarch-x86-64-v3. The mail
+  # host must advertise that token on extra-system-features when
+  # mailHostCpu is on. The generic eval leaves the module off and must
+  # not advertise it. With the remote builder also on, the same list
+  # must still contain surmount-remote (freeform list concat, not a
+  # system-features replacement).
+  t62-gccarch-feature =
+    let
+      mail = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      mailBuilder = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+        remoteBuilder.enable = true;
+      };
+      generic = evalSurmount { };
+      featureList =
+        v:
+        if v == null then
+          [ ]
+        else if builtins.isList v then
+          v
+        else
+          lib.splitString " " (toString v);
+      extraOf = e: featureList (e.config.nix.settings.extra-system-features or [ ]);
+      sysOf = e: featureList (e.config.nix.settings.system-features or [ ]);
+      mailExtra = extraOf mail;
+      builderExtra = extraOf mailBuilder;
+      genericExtra = extraOf generic;
+    in
+    assert mail.config.surmount.mailHostCpu.enable == true;
+    assert builtins.elem "gccarch-x86-64-v3" mailExtra;
+    assert !(builtins.elem "gccarch-x86-64-v3" genericExtra);
+    assert generic.config.surmount.mailHostCpu.enable == false;
+    assert mailBuilder.config.surmount.remoteBuilder.enable == true;
+    assert builtins.elem "gccarch-x86-64-v3" builderExtra;
+    assert builtins.elem "surmount-remote" builderExtra;
+    assert builtins.elem "benchmark" (sysOf mail);
+    assert builtins.elem "big-parallel" (sysOf mail);
+    assert builtins.elem "kvm" (sysOf mail);
+    assert builtins.elem "nixos-test" (sysOf mail);
+    "t62-gccarch-feature-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -3570,6 +3613,7 @@ let
     t60-splora-remote-enable-needs-cookie-path
     t61-splora-portal-host-and-onion-extras
     t62-mail-host-cpu-v3
+    t62-gccarch-feature
     t43-scram-watch-highest-priority
   ];
 in

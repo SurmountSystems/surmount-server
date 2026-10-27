@@ -203,6 +203,11 @@ in
       gcc.arch = march;
     };
 
+    # The v3 stdenv requires gccarch-x86-64-v3. extra-system-features is
+    # a freeform list and concatenates, so this does not drop
+    # surmount-remote or the daemon's system-features defaults.
+    nix.settings.extra-system-features = [ "gccarch-${march}" ];
+
     nixpkgs.overlays = lib.mkAfter [ mailHostCpuOverlay ];
 
     assertions = [
