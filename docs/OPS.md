@@ -1687,7 +1687,7 @@ priority (-20), not `Nice` unset. No public log dump on the apex site.
 | sshd | journald | `LogLevel VERBOSE` (auth fail / disconnect; no passwords) |
 | fail2ban | journald | Transitional sshd jail; `backend = systemd` |
 | nft `surmount_guard` | kernel -> journald | `log prefix "surmount-nft-ban-drop: "` when logging on |
-| Arti | journald via stdout | `console = info`; `log_sensitive_information = false` (no HS keys) |
+| Arti | journald via stdout | `console = debug`; `log_sensitive_information = false` (no HS keys) |
 | nix-daemon | journald | Remote builder path; niced + MemoryMax; per-unit log burst kept high so OOM start is visible; not mail |
 | surmount-lake (if enabled) | journald | Default-off; niced + MemoryMax on the lake unit; SyslogIdentifier `surmount-lake` |
 | Vaultwarden (if enabled) | journald via stdout | `LOG_LEVEL=info`; never `LOG_FILE`; never ADMIN_TOKEN |
@@ -1937,7 +1937,7 @@ exceptions*.
 | `nix run .#surmount-private-data` / `just check-private-data` | Private-data pattern scan (`--staged` / `--tree` / `--paths`). |
 | `nix run .#surmount-host-logs` / `just host-logs` | Host journal follow and `--status`. |
 | `nix run .#surmount-et` / `just et` | Eternal Terminal client. Reconnects after sleep and network change. Does not replace Mullvad. After the host switch, `etserver` listens on TCP 2022. Long commands still belong in tmux on the guest. |
-| `nix run .#surmount-rekey` / `just rekey` | SHC Backups PGP paste: mint age identity (age/rage crate), wrap with gpg, print `age1...` for type PGP. Identity stays 0600 on disk. |
+| `nix run .#surmount-rekey` / `just rekey` | SHC Backups PGP paste: mint an X25519 age identity (not the age crate), wrap with gpg, print `age1...` for type PGP. Identity stays 0600 on disk. |
 | `nix run .#surmount-shc` / `just rdns-shc` | SHC customer user-api (rDNS PTR + tickets). No python3 in the crate. |
 | `nix run .#surmount-tls-hybrid` / `just check-tls-hybrid` | **D1** host hybrid TLS negotiation probe after B1. Requires `SURMOUNT_E2E_BASE_URL=https://...` or exit **2** BLOCKED. Never a flake check. |
 | `nix run .#surmount-domain-audit` / `just domain-audit` | Read-only DNS/web/TLS/mail posture (SPF/DKIM/DMARC, dual-sign selectors `stalwart`/`stalwart-rsa`, HTTPS, optional `--smtp` STARTTLS). |

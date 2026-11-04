@@ -1,12 +1,15 @@
 //! Public systems dashboard for Host `status.{primary}` (Axum, not nginx).
 //!
 //! Not the operator console. Rows come from a product inventory plus live
-//! systemd ActiveState / SubState (and optional HTTP samples). Host uptime
-//! comes from `/proc/uptime`. No RAM, disk, IP, onion, or cookie bytes.
+//! probes. A Splora indexer row is up only when that network's proxy socket
+//! accepted a connection. systemd ActiveState=active is not enough. Other
+//! rows still use ActiveState / SubState and optional HTTP samples. Host
+//! uptime comes from `/proc/uptime`. No RAM, disk, IP, onion, or cookie bytes.
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::path::Path;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use axum::http::{StatusCode, header};
@@ -46,6 +49,12 @@ pub struct ComponentProbe {
     pub sub_state: String,
     pub load_state: String,
     pub http_status: Option<u16>,
+    /// None: this row is not a Splora listen check.
+    /// Some(true): that network's proxy socket accepted a connection.
+    /// A first HTTP response of 401 on that connection is still up.
+    /// Some(false): the socket is absent or refused. Not Up.
+    /// HTTP status 0 is not up.
+    pub socket_accepts: Option<bool>,
 }
 
 /// One product row the dashboard knows how to name.
@@ -71,10 +80,26 @@ pub const DASHBOARD_UNITS: &[&str] = &[
     "splora-liquid.service",
 ];
 
-/// Ordinary English status from systemd ActiveState / SubState / HTTP samples.
+/// Ordinary English status from listen result, ActiveState / SubState, or HTTP.
 ///
-/// Never returns a constant "ok". HTTP client errors win over a running unit.
+/// Never returns a constant "ok". HTTP client errors win over a running unit
+/// when that row did not accept a proxy socket. An accepted socket is
+/// "running" even when the first HTTP status is 401 (Splora's auth gate
+/// with public health off). Status 0 is not a response and stays "inactive".
+/// `socket_accepts` Some(false) is "inactive" (the existing down word).
+/// Some(true) is "running" (the existing up word). None keeps systemd.
 pub fn classify_component_status(probe: &ComponentProbe) -> String {
+    if probe.http_status == Some(0) {
+        return "inactive".to_string();
+    }
+    // 401 on an accepted connection is the indexer auth gate, not a down row.
+    // Other 4xx/5xx still win when the socket did not accept, and they still
+    // win on an accepted socket except for that 401 gate.
+    if probe.socket_accepts == Some(true)
+        && !matches!(probe.http_status, Some(code) if code >= 400 && code != 401)
+    {
+        return "running".to_string();
+    }
     if let Some(code) = probe.http_status
         && code >= 400
     {
@@ -83,8 +108,11 @@ pub fn classify_component_status(probe: &ComponentProbe) -> String {
     let load = probe.load_state.trim();
     let active = probe.active_state.trim();
     let sub = probe.sub_state.trim();
-    if load.eq_ignore_ascii_case("not-found") {
+    if load.eq_ignore_ascii_case("not-found") && probe.socket_accepts != Some(true) {
         return "not installed".to_string();
+    }
+    if probe.socket_accepts == Some(false) {
+        return "inactive".to_string();
     }
     if active.eq_ignore_ascii_case("failed") || sub.eq_ignore_ascii_case("failed") {
         return "failed".to_string();
@@ -123,6 +151,50 @@ pub fn classify_component_status(probe: &ComponentProbe) -> String {
         return active.to_ascii_lowercase();
     }
     "unknown".to_string()
+}
+
+/// HTTP Unix socket the public Splora proxy uses for this indexer name.
+///
+/// `/testnet` is testnet3, `/testnet4` is testnet4, `/signet` and
+/// `/mutinynet` are mutinynet, `/liquid` is liquid. Mainnet is not a
+/// dashboard row (None). A configured instance socket wins; otherwise
+/// the proxy default is `{DEFAULT_SOCKET_DIR}/{instance}.http.sock`.
+pub fn splora_dashboard_socket(config: &AppConfig, instance: &str) -> Option<PathBuf> {
+    if !matches!(instance, "testnet3" | "testnet4" | "mutinynet" | "liquid") {
+        return None;
+    }
+    if let Some(inst) = config.splora_proxy.instance_by_name(instance) {
+        return Some(inst.http_socket.clone());
+    }
+    Some(PathBuf::from(format!(
+        "{}/{instance}.http.sock",
+        crate::proxy_vaultwarden::splora::DEFAULT_SOCKET_DIR
+    )))
+}
+
+/// True only when `path` accepts a Unix connection. Missing path is false.
+pub fn unix_socket_accepts(path: &Path) -> bool {
+    UnixStream::connect(path).is_ok()
+}
+
+/// Set `socket_accepts` on the four Splora dashboard units from the proxy socket.
+fn annotate_splora_listen(config: &AppConfig, probes: &mut BTreeMap<String, ComponentProbe>) {
+    const ROWS: &[(&str, &str)] = &[
+        ("splora-testnet3.service", "testnet3"),
+        ("splora-testnet4.service", "testnet4"),
+        ("splora-mutinynet.service", "mutinynet"),
+        ("splora-liquid.service", "liquid"),
+    ];
+    for (unit, instance) in ROWS {
+        let Some(path) = splora_dashboard_socket(config, instance) else {
+            continue;
+        };
+        let accepts = unix_socket_accepts(&path);
+        probes
+            .entry((*unit).to_string())
+            .or_default()
+            .socket_accepts = Some(accepts);
+    }
 }
 
 /// Standing number law: seconds; minutes at most 60 minutes; N.N hours through
@@ -428,7 +500,7 @@ fn read_host_uptime() -> String {
         {
             return format_uptime_seconds(n);
         }
-        return format_uptime_seconds(720.0);
+        format_uptime_seconds(720.0)
     }
     #[cfg(not(test))]
     {
@@ -469,7 +541,9 @@ fn live_unit_probes() -> BTreeMap<String, ComponentProbe> {
 
 /// Build the payload the status Host handler actually emits.
 pub fn systems_status_from_config(config: &AppConfig) -> SystemsStatusPayload {
-    systems_status_from_probes(config, &read_host_uptime(), &live_unit_probes())
+    let mut probes = live_unit_probes();
+    annotate_splora_listen(config, &mut probes);
+    systems_status_from_probes(config, &read_host_uptime(), &probes)
 }
 
 /// Serve HTML dashboard, JSON (`/status.json` or Accept), or closed 404.
@@ -618,6 +692,7 @@ mod tests {
             sub_state: sub.into(),
             load_state: load.into(),
             http_status: http,
+            socket_accepts: None,
         }
     }
 
@@ -894,5 +969,276 @@ Id=sshd.service\nLoadState=loaded\nActiveState=failed\nSubState=failed\n",
         );
         assert_eq!(show["stalwart-mail.service"].active_state, "active");
         assert_eq!(show["sshd.service"].active_state, "failed");
+    }
+
+    /// Named contract: unit active and socket absent is not Up.
+    ///
+    /// The page's up word is "running". The existing not-up word for a
+    /// service that is down is "inactive" (ActiveState=inactive).
+    #[test]
+    fn splora_active_unit_with_absent_socket_is_not_up() {
+        let cfg = AppConfig::example_test();
+        assert_eq!(
+            splora_dashboard_socket(&cfg, "testnet3")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/run/splora/testnet3.http.sock"
+        );
+        assert_eq!(
+            splora_dashboard_socket(&cfg, "testnet4")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/run/splora/testnet4.http.sock"
+        );
+        assert_eq!(
+            splora_dashboard_socket(&cfg, "mutinynet")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/run/splora/mutinynet.http.sock"
+        );
+        assert_eq!(
+            splora_dashboard_socket(&cfg, "liquid")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/run/splora/liquid.http.sock"
+        );
+        assert!(
+            splora_dashboard_socket(&cfg, "mainnet").is_none(),
+            "mainnet stays off and must not be shown as Up"
+        );
+        assert!(
+            !DASHBOARD_UNITS.iter().any(|unit| unit.contains("mainnet")),
+            "mainnet must not be a dashboard unit: {DASHBOARD_UNITS:?}"
+        );
+
+        let mut custom = cfg.clone();
+        custom
+            .splora_proxy
+            .instances
+            .push(crate::proxy_vaultwarden::splora::SploraInstance {
+                name: "testnet3".into(),
+                hosts: Vec::new(),
+                http_socket: PathBuf::from("/run/splora/testnet3.http.sock"),
+            });
+        assert_eq!(
+            splora_dashboard_socket(&custom, "testnet3")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "/run/splora/testnet3.http.sock"
+        );
+
+        let missing = std::env::temp_dir().join(format!(
+            "surmount-status-absent-socket-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        assert!(
+            !unix_socket_accepts(&missing),
+            "a missing socket must not count as accepted"
+        );
+
+        let mut probes = BTreeMap::new();
+        for unit in [
+            "splora-testnet3.service",
+            "splora-testnet4.service",
+            "splora-mutinynet.service",
+            "splora-liquid.service",
+        ] {
+            probes.insert(
+                unit.to_string(),
+                ComponentProbe {
+                    active_state: "active".into(),
+                    sub_state: "running".into(),
+                    load_state: "loaded".into(),
+                    http_status: None,
+                    socket_accepts: Some(false),
+                },
+            );
+        }
+        let payload = systems_status_from_probes(&cfg, "1 minute", &probes);
+        for id in [
+            "splora-testnet3",
+            "splora-testnet4",
+            "splora-mutinynet",
+            "splora-liquid",
+        ] {
+            let row = payload
+                .systems
+                .iter()
+                .find(|c| c.name == id)
+                .unwrap_or_else(|| panic!("missing row {id}"));
+            assert_eq!(
+                row.state, "inactive",
+                "{id} unit active with absent socket must not be Up (got {})",
+                row.state
+            );
+            assert_ne!(row.state, "running");
+            assert_ne!(row.state, "Up");
+        }
+        let html = render_systems_status_html(&payload);
+        assert!(html.contains("data-state=\"inactive\""));
+        assert!(
+            !html.contains("data-state=\"running\""),
+            "absent socket must not paint running/Up: {html}"
+        );
+        assert!(!html.contains("data-state=\"Up\""));
+        assert!(
+            !html.contains("mainnet"),
+            "mainnet must not appear on the status page"
+        );
+
+        let mut accepting = BTreeMap::new();
+        accepting.insert(
+            "splora-testnet3.service".into(),
+            ComponentProbe {
+                active_state: "active".into(),
+                sub_state: "running".into(),
+                load_state: "loaded".into(),
+                http_status: None,
+                socket_accepts: Some(true),
+            },
+        );
+        let up = systems_status_from_probes(&cfg, "1 minute", &accepting);
+        let up_row = up
+            .systems
+            .iter()
+            .find(|c| c.name == "splora-testnet3")
+            .expect("splora-testnet3");
+        assert_eq!(
+            up_row.state, "running",
+            "an accepting socket uses the page up word"
+        );
+    }
+
+    /// Named contract: an accepted socket whose first HTTP response is 401 is up.
+    ///
+    /// Splora with public health off uses 401 as the auth gate. That is not
+    /// down. The page up word is "running". Status 0 and a real HTTP error
+    /// other than that gate stay not up.
+    #[test]
+    fn splora_accepted_socket_with_http_401_is_up() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = std::env::temp_dir().join(format!(
+            "sm401-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock_path = dir.join("t4.sock");
+        let _ = std::fs::remove_file(&sock_path);
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let ready = std::sync::Arc::new(AtomicBool::new(false));
+        let ready2 = ready.clone();
+        let join = std::thread::spawn(move || {
+            ready2.store(true, Ordering::SeqCst);
+            let response =
+                b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let _ = stream.write_all(response);
+                let _ = stream.flush();
+            }
+        });
+        while !ready.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        assert!(
+            unix_socket_accepts(&sock_path),
+            "an accepted socket is up when the indexer answers HTTP 401"
+        );
+
+        let mut reader = UnixStream::connect(&sock_path).expect("second connect to the 401 stub");
+        reader
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .expect("read timeout");
+        let mut buf = [0u8; 64];
+        let n = reader.read(&mut buf).expect("read the stub status line");
+        let text = std::str::from_utf8(&buf[..n]).expect("status line is utf-8");
+        let code: u16 = text
+            .split_whitespace()
+            .nth(1)
+            .expect("HTTP status code")
+            .parse()
+            .expect("numeric status");
+        assert_eq!(
+            code, 401,
+            "the stub's first HTTP response is 401, got {text}"
+        );
+
+        let cfg = AppConfig::example_test();
+        let mut probes = BTreeMap::new();
+        probes.insert(
+            "splora-testnet4.service".into(),
+            ComponentProbe {
+                active_state: "active".into(),
+                sub_state: "running".into(),
+                load_state: "loaded".into(),
+                http_status: Some(code),
+                socket_accepts: Some(true),
+            },
+        );
+        let payload = systems_status_from_probes(&cfg, "1 minute", &probes);
+        let row = payload
+            .systems
+            .iter()
+            .find(|c| c.name == "splora-testnet4")
+            .expect("splora-testnet4");
+        assert_eq!(
+            row.state, "running",
+            "HTTP 401 on an accepted socket is up, not down (got {})",
+            row.state
+        );
+        assert_ne!(row.state, "inactive");
+        assert_ne!(row.state, "HTTP 401");
+        let html = render_systems_status_html(&payload);
+        assert!(
+            html.contains("data-system=\"splora-testnet4\""),
+            "testnet4 row must be on the page"
+        );
+        assert!(
+            html.contains("data-state=\"running\""),
+            "accepted 401 socket must paint the up word: {html}"
+        );
+        assert_eq!(
+            classify_component_status(&ComponentProbe {
+                active_state: "active".into(),
+                sub_state: "running".into(),
+                load_state: "loaded".into(),
+                http_status: Some(0),
+                socket_accepts: Some(true),
+            }),
+            "inactive",
+            "HTTP 000 stays not up"
+        );
+        assert_eq!(
+            classify_component_status(&ComponentProbe {
+                active_state: "active".into(),
+                sub_state: "running".into(),
+                load_state: "loaded".into(),
+                http_status: Some(502),
+                socket_accepts: Some(true),
+            }),
+            "HTTP 502",
+            "HTTP 502 on an accepted socket stays not the up word"
+        );
+
+        let _ = join.join();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

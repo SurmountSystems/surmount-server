@@ -9,7 +9,7 @@ Usage:
   surmount-rekey [--help]
   surmount-rekey [--dry-run] [--dir DIR] [--gpg-recipient ADDR] [--gpg-bin PATH]
 
-Mint an age identity (rage/age crate), wrap it with gpg, print the public
+Mint an X25519 age identity, wrap it with gpg, print the public
 age1 recipient for SHC Backups re-key (type PGP). Does not print
 AGE-SECRET-KEY-1. Does not talk to SHC.
 

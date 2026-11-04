@@ -187,7 +187,7 @@ in
           '';
         }
         (lib.mkIf (spamFilter != null) {
-          "surmount/stalwart/spam-filter.toml".source = "${spamFilter}/spam-filter.toml";
+          # spam-filter 3.0.3 and later publish only the rules archive.
           "surmount/stalwart/spam-filter-rules.json.gz".source = "${spamFilter}/spam-filter-rules.json.gz";
         })
         (lib.mkIf (webui != null) {

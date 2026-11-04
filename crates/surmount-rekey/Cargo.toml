@@ -3,7 +3,7 @@ name = "surmount-rekey"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "SHC zero-knowledge backup re-key paste (PGP wrap via rage/age + gpg)"
+description = "SHC zero-knowledge backup re-key paste (X25519 age identity + gpg)"
 publish = false
 
 [[bin]]
@@ -15,9 +15,14 @@ name = "surmount_rekey"
 path = "src/lib.rs"
 
 [dependencies]
-age.workspace = true
 anyhow.workspace = true
+# 0.11 matches the age identity Bech32 (BIP-173) strings. 0.12 is a different
+# major already used elsewhere and is not this encoding.
+bech32 = "0.11.1"
 secrecy = "0.10"
+# static_secrets: reusable X25519 secret. getrandom: OsRng via StaticSecret::random.
+# Not the age crate. age 0.12.1 always depends on hpke and p256.
+x25519-dalek = { version = "2.0.1", features = ["getrandom", "static_secrets"] }
 
 [lints]
 workspace = true

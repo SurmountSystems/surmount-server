@@ -20,7 +20,7 @@ leftover RSA files on a live host are not deleted by hostKeys). Prior
 > Historical 0.11.8 only:
 > [research/stalwart-stores-evidence-2026-07-30.md](research/stalwart-stores-evidence-2026-07-30.md).
 
-> **Engine version:** Surmount pins Stalwart **0.16.15** via release-binary FODs
+> **Engine version:** Surmount pins Stalwart **1.0.2** via release-binary FODs
 > (`nix/packages/stalwart-mail.nix`, `modules/stalwart-service.nix`). Host
 > channel is **nixos-26.05**; engine is not the channel package. Early scaffold
 > briefly used channel **0.11.8** on host **25.05** (historical only).
@@ -426,7 +426,7 @@ Current engine store evidence:
 
 **Hermetic FODs (not auto-applied as engine config):**
 
-- Spam-filter **3.0.0** and WebUI zip are installed under
+- Spam-filter **3.0.4** (`spam-filter-rules.json.gz` only) and WebUI zip are installed under
   `/etc/surmount/stalwart/` via `environment.etc` in `modules/mail.nix`.
 - They are **not** the message DB and are **not** wired through TOML
   `spam-filter.resource` settings. Operator points SpamSettings / resource URL
@@ -452,9 +452,10 @@ section 2.
 
 ### 5.4 Spam-filter FOD is not the message store
 
-`nix/packages/stalwart-spam-filter.nix` pins spam-filter **3.0.0**
-(`spam-filter.toml` + `spam-filter-rules.json.gz` FODs). `modules/mail.nix`
-installs them under `/etc/surmount/stalwart/` for operators. That material is
+`nix/packages/stalwart-spam-filter.nix` pins spam-filter **3.0.4**
+(`spam-filter-rules.json.gz` only; v3.0.3 dropped `spam-filter.toml`).
+`modules/mail.nix` installs that archive under `/etc/surmount/stalwart/`
+for operators. That material is
 **anti-spam configuration**, completely separate from RocksDB message data.
 Do not back it up as if it were mail; it is in the Nix store via the system
 closure. Engine consumption is Day-2 apply/WebUI, not automatic first-boot
@@ -554,7 +555,7 @@ wired in modules yet.
 | Stalwart data+blob+FTS+lookup | RocksDB (provisional) | `/var/lib/stalwart-mail/db` | WAL + process; stop-service backup preferred | restic `mailDataDir`; test restore | Mail passwords inside engine DB | Stalwart |
 | Stalwart internal directory | Same RocksDB | inside `db` | Same | Same | Credential hashes | Stalwart |
 | Stalwart webadmin cache | Files | `/var/cache/stalwart-mail` | Ephemeral cache | Optional / skip | No | Stalwart package |
-| Spam-filter rules | TOML + rules FODs in Nix store | `/etc/surmount/stalwart/` (3.0.0); apply/WebUI to engine | Immutable in closure | Via nix / flake | No | `mail.nix` + spam-filter package |
+| Spam-filter rules | rules JSON FOD in Nix store | `/etc/surmount/stalwart/spam-filter-rules.json.gz` (3.0.4); apply/WebUI to engine | Immutable in closure | Via nix / flake | No | `mail.nix` + spam-filter package |
 | MailPlus import staging | Maildir files | `/var/lib/surmount/import/...` | Files | Optional until import done | May contain mail | Operator |
 | Surmount state root | dir | `/var/lib/surmount` | Files | restic `stateDir` | Future sessions etc. | Surmount |
 | Management UI durable state | Optional ban/whitelist-last-used JSON; future sessions | default `stateDir/ui/ban-state.json` when accessControl.enable; no secrets | Files | With `stateDir` | Session secrets via sops (future); ban state is IPs only | Surmount management-ui |
@@ -650,7 +651,7 @@ A backup never restored is theater ([SECURITY.md](SECURITY.md)).
 |----------|------|
 | MailPlus Maildir export | **Import source only** |
 | MBOX/PST conversions | Import source |
-| spam-filter.toml FOD | Config in Nix store |
+| spam-filter-rules.json.gz FOD | Config in Nix store |
 | git history | Not a mail backup |
 | FTS alone | Not a restore path for bodies |
 

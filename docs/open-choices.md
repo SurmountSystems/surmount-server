@@ -77,13 +77,13 @@ separate product.
 ## Engine version
 
 **Stalwart is on current via Surmount package** (`nix/packages/stalwart-mail.nix`;
-measured **0.16.15** binary FOD as of architecture-review). Compatibility with
+measured **1.0.2** binary FOD, re-read 2026-11-03). Compatibility with
 old Stalwart is **not** a goal. nixpkgs lag is **not** a reason to stay old.
 
 - Always re-validate latest when bumping.
 - Historical note: early scaffold briefly used channel **0.11.8** on host
   **nixos-25.05**; living host is **nixos-26.05** and engine is Surmount FOD
-  **0.16.15**.
+  **1.0.2**.
 - Evidence: [research/stalwart-0.16.15-stores-evidence.md](research/stalwart-0.16.15-stores-evidence.md).
 
 **Still open:** binary FOD until source build, vs require source build before

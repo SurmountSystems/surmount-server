@@ -61,9 +61,14 @@ let
 
   hookOf = pkg: pkg.mailHostRustCpuHook or "";
   usesOf = pkg: pkg.mailHostRustCpuUses or "";
-  depsHookOf = pkg: if pkg ? mailHostRustCpuCargoArtifacts then hookOf pkg.mailHostRustCpuCargoArtifacts else "";
+  depsHookOf =
+    pkg: if pkg ? mailHostRustCpuCargoArtifacts then hookOf pkg.mailHostRustCpuCargoArtifacts else "";
 
-  goodHook = text: lib.hasInfix "target-cpu=x86-64-v3" text && lib.hasInfix "RUSTFLAGS" text && lib.hasInfix "CARGO_ENCODED_RUSTFLAGS" text;
+  goodHook =
+    text:
+    lib.hasInfix "target-cpu=x86-64-v3" text
+    && lib.hasInfix "RUSTFLAGS" text
+    && lib.hasInfix "CARGO_ENCODED_RUSTFLAGS" text;
 
   on = evalRust true;
   off = evalRust false;

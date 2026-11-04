@@ -82,12 +82,15 @@ let
             // lib.optionalAttrs (prevWrap != null) {
               SURMOUNT_RUSTC_WRAPPER_NEXT = prevWrap;
             };
-          passthru = (old.passthru or { }) // {
-            mailHostRustCpuHook = hookText;
-            mailHostRustCpuUses = "RUSTC_WRAPPER";
-          } // lib.optionalAttrs (nextDeps != null) {
-            mailHostRustCpuCargoArtifacts = nextDeps;
-          };
+          passthru =
+            (old.passthru or { })
+            // {
+              mailHostRustCpuHook = hookText;
+              mailHostRustCpuUses = "RUSTC_WRAPPER";
+            }
+            // lib.optionalAttrs (nextDeps != null) {
+              mailHostRustCpuCargoArtifacts = nextDeps;
+            };
         }
         // lib.optionalAttrs (nextDeps != null) {
           cargoArtifacts = nextDeps;

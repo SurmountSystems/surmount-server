@@ -91,8 +91,10 @@ Product detail lives under `docs/`. This file is standing law only.
   switch and stays the explicit equivalent with no default
   target), hypervisor,
   Namecheap **hosted DNSSEC Status** click, or the operator using a TUI they asked to sit in.
-  Host-local enable is agent work when this machine already has
-  host-local. Using `just grok-oss` after the guest has the package is
+  Turning a switch on in the private overlay on horizon
+  (`~/.local/share/surmount/host-local/default.nix`) is agent work when
+  that file is already on this laptop. That directory is not a machine
+  name. The machines are horizon and surmount-1. Using `just grok-oss` after the guest has the package is
   the product, not a leftover click. If this laptop already has the
   Namecheap env files (mode 0600 regular files under
   `~/.local/share/surmount/`), `just laptop-renew-cert` is **agent work**.
@@ -371,6 +373,30 @@ in the same turn (standing rule + compaction reload table). One file is
 attention dilution. Chat-only is compaction loss. Nix needing an untracked
 file is still not a reason to stage.
 
+## Number parallel items, and name the machine (operator 2026-11-03)
+
+Operator 2026-11-03. Two rules.
+
+1. Number every parallel list in operator-facing chat, reports, and
+   leftover lists. Use 1, 2, 3. A bare stack of services is a miss.
+   Each number is a complete sentence when the item is a leftover or a
+   decision.
+2. Name the machine. **horizon** is this laptop. **surmount-1** is the
+   mail host and the allowed remote Nix builder. Do not say "host-local"
+   as if it were a hostname.
+
+The private Nix overlay that `just deploy` copies is a directory, not a
+machine. On horizon that directory is
+`~/.local/share/surmount/host-local/` and the entry file is
+`default.nix`. The recipe passes that directory as the `--host-local`
+flag and the target is `root@surmount-1`. After the copy, surmount-1
+has the same files at `/root/surmount-server/host-local/`. When a
+sentence needs that directory, name horizon or surmount-1 and the path
+in the same sentence. The flag name `--host-local` stays, because that
+is the deploy argument.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Deploy dry-run is agent work (operator 2026-09-02)
 
 Full command list: [docs/TEST-AND-DEPLOY.md](docs/TEST-AND-DEPLOY.md).
@@ -438,10 +464,14 @@ unless the operator asked for that slice.
 
 **surmount-1** is the allowed remote Nix builder (ssh-ng). Mail and
 builder work share that host. That is why niceness and a hard memory
-cap matter. **Lake is optional and default off** (`surmount.lake` in
+cap matter. The private overlay is the directory
+`~/.local/share/surmount/host-local/` on horizon, copied to
+`/root/surmount-server/host-local/` on surmount-1. That directory is
+not a hostname. See *Number parallel items, and name the machine*.
+**Lake is optional and default off** (`surmount.lake` in
 `modules/lake.nix`; operator 2026-08-25 supersedes the 2026-08-18
 "never a lake unit" line). Do **not** start Lake on the live guest
-from an agent. When that eval or host-local enables Lake, Lake is
+from an agent. When that eval or the private overlay on horizon enables Lake, Lake is
 nice 19 with idle I/O, `MemoryMax`-capped on `surmount-lake.service`,
 and journaled. Mail is nice -20. Do not set builder `Nice=19` on mail
 to deprioritize it.
@@ -459,7 +489,7 @@ are not realtime I/O. If a separate mail database unit exists, it is
 also nice -20. scram stays root and its start command still contains
 `--watch`. The HTTP management UI is nice -19. Arti is nice -18. An
 enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The Nix daemon is nice 19 with idle
-I/O. Lake, when that eval or host-local enables Lake, is nice 19 with
+I/O. Lake, when that eval or the private overlay on horizon enables Lake, is nice 19 with
 idle I/O. sshd stays un-niced (`Nice` unset). Do **not** set `Nice=`
 on sshd. Builds stay nice 19 with idle I/O. No realtime policy on
 product units. Do **not** globally starve mail by nicing the whole
@@ -483,8 +513,8 @@ cap (systemd `MemoryMax` / cgroup `memory.max`) plus the about-95-percent
 CPU/RAM/storage guards SHC asked for. Those 95 percent guards are a
 **total** ceiling, not "give the builder 95 percent of guest RAM."
 Mail and other critical services must **not** be starved. In-tree:
-`surmount.remoteBuilder` (default off) owns that cap for **ssh-ng /
-nixbuilder only**; enable from host-local. Trusted ssh-ng forwards
+`surmount.remoteBuilder` (default off in the public modules) owns that cap for **ssh-ng /
+nixbuilder only**; the private overlay on horizon turns it on for surmount-1. Trusted ssh-ng forwards
 rustc to **system `nix-daemon.service`**. `MemoryMax` and `Nice=19`
 must apply to **that** unit, not only `user-<uid>.slice`. A
 nixbuilder-only cap is a miss. Job slots (`maxJobs`, laptop machines
@@ -497,9 +527,9 @@ RAM size. Scaffold `maxJobs = 32` is half the measured mail-host CPUs
 builder OOM score, and Nice=19 are why this is no longer 8. Do not
 publish the raw CPU count. The builder is the preferred in-guest OOM
 victim (`OOMScoreAdjust`). Enable `surmount.hardening.qemuGuestAgent`
-from host-local so SHC can inject a command when SSH is stuck. Do **not**
+from the private overlay on horizon so SHC can inject a command when SSH is stuck. Do **not**
 start Lake from an agent. `surmount.lake.enable` stays false until
-host-local turns it on after this generation is live.
+the private overlay on horizon turns it on after this generation is live.
 
 Operator correction 2026-08-18: Nix is **misconfigured** if builds do
 not make maximally nice use of cores **without also OOMing the box**.

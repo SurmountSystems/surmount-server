@@ -32,6 +32,21 @@ A peer is collaborating. Agents must not compact this away as "noted."
 
 Standing copies: [../AGENTS.md](../AGENTS.md), [COMPACTION-PIN.md](COMPACTION-PIN.md).
 
+## What stays off, and the builder stays on (operator 2026-11-03)
+
+Operator answers while reviewing the service list. These override a
+public-module default when `just deploy` copies the private overlay
+from horizon onto surmount-1.
+
+1. surmount-1 stays a Nix builder and a Lean builder. `surmount-scram.service` stays. This repo does not pin Lean 4.35.
+2. Vaultwarden stays off. The operator is not using it yet.
+3. Splora mainnet stays off. The other Splora instances already enabled in the private overlay stay as they are.
+4. Host renewal on surmount-1 is on. HTTP-01 on surmount-1 refreshes the Let's Encrypt production certificate that host already presents. horizon does not have to stay online for that renewal. Namecheap API credentials stay off surmount-1. No Namecheap ClientIp change. Closing horizon does not stop surmount-1 from serving the PEMs already on disk.
+5. Restic backups stay off for now.
+6. fail2ban for sshd stays on. The management UI nftables ban helper stays off.
+7. Say horizon or surmount-1. The private overlay directory is not a machine name.
+8. `just deploy` keeps surmount-1 as the remote Nix builder. The private overlay on horizon already sets `surmount.remoteBuilder.enable = true`. The public module default of false applies only when that file is absent.
+
 ---
 
 ## 1. Host

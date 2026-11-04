@@ -90,12 +90,22 @@ in
             mkMerge [
               (mkIf on {
                 "splora-${name}" = {
-                  serviceConfig.Nice = 5;
+                  serviceConfig = {
+                    Nice = 5;
+                    SyslogIdentifier = "splora-${name}";
+                    LogRateLimitIntervalSec = "30s";
+                    LogRateLimitBurst = 50000;
+                  };
                 };
               })
               (mkIf (on && (inst.startLocalDaemon or false)) {
                 ${daemonName} = {
-                  serviceConfig.Nice = 5;
+                  serviceConfig = {
+                    Nice = 5;
+                    SyslogIdentifier = daemonName;
+                    LogRateLimitIntervalSec = "30s";
+                    LogRateLimitBurst = 50000;
+                  };
                 };
               })
             ]
@@ -103,27 +113,25 @@ in
         );
       })
     ]
-    ++ optionals hasSplora (
-      [
-        (mkIf (cfg.enable && idx.enable) {
-          services.splora.enable = true;
-          services.splora.instances = mkMerge (
-            map (name: {
-              ${name} = mkIf (idx.instanceName == name) {
-                enable = true;
-                network = idx.network;
-                daemonRpcAddr = idx.daemonRpcAddr;
-                cookieFile = idx.cookieFile;
-                daemonDir = idx.daemonDir;
-                jsonrpcImport = idx.jsonrpcImport;
-                publicHealth = idx.publicHealth;
-                dbBlockCacheMb = idx.dbBlockCacheMb;
-                extraArgs = idx.extraArgs;
-              };
-            }) allowedNames
-          );
-        })
-      ]
-    )
+    ++ optionals hasSplora ([
+      (mkIf (cfg.enable && idx.enable) {
+        services.splora.enable = true;
+        services.splora.instances = mkMerge (
+          map (name: {
+            ${name} = mkIf (idx.instanceName == name) {
+              enable = true;
+              network = idx.network;
+              daemonRpcAddr = idx.daemonRpcAddr;
+              cookieFile = idx.cookieFile;
+              daemonDir = idx.daemonDir;
+              jsonrpcImport = idx.jsonrpcImport;
+              publicHealth = idx.publicHealth;
+              dbBlockCacheMb = idx.dbBlockCacheMb;
+              extraArgs = idx.extraArgs;
+            };
+          }) allowedNames
+        );
+      })
+    ])
   );
 }

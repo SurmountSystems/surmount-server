@@ -110,8 +110,9 @@ Browser (admin, then v1 webmail)          Desktop / MUA (always OK)
                      +-- status / admin APIs ----> Stalwart :8080
 ```
 
-Stalwart webadmin (`/admin` on loopback, optional `/stalwart-admin/` via edge)
-is a **bootstrap fallback**, not the long-term Surmount UX.
+Stalwart webadmin (`/admin` on loopback only; the edge does not publish
+`/stalwart-admin/`) is a **bootstrap fallback**, not the long-term Surmount UX.
+Reach it with an SSH tunnel to the loopback listener.
 
 Legacy public sites: **static files only** at the edge. Not part of
 the Leptos app. Live apex/www serve the packaged
@@ -317,7 +318,7 @@ full Q-AUTH-1 still residual).
 - Auth foundation shipped (mode off default); full Q-AUTH-1 residual remains
 
 **Exit criteria:** day-to-day admin no longer requires Stalwart webadmin for
-common tasks; `/stalwart-admin/` can be disabled by default.
+common tasks. The public `/stalwart-admin/` path is not in the nginx escape.
 
 ### Operator console UX principles (living)
 

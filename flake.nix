@@ -439,6 +439,9 @@
           # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
           # bootstrap without a host just install.
           just = pkgs.just;
+          # Mutinynet-only bitcoind. Does not replace pkgs.bitcoind.
+          # testnet3 and testnet4 stay on the stock 32.1 package.
+          bitcoind-mutinynet = pkgs.callPackage ./nix/packages/bitcoind-mutinynet.nix { };
           # Ookla Speedtest CLI with --accept-license --accept-gdpr.
           # Unfree predicate is only ookla-speedtest. nix run .#speedtest
           speedtest =

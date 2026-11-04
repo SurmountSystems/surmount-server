@@ -59,17 +59,43 @@ in
           PermitRootLogin = mkDefault "prohibit-password";
           X11Forwarding = false;
           AllowAgentForwarding = mkDefault false;
+          # Empty passwords and user ~/.ssh/environment are not an option.
+          # When password auth is off, publickey is the only method so a
+          # later default cannot turn keyboard-interactive back on.
+          PermitEmptyPasswords = false;
+          PermitUserEnvironment = false;
+          # Default grace is 120 seconds of unauthenticated hold.
+          LoginGraceTime = 60;
+        }
+        // lib.optionalAttrs (!cfg.hardening.allowPasswordAuth) {
+          AuthenticationMethods = "publickey";
         };
       };
 
-      # fail2ban: light transitional sketch for sshd only.
-      # Target policy is merciless ban + whitelist + last-used (see header).
-      # Mail abuse: Stalwart spam-filter + greylisting first; not wild jails.
-      # Prefer shrinking this over growing Python jails as product identity.
+      # fail2ban: sshd jail only. Permanent ban after 3 failures.
+      # bantime "-1" is fail2ban's never-unban value. The option type is
+      # a string. iptables-multiport inserts a rule with no kernel
+      # timeout. Restore keeps bips rows whose bantime is -1.
+      # Mail abuse stays with Stalwart. Do not add jails here.
       services.fail2ban = {
         enable = mkDefault true;
-        maxretry = 5;
-        bantime = "1h";
+        maxretry = 3;
+        bantime = "-1";
+        # modules/networking.nix leaves networking.nftables.enable false,
+        # so the host firewall backend is iptables and this action is
+        # iptables-multiport (same package as networking.firewall).
+        # Native nftables blacklists ip_tables, so the action must
+        # switch or the ban never installs.
+        banaction =
+          if config.networking.nftables.enable then "nftables-multiport" else "iptables-multiport";
+        # SYSTEMD-JOURNAL is the native journal path. SYSLOG depends on
+        # /dev/log while journald ForwardToSyslog is no. INFO records
+        # ban, unban, and found lines. DEBUG is not set (it copies matched
+        # log lines). No mail jails.
+        daemonSettings.Definition = {
+          logtarget = "SYSTEMD-JOURNAL";
+          loglevel = "INFO";
+        };
         jails = {
           sshd = {
             settings = {
@@ -80,6 +106,12 @@ in
             };
           };
         };
+      };
+
+      systemd.services.fail2ban.serviceConfig = {
+        SyslogIdentifier = "fail2ban";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
       };
 
       # Kernel / network hygiene (small set; avoid surprising operators).
@@ -97,11 +129,23 @@ in
       # the unit stays dead. Want multi-user so SHC inject works on boot
       # and after this generation.
       systemd.services.qemu-guest-agent.wantedBy = [ "multi-user.target" ];
+      # Start and guest-exec lines stay in the journal. The option stays
+      # default off; this does not enable the agent.
+      systemd.services.qemu-guest-agent.serviceConfig = {
+        SyslogIdentifier = "qemu-guest-agent";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
+      };
     })
 
     # Access-control nft fragment: opt-in, lean private default off.
     (mkIf (cfg.enable && ac.enable && ac.nftSets) {
       networking.nftables.enable = true;
+      systemd.services.nftables.serviceConfig = {
+        SyslogIdentifier = "nftables";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
+      };
       networking.nftables.tables.${nftTable} = {
         family = "inet";
         content = ''
@@ -132,8 +176,8 @@ in
             ${
               if (cfg.logging.enable or false) then
                 ''
-                  ip saddr @${nftBan4} log prefix "surmount-nft-ban-drop: " drop
-                  ip6 saddr @${nftBan6} log prefix "surmount-nft-ban-drop: " drop
+                  ip saddr @${nftBan4} log prefix "surmount-nft-ban-drop: " level info drop
+                  ip6 saddr @${nftBan6} log prefix "surmount-nft-ban-drop: " level info drop
                 ''
               else
                 ''
@@ -304,6 +348,11 @@ in
             StandardInput = "socket";
             StandardOutput = "socket";
             StandardError = "journal";
+            # stderr is the helper log. stdout stays the socket (the
+            # protocol). Do not log nft payloads or set contents.
+            SyslogIdentifier = "surmount-nft-ban-helper";
+            LogRateLimitIntervalSec = "30s";
+            LogRateLimitBurst = 50000;
           };
         };
       }

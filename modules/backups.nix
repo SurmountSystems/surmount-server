@@ -36,5 +36,14 @@ in
         "--keep-monthly 6"
       ];
     };
+
+    # restic already prints snapshot success and failure. Name the unit
+    # and keep those lines when a backup overlaps a journal flood.
+    # passwordFile stays a path. Nothing here enables the backup set.
+    systemd.services.restic-backups-surmount.serviceConfig = {
+      SyslogIdentifier = "restic-backups-surmount";
+      LogRateLimitIntervalSec = "30s";
+      LogRateLimitBurst = 50000;
+    };
   };
 }

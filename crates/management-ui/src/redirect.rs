@@ -4,8 +4,8 @@
 //! `redirect_http_to_https` and `http_redirect_listen` are set (see main).
 //! Dual-run nginx (`web.enable`) must not also own :80; Nix asserts that mutex.
 //!
-//! ACME HTTP-01 on product :80 is parked (Q-EDGE / residual). This path only
-//! builds redirect targets and bind decisions.
+//! HTTP-01 token files are served by the :80 handler before this redirect.
+//! This module only builds redirect targets and bind decisions.
 
 use std::collections::BTreeMap;
 use std::fmt;

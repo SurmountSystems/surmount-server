@@ -41,21 +41,23 @@
 }:
 
 let
-  # Checked 2026-10-17: GitHub tag v0.16.26 (released 2026-10-11).
-  # v0.16.25 and v0.16.26 say an upgrade from 0.16.x replaces the binary.
-  # Those notes do not change the settings schema. UPGRADING/v0_16.md is
-  # the 0.15-and-below migration, which this pin already passed.
-  version = "0.16.26";
+  # Checked 2026-11-03: GitHub releases/latest is still v1.0.2
+  # (published 2026-11-02T15:42:44Z, not a prerelease). Asset names are
+  # unchanged. The gnu tarball still contains one binary named stalwart.
+  # The v1.0.2 notes replace Email.encryptAtRest with Encryption.atRestEnable
+  # and move encryptOnAppend onto the account. This file does not generate
+  # those settings. modules/stalwart-service.nix writes DataStore config.json only.
+  version = "1.0.2";
 
   # Release asset hashes (gnu libc). musl variants exist upstream if needed.
   sources = {
     x86_64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-7VCV//2Lat342EJMBqV0lIFycW4F9S85Td/vP8K9IhE=";
+      hash = "sha256-EL03XUVB4v+6/f1dl9iqGlwYhDj9hwD71vB27g/C8k8=";
     };
     aarch64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-uqWBIx97SlO/7pAPfhhrXPRgWHRVimKYPjiI0McPp8k=";
+      hash = "sha256-eYZKz9BV2PulLmNs3kghRTZpoMwiKXWmB9OSdAvo/a4=";
     };
   };
 

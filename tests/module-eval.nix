@@ -2470,6 +2470,106 @@ let
   # Null stays null. Int or string both print as the unit-file token.
   shownNice = n: if n == null then null else toString n;
 
+  # A missing key is a failed assert. Do not default the burst to a
+  # passing number: removing the line must fail this eval.
+  requireJournalBurst =
+    name: sc:
+    if
+      (sc ? LogRateLimitIntervalSec)
+      && sc.LogRateLimitIntervalSec == "30s"
+      && (sc ? LogRateLimitBurst)
+      && (toString sc.LogRateLimitBurst) == "50000"
+    then
+      true
+    else
+      throw "journal burst 30s/50000 missing on ${name}";
+
+  # RestrictAddressFamilies may be a list or one token.
+  addressFamiliesOf =
+    sc:
+    let
+      fams = sc.RestrictAddressFamilies or null;
+    in
+    if fams == null then
+      [ ]
+    else if builtins.isList fams then
+      fams
+    else
+      [ fams ];
+
+  requireAfUnix =
+    name: sc:
+    if builtins.elem "AF_UNIX" (addressFamiliesOf sc) then
+      true
+    else
+      throw "RestrictAddressFamilies missing AF_UNIX on ${name}";
+
+  # Missing key is a failed eval. Do not default a claimed flag to true.
+  requireSyslog =
+    name: ident: sc:
+    if (sc ? SyslogIdentifier) && sc.SyslogIdentifier == ident then
+      true
+    else
+      throw "SyslogIdentifier ${ident} missing on ${name}";
+
+  requireJournalStreams =
+    name: sc:
+    if
+      (sc ? StandardOutput)
+      && sc.StandardOutput == "journal"
+      && (sc ? StandardError)
+      && sc.StandardError == "journal"
+    then
+      true
+    else
+      throw "journal stdout and stderr missing on ${name}";
+
+  requireFlag =
+    name: key: sc:
+    if (sc ? ${key}) && sc.${key} == true then true else throw "${key} missing on ${name}";
+
+  requireEq =
+    name: key: expected: sc:
+    if (sc ? ${key}) && sc.${key} == expected then
+      true
+    else
+      throw "${key} on ${name} is not the claimed value";
+
+  requireFlags =
+    name: keys: sc:
+    builtins.all (key: requireFlag name key sc) keys;
+
+  requireAbsent =
+    name: key: sc:
+    if sc ? ${key} then throw "${key} must stay unset on ${name}" else true;
+
+  requireFamilies =
+    name: expected: sc:
+    let
+      got = addressFamiliesOf sc;
+    in
+    if got == expected then true else throw "RestrictAddressFamilies on ${name} is not the claimed set";
+
+  # nginx vhost text the dual-run escape actually builds. A location
+  # key, proxyPass, return, or extraConfig that names the old public
+  # admin path fails the eval.
+  nginxMentionsStalwartAdmin =
+    vhosts:
+    lib.any (
+      vh:
+      let
+        locs = vh.locations or { };
+      in
+      lib.any (n: lib.hasInfix "stalwart-admin" n) (builtins.attrNames locs)
+      || lib.any (
+        loc:
+        lib.hasInfix "stalwart-admin" (toString (loc.extraConfig or ""))
+        || lib.hasInfix "stalwart-admin" (toString (loc.proxyPass or ""))
+        || lib.hasInfix "stalwart-admin" (toString (loc.return or ""))
+      ) (builtins.attrValues locs)
+      || lib.hasInfix "stalwart-admin" (toString (vh.extraConfig or ""))
+    ) (builtins.attrValues vhosts);
+
   serviceCpuPolicy =
     e: name:
     let
@@ -2932,6 +3032,8 @@ let
     assert lib.hasInfix "RuntimeMaxUse=256M" blob;
     assert lib.hasInfix "RateLimitIntervalSec=30s" blob;
     assert lib.hasInfix "RateLimitBurst=50000" blob;
+    assert lib.hasInfix "MaxRetentionSec=30day" blob;
+    assert e.config.surmount.logging.maxRetentionSec == "30day";
     assert lib.hasInfix "ForwardToSyslog=no" blob;
     assert (e.config.services.openssh.settings.LogLevel or "") == "VERBOSE";
     "t42-journal-persistent-when-logging-on-ok";
@@ -3492,6 +3594,635 @@ let
     assert builtins.elem "nixos-test" (sysOf mail);
     "t62-gccarch-feature-ok";
 
+  # Mail sample (hosts/mail-vps/configuration.nix, no host-local).
+  # Asserts only units this sample instantiates. Default-off units stay
+  # off here; t64 through t69 turn those gates on in their own evals.
+  t63-mail-vps-security-logging =
+    let
+      e = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      journal = e.config.services.journald.extraConfig or "";
+      ssh = e.config.services.openssh.settings;
+      f2b = e.config.services.fail2ban.daemonSettings.Definition;
+      scram = scOf "surmount-scram";
+      sshdSc = scOf "sshd";
+      etSc = scOf "eternal-terminal";
+      mailEnv = e.config.systemd.services.stalwart-mail.environment or { };
+      stalwartRustLog = mailEnv.RUST_LOG or "";
+      uiEnvRaw = (scOf "surmount-management-ui").Environment;
+      uiEnvList = if builtins.isList uiEnvRaw then uiEnvRaw else [ uiEnvRaw ];
+      sshdNice = sshdSc.Nice or null;
+      etNice = etSc.Nice or null;
+      etMem = etSc.MemoryMax or null;
+      tcpForward = ssh.AllowTcpForwarding or null;
+      jailNames = builtins.attrNames e.config.services.fail2ban.jails;
+      scramFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "PrivateDevices"
+        "ProtectHome"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "ProtectKernelLogs"
+        "ProtectHostname"
+        "ProtectClock"
+        "ProtectControlGroups"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+        "RestrictSUIDSGID"
+      ];
+      # Sample host does not turn the indexer wrap on. A burst of 50000
+      # or our syslog identity on these names means the gate leaked.
+      sploraOffNames = [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+        "bitcoind-mainnet"
+        "bitcoind-testnet3"
+        "bitcoind-testnet4"
+        "bitcoind-mutinynet"
+        "elementsd-liquid"
+        "splora-queue"
+        "splora-popular-scripts"
+      ];
+      sploraGateOff =
+        name:
+        let
+          svc = e.config.systemd.services.${name} or null;
+          sc = if svc == null then { } else svc.serviceConfig or { };
+          burst = sc.LogRateLimitBurst or null;
+          ident = sc.SyslogIdentifier or null;
+          burstText = if burst == null then "" else toString burst;
+        in
+        burstText != "50000" && ident == null;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.web.enable == false;
+    assert e.config.services.nginx.enable == false;
+    assert e.config.surmount.logging.enable == true;
+    assert lib.hasInfix "MaxLevelStore=debug" journal;
+    assert !(lib.hasInfix "MaxLevelStore=trace" journal);
+    assert e.config.networking.firewall.logRefusedConnections == true;
+    assert (e.config.networking.firewall.logRefusedPackets or false) == false;
+    assert (e.config.networking.firewall.rejectPackets or false) == false;
+    assert requireJournalBurst "firewall" (scOf "firewall");
+    assert requireJournalBurst "stalwart-mail" (scOf "stalwart-mail");
+    assert requireJournalBurst "surmount-management-ui" (scOf "surmount-management-ui");
+    assert requireJournalBurst "surmount-scram" (scOf "surmount-scram");
+    assert requireJournalBurst "sshd" (scOf "sshd");
+    assert requireJournalBurst "fail2ban" (scOf "fail2ban");
+    assert requireJournalBurst "eternal-terminal" (scOf "eternal-terminal");
+    assert requireJournalBurst "nix-daemon" (scOf "nix-daemon");
+    assert requireSyslog "nix-daemon" "nix-daemon" (scOf "nix-daemon");
+    assert requireSyslog "firewall" "firewall" (scOf "firewall");
+    assert requireSyslog "stalwart-mail" "stalwart-mail" (scOf "stalwart-mail");
+    assert requireJournalStreams "stalwart-mail" (scOf "stalwart-mail");
+    assert requireSyslog "surmount-management-ui" "surmount-management-ui" (
+      scOf "surmount-management-ui"
+    );
+    assert requireJournalStreams "surmount-management-ui" (scOf "surmount-management-ui");
+    assert requireSyslog "surmount-scram" "surmount-scram" (scOf "surmount-scram");
+    assert requireJournalStreams "surmount-scram" (scOf "surmount-scram");
+    assert requireSyslog "fail2ban" "fail2ban" (scOf "fail2ban");
+    assert requireSyslog "eternal-terminal" "eternal-terminal" (scOf "eternal-terminal");
+    assert (scOf "surmount-scram").NoNewPrivileges == true;
+    assert (scOf "surmount-scram").ProtectSystem == "strict";
+    assert requireAfUnix "surmount-scram" (scOf "surmount-scram");
+    assert ssh.PermitEmptyPasswords == false;
+    assert ssh.PermitUserEnvironment == false;
+    assert (toString ssh.LoginGraceTime) == "60";
+    assert (ssh.LogLevel or "") == "VERBOSE";
+    assert (ssh.AuthenticationMethods or "") == "publickey";
+    assert f2b.logtarget == "SYSTEMD-JOURNAL";
+    assert f2b.loglevel == "INFO";
+    assert e.config.services.eternal-terminal.enable == true;
+    assert e.config.services.eternal-terminal.verbosity == 2;
+    assert e.config.services.eternal-terminal.silent == false;
+    assert requireFlags "surmount-scram" scramFlags scram;
+    assert requireEq "surmount-scram" "ProtectSystem" "strict" scram;
+    assert requireEq "surmount-scram" "SystemCallArchitectures" "native" scram;
+    assert requireEq "surmount-scram" "UMask" "0077" scram;
+    assert requireFamilies "surmount-scram" [ "AF_UNIX" ] scram;
+    assert requireAbsent "surmount-scram" "PrivateUsers" scram;
+    assert requireAbsent "surmount-scram" "ProcSubset" scram;
+    assert requireAbsent "surmount-scram" "ProtectProc" scram;
+    assert scram.User == "root";
+    assert stalwartRustLog == "info";
+    assert builtins.elem "RUST_LOG=info,surmount_management_ui=debug" uiEnvList;
+    assert !(builtins.any (line: lib.hasInfix "rustls=debug" (toString line)) uiEnvList);
+    assert e.config.surmount.managementUi.authMode == "off";
+    assert e.config.surmount.managementUi.listenMode == "http";
+    assert e.config.surmount.managementUi.listenAddress == "127.0.0.1";
+    assert e.config.surmount.managementUi.acme.enable == false;
+    assert e.config.networking.firewall.enable == true;
+    assert sshdNice == null;
+    assert etNice == null;
+    assert etMem == null;
+    assert tcpForward != "no";
+    assert tcpForward != false;
+    assert builtins.elem "sshd" jailNames;
+    assert builtins.all (n: !(lib.hasInfix "mail" (lib.toLower n))) jailNames;
+    # Gates this sample does not turn on.
+    assert e.config.surmount.vaultwarden.enable == false;
+    assert e.config.surmount.lake.enable == false;
+    assert e.config.surmount.artiHiddenService.enable == false;
+    assert e.config.surmount.secrets.requireDeployMaterial == false;
+    assert e.config.surmount.hardening.qemuGuestAgent.enable == false;
+    assert e.config.surmount.accessControl.enable == false;
+    assert e.config.surmount.backups.enable == false;
+    assert e.config.surmount.speedtest.enable == true;
+    assert e.config.surmount.speedtest.periodic.enable == false;
+    assert (e.config.services.splora.enable or false) == false;
+    assert !(e.config.networking.nftables.tables ? surmount_guard);
+    assert !(e.config.systemd.services ? surmount-speedtest);
+    assert !(e.config.systemd.timers ? surmount-speedtest);
+    assert !(e.config.systemd.services ? surmount-deploy-secrets-check);
+    assert !(e.config.systemd.services ? surmount-lake);
+    assert !(e.config.systemd.services ? surmount-arti-scaffold-status);
+    assert !(e.config.systemd.services ? surmount-arti-hidden-service);
+    assert !(e.config.systemd.services ? "surmount-nft-ban-helper@");
+    assert !(e.config.systemd.sockets ? surmount-nft-ban-helper);
+    assert !(e.config.systemd.services ? restic-backups-surmount);
+    assert !(e.config.systemd.timers ? restic-backups-surmount);
+    assert builtins.all sploraGateOff sploraOffNames;
+    "t63-mail-vps-security-logging-ok";
+
+  # Dual-run escape only. The mail sample keeps web.enable false (t63).
+  t64-nginx-no-public-stalwart-admin =
+    let
+      e = evalSurmount {
+        web.enable = true;
+        managementUi.enable = true;
+        managementUi.listenMode = "http";
+        managementUi.listenAddress = "127.0.0.1";
+        managementUi.port = 8090;
+      };
+      vhosts = e.config.services.nginx.virtualHosts;
+      servicesVhost = vhosts."services.surmount.systems" or { };
+      acmeCertNames = [
+        "services.surmount.systems"
+        "mail.surmount.systems"
+        "surmount.systems"
+        "www.surmount.systems"
+      ];
+      acmeUnit = prefix: cert: "acme-${prefix}${cert}";
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      acmeSyslog =
+        cert: prefix:
+        let
+          name = acmeUnit prefix cert;
+        in
+        requireSyslog name name (scOf name);
+      # The renew timer has no exec log. A rate limit on it is a fake log level.
+      renewTimerOk =
+        cert:
+        let
+          timerName = "acme-renew-${cert}";
+          timer = e.config.systemd.timers.${timerName} or null;
+          tc = if timer == null then { } else timer.timerConfig or { };
+          burst = tc.LogRateLimitBurst or null;
+          interval = tc.LogRateLimitIntervalSec or null;
+        in
+        if timer == null then
+          throw "acme renew timer ${timerName} missing"
+        else if burst != null || interval != null then
+          throw "acme renew timer ${timerName} has a log rate limit"
+        else
+          true;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.web.enable == true;
+    assert e.config.services.nginx.enable == true;
+    assert e.config.surmount.managementUi.acme.enable == false;
+    assert e.config.services.nginx.logError == "stderr notice";
+    assert servicesVhost.locations ? "/";
+    assert !(nginxMentionsStalwartAdmin vhosts);
+    assert requireJournalBurst "nginx" (scOf "nginx");
+    assert requireSyslog "nginx" "nginx" (scOf "nginx");
+    assert builtins.all (
+      cert: requireJournalBurst (acmeUnit "" cert) (scOf (acmeUnit "" cert))
+    ) acmeCertNames;
+    assert builtins.all (
+      cert: requireJournalBurst (acmeUnit "order-renew-" cert) (scOf (acmeUnit "order-renew-" cert))
+    ) acmeCertNames;
+    assert builtins.all (cert: acmeSyslog cert "") acmeCertNames;
+    assert builtins.all (cert: acmeSyslog cert "order-renew-") acmeCertNames;
+    assert builtins.all renewTimerOk acmeCertNames;
+    "t64-nginx-no-public-stalwart-admin-ok";
+
+  # Default-off gates, each turned on only inside this eval.
+  t65-gated-off-units-journal-burst =
+    let
+      e = evalSurmount {
+        hardening.enable = true;
+        hardening.qemuGuestAgent.enable = true;
+        secrets.requireDeployMaterial = true;
+        secrets.requiredHostPaths = [
+          {
+            path = "/run/surmount-secrets/tls/cert.pem";
+            kind = "file";
+          }
+        ];
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        backups.enable = true;
+        backups.repository = "s3:s3.example/surmount-mail";
+        backups.passwordFile = "/run/surmount-secrets/backups/restic-password";
+        lake.enable = true;
+        lake.package = pkgs.writeShellScriptBin "lake" "exit 0";
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+      };
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+      speedtestTimer = e.config.systemd.timers.surmount-speedtest.timerConfig;
+      artiDaemon = e.config.systemd.services.surmount-arti-hidden-service or null;
+      # `or` must end the binding. Nix parses `attr or default == value` as `attr or (default == value)` even inside parentheses.
+      daemonOn = if artiDaemon == null then false else artiDaemon.enable or false;
+      vaultwardenLogLevel = e.config.services.vaultwarden.config.LOG_LEVEL or "";
+      vaultwardenExtended = e.config.services.vaultwarden.config.EXTENDED_LOGGING or false;
+      vwLogFile = e.config.services.vaultwarden.config.LOG_FILE or "";
+      secretsSc = scOf "surmount-deploy-secrets-check";
+      secretsUser = secretsSc.User or "root";
+      secretsHome = secretsSc.ProtectHome or false;
+      speedSc = scOf "surmount-speedtest";
+      speedTimerBurst = speedtestTimer.LogRateLimitBurst or null;
+      scaffoldSc = scOf "surmount-arti-scaffold-status";
+      secretsFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "ProtectControlGroups"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+      ];
+      speedFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "ProtectHome"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "ProtectControlGroups"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+      ];
+      scaffoldFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "ProtectHome"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+      ];
+    in
+    assert failedAssertions e == [ ];
+    assert requireJournalBurst "surmount-deploy-secrets-check" secretsSc;
+    assert secretsSc.NoNewPrivileges == true;
+    assert secretsSc.ProtectSystem == "strict";
+    assert ((scOf "surmount-deploy-secrets-check").ProtectHome or false) == false;
+    assert secretsHome == false;
+    assert secretsUser == "root";
+    assert requireAfUnix "surmount-deploy-secrets-check" secretsSc;
+    assert requireFlags "surmount-deploy-secrets-check" secretsFlags secretsSc;
+    assert requireEq "surmount-deploy-secrets-check" "ProtectSystem" "strict" secretsSc;
+    assert requireEq "surmount-deploy-secrets-check" "SystemCallArchitectures" "native" secretsSc;
+    assert requireFamilies "surmount-deploy-secrets-check" [ "AF_UNIX" ] secretsSc;
+    assert requireSyslog "surmount-deploy-secrets-check" "surmount-deploy-secrets-check" secretsSc;
+    assert requireJournalStreams "surmount-deploy-secrets-check" secretsSc;
+    assert requireJournalBurst "surmount-speedtest" speedSc;
+    assert speedSc.NoNewPrivileges == true;
+    assert speedSc.ProtectSystem == "strict";
+    assert speedSc.DynamicUser == true;
+    assert requireAfUnix "surmount-speedtest" speedSc;
+    assert requireFlags "surmount-speedtest" speedFlags speedSc;
+    assert requireEq "surmount-speedtest" "ProtectSystem" "strict" speedSc;
+    assert requireEq "surmount-speedtest" "SystemCallArchitectures" "native" speedSc;
+    assert requireFamilies "surmount-speedtest" [
+      "AF_INET"
+      "AF_INET6"
+      "AF_UNIX"
+    ] speedSc;
+    assert requireSyslog "surmount-speedtest" "surmount-speedtest" speedSc;
+    assert requireJournalStreams "surmount-speedtest" speedSc;
+    assert speedtestTimer.Unit == "surmount-speedtest.service";
+    assert speedTimerBurst == null;
+    assert requireJournalBurst "qemu-guest-agent" (scOf "qemu-guest-agent");
+    assert requireSyslog "qemu-guest-agent" "qemu-guest-agent" (scOf "qemu-guest-agent");
+    assert builtins.elem "multi-user.target" (
+      e.config.systemd.services.qemu-guest-agent.wantedBy or [ ]
+    );
+    assert requireJournalBurst "vaultwarden" (scOf "vaultwarden");
+    assert requireSyslog "vaultwarden" "vaultwarden" (scOf "vaultwarden");
+    assert requireJournalStreams "vaultwarden" (scOf "vaultwarden");
+    assert vaultwardenLogLevel == "info";
+    assert vaultwardenExtended == true;
+    assert vwLogFile == "" || vwLogFile == null;
+    assert requireJournalBurst "restic-backups-surmount" (scOf "restic-backups-surmount");
+    assert requireSyslog "restic-backups-surmount" "restic-backups-surmount" (
+      scOf "restic-backups-surmount"
+    );
+    assert e.config.systemd.timers ? restic-backups-surmount;
+    assert requireJournalBurst "surmount-lake" (scOf "surmount-lake");
+    assert requireSyslog "surmount-lake" "surmount-lake" (scOf "surmount-lake");
+    assert requireJournalStreams "surmount-lake" (scOf "surmount-lake");
+    assert e.config.systemd.services ? surmount-arti-scaffold-status;
+    assert daemonOn == false;
+    assert requireJournalBurst "surmount-arti-scaffold-status" scaffoldSc;
+    assert scaffoldSc.NoNewPrivileges == true;
+    assert scaffoldSc.ProtectSystem == "strict";
+    assert scaffoldSc.DynamicUser == true;
+    assert requireAfUnix "surmount-arti-scaffold-status" scaffoldSc;
+    assert requireFlags "surmount-arti-scaffold-status" scaffoldFlags scaffoldSc;
+    assert requireEq "surmount-arti-scaffold-status" "ProtectSystem" "strict" scaffoldSc;
+    assert requireEq "surmount-arti-scaffold-status" "SystemCallArchitectures" "native" scaffoldSc;
+    assert requireFamilies "surmount-arti-scaffold-status" [ "AF_UNIX" ] scaffoldSc;
+    assert requireSyslog "surmount-arti-scaffold-status" "surmount-arti-scaffold-status" scaffoldSc;
+    assert requireJournalStreams "surmount-arti-scaffold-status" scaffoldSc;
+    assert lib.hasInfix "console = \"debug\"" toml;
+    assert lib.hasInfix "log_sensitive_information = false" toml;
+    assert !(lib.hasInfix "console = \"trace\"" toml);
+    "t65-gated-off-units-journal-burst-ok";
+
+  # Daemon unit exists only when startDaemon is true. Scaffold is t65.
+  t66-arti-daemon-journal-burst =
+    let
+      e = evalSurmount {
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = true;
+        artiHiddenService.packageIsOnionServiceCapable = true;
+      };
+      sc = e.config.systemd.services.surmount-arti-hidden-service.serviceConfig;
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+    in
+    assert failedAssertions e == [ ];
+    assert
+      !(e.config.systemd.services ? surmount-arti-scaffold-status)
+      || e.config.systemd.services.surmount-arti-scaffold-status.enable == false
+      || e.config.systemd.services.surmount-arti-scaffold-status.wantedBy == [ ];
+    assert requireJournalBurst "surmount-arti-hidden-service" sc;
+    assert requireSyslog "surmount-arti-hidden-service" "surmount-arti-hidden-service" sc;
+    assert requireJournalStreams "surmount-arti-hidden-service" sc;
+    assert sc.NoNewPrivileges == true;
+    assert sc.ProtectSystem == "strict";
+    assert (!(sc ? MemoryDenyWriteExecute)) || sc.MemoryDenyWriteExecute == false;
+    assert requireAfUnix "surmount-arti-hidden-service" sc;
+    assert lib.hasInfix "console = \"debug\"" toml;
+    assert lib.hasInfix "log_sensitive_information = false" toml;
+    assert !(lib.hasInfix "console = \"trace\"" toml);
+    "t66-arti-daemon-journal-burst-ok";
+
+  # nft helper and the ban table stay off unless accessControl is on.
+  t67-nft-journal-and-helper-burst =
+    let
+      e = evalSurmount {
+        accessControl.enable = true;
+        accessControl.nftHelper = true;
+        accessControl.nftSets = true;
+        accessControl.nftBin = "/run/current-system/sw/bin/nft";
+        accessControl.nftHelperBin = "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-helper/bin/surmount-nft-ban-helper";
+        accessControl.backend = "nft";
+        accessControl.enforcement = "enforce";
+        managementUi.enable = true;
+        managementUi.listenMode = "http";
+      };
+      content = e.config.networking.nftables.tables.surmount_guard.content;
+      helper = e.config.systemd.services."surmount-nft-ban-helper@".serviceConfig;
+      nft = e.config.systemd.services.nftables.serviceConfig;
+      sock = e.config.systemd.sockets.surmount-nft-ban-helper.socketConfig;
+      capList =
+        caps: if builtins.isList caps then map toString caps else lib.splitString " " (toString caps);
+      helperAmbient = capList helper.AmbientCapabilities;
+      helperBound = capList helper.CapabilityBoundingSet;
+    in
+    assert failedAssertions e == [ ];
+    assert requireJournalBurst "nftables" nft;
+    assert requireSyslog "nftables" "nftables" nft;
+    assert requireJournalBurst "surmount-nft-ban-helper@" helper;
+    assert requireSyslog "surmount-nft-ban-helper@" "surmount-nft-ban-helper" helper;
+    assert helper.StandardOutput == "socket";
+    assert helper.StandardError == "journal";
+    assert helper.NoNewPrivileges == true;
+    assert helper.ProtectSystem == "strict";
+    assert requireAfUnix "surmount-nft-ban-helper@" helper;
+    assert
+      helperAmbient == [
+        "CAP_NET_ADMIN"
+        "CAP_NET_RAW"
+      ];
+    assert
+      helperBound == [
+        "CAP_NET_ADMIN"
+        "CAP_NET_RAW"
+      ];
+    assert sock.SocketMode == "0660";
+    assert sock.SocketUser == "root";
+    assert sock.SocketGroup == "surmount-ui";
+    assert lib.hasInfix "level info" content;
+    assert lib.hasInfix "surmount-nft-ban-drop:" content;
+    "t67-nft-journal-and-helper-burst-ok";
+
+  # Indexer and daemon bursts apply only when those instances are on.
+  # This eval turns the service on. The mail sample does not (t63).
+  t68-splora-on-journal-burst =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          {
+            services.splora.enable = true;
+          }
+        ];
+      };
+      requiredIndexerUnits = [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+        "bitcoind-mainnet"
+        "bitcoind-testnet3"
+        "bitcoind-testnet4"
+        "bitcoind-mutinynet"
+        "elementsd-liquid"
+      ];
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraProxy.unitsMemoryMax == null;
+    assert builtins.all (
+      name:
+      builtins.hasAttr name e.config.systemd.services
+      && requireJournalBurst name (scOf name)
+      && requireSyslog name name (scOf name)
+    ) requiredIndexerUnits;
+    "t68-splora-on-journal-burst-ok";
+
+  # Memory-cap overlay burst. Queue-only so the five indexers are not
+  # started. popular-scripts stays on its own enable inside that overlay.
+  t69-splora-memory-cap-journal-burst =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.unitsMemoryMax = "2G";
+        __extraModules = [ sploraQueueOnlyExtra ];
+      };
+      capped = [
+        "splora-queue"
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+      ];
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      queueEnable = e.config.services.splora.queueEnable or false;
+      popSvc = e.config.systemd.services.splora-popular-scripts or null;
+      popSc = if popSvc == null then { } else popSvc.serviceConfig or { };
+      popBurst = popSc.LogRateLimitBurst or null;
+      popBurstText = if popBurst == null then "" else toString popBurst;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraProxy.unitsMemoryMax == "2G";
+    assert queueEnable == true;
+    assert (e.config.services.splora.popularScripts.enable or false) == false;
+    assert popBurstText != "50000";
+    assert
+      !(e.config.systemd.services ? splora-popular-scripts)
+      || ((scOf "splora-popular-scripts").MemoryMax or null) == null;
+    assert builtins.all (
+      name:
+      builtins.hasAttr name e.config.systemd.services
+      && (scOf name).MemoryMax == "2G"
+      && requireJournalBurst name (scOf name)
+    ) capped;
+    "t69-splora-memory-cap-journal-burst-ok";
+
+  # Example units. Not installed by the mail-host module eval.
+  t70-laptop-renew-example-journal =
+    let
+      svc = builtins.readFile ../script/laptop-renew/surmount-laptop-renew-cert.service;
+      timer = builtins.readFile ../script/laptop-renew/surmount-laptop-renew-cert.timer;
+    in
+    assert lib.hasInfix "StandardOutput=journal" svc;
+    assert lib.hasInfix "StandardError=journal" svc;
+    assert lib.hasInfix "SyslogIdentifier=surmount-laptop-renew-cert" svc;
+    assert lib.hasInfix "Unit=surmount-laptop-renew-cert.service" timer;
+    "t70-laptop-renew-example-journal-ok";
+
+  # logFile null keeps DynamicUser (t65). A set path is root, and a home
+  # path fails the eval.
+  t65b-speedtest-logfile-not-under-home =
+    let
+      badHome = failedAssertions (evalSurmount {
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        speedtest.periodic.logFile = "/home/operator/speedtest.json";
+      });
+      badRoot = failedAssertions (evalSurmount {
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        speedtest.periodic.logFile = "/root/speedtest.json";
+      });
+      e = evalSurmount {
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        speedtest.periodic.logFile = "/var/log/surmount/speedtest.json";
+      };
+      sc = e.config.systemd.services.surmount-speedtest.serviceConfig;
+      dynamic = sc.DynamicUser or false;
+    in
+    assert badHome != [ ];
+    assert builtins.any (a: lib.hasInfix "logFile" a.message) badHome;
+    assert badRoot != [ ];
+    assert builtins.any (a: lib.hasInfix "logFile" a.message) badRoot;
+    assert failedAssertions e == [ ];
+    assert sc.User == "root";
+    assert dynamic == false;
+    assert requireJournalBurst "surmount-speedtest" sc;
+    assert requireSyslog "surmount-speedtest" "surmount-speedtest" sc;
+    assert requireJournalStreams "surmount-speedtest" sc;
+    "t65b-speedtest-logfile-not-under-home-ok";
+
+  # Queue burst is only when queueEnable is true. Indexers still take the cap.
+  t69b-splora-queue-off-no-burst =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.unitsMemoryMax = "2G";
+        __extraModules = [
+          sploraQueueOnlyExtra
+          {
+            services.splora.queueEnable = false;
+          }
+        ];
+      };
+      svc = e.config.systemd.services.splora-queue or null;
+      sc = if svc == null then { } else svc.serviceConfig or { };
+      burst = sc.LogRateLimitBurst or null;
+      burstText = if burst == null then "" else toString burst;
+      main = e.config.systemd.services.splora-mainnet.serviceConfig;
+    in
+    assert failedAssertions e == [ ];
+    assert burstText != "50000";
+    assert main.MemoryMax == "2G";
+    assert requireJournalBurst "splora-mainnet" main;
+    "t69b-splora-queue-off-no-burst-ok";
+
+  # popular-scripts burst is only when that enable and the memory cap are set.
+  t71-splora-popular-scripts-journal-burst =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.unitsMemoryMax = "2G";
+        sploraIndexer = sploraRemoteRpc;
+        __extraModules = [
+          {
+            services.splora.popularScripts.enable = true;
+            services.splora.popularScripts.instance = "mainnet";
+          }
+        ];
+      };
+      sc = e.config.systemd.services.splora-popular-scripts.serviceConfig;
+      enabled = e.config.services.splora.popularScripts.enable or false;
+    in
+    assert failedAssertions e == [ ];
+    assert enabled == true;
+    assert sc.MemoryMax == "2G";
+    assert requireJournalBurst "splora-popular-scripts" sc;
+    "t71-splora-popular-scripts-journal-burst-ok";
+
+  # nix-daemon identifier and burst when logging is off and the builder is on.
+  # The mail sample (t63) covers logging on with the builder off.
+  t72-nix-daemon-journal-when-builder-on =
+    let
+      e = evalSurmount {
+        logging.enable = false;
+        remoteBuilder.enable = true;
+      };
+      sc = e.config.systemd.services.nix-daemon.serviceConfig;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.logging.enable == false;
+    assert e.config.surmount.remoteBuilder.enable == true;
+    assert requireSyslog "nix-daemon" "nix-daemon" sc;
+    assert requireJournalBurst "nix-daemon" sc;
+    "t72-nix-daemon-journal-when-builder-on-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -3615,6 +4346,18 @@ let
     t62-mail-host-cpu-v3
     t62-gccarch-feature
     t43-scram-watch-highest-priority
+    t63-mail-vps-security-logging
+    t64-nginx-no-public-stalwart-admin
+    t65-gated-off-units-journal-burst
+    t65b-speedtest-logfile-not-under-home
+    t66-arti-daemon-journal-burst
+    t67-nft-journal-and-helper-burst
+    t68-splora-on-journal-burst
+    t69-splora-memory-cap-journal-burst
+    t69b-splora-queue-off-no-burst
+    t70-laptop-renew-example-journal
+    t71-splora-popular-scripts-journal-burst
+    t72-nix-daemon-journal-when-builder-on
   ];
 in
 {

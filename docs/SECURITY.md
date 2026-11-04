@@ -328,14 +328,14 @@ Q-AUTH-1 still open. Report: `.agents/reports/impl-auth-live-b4-switch.md`.
   OIDC provider/client. That is **not** the same as Nostr.
 - **Does not** natively verify Nostr npub signatures unless we build a bridge.
 
-### Mailbox password hashing (Stalwart 0.16.24)
+### Mailbox password hashing
 
 The management UI does **not** hash mailbox passwords in the browser or in
 Axum. `POST /api/v1/accounts/password` sends the plaintext secret only over
 the already-authenticated operator session to loopback Stalwart
 (`x:Account/set` `credentials.0` `@type Password`). The engine hashes.
 
-Stalwart 0.16.24 (this repo pin in `nix/packages/stalwart-mail.nix`) uses
+Stalwart tag v0.16.24 (source re-checked 2026-10-03; the living pin in `nix/packages/stalwart-mail.nix` is **1.0.2** as of 2026-11-03) uses
 `Authentication.passwordHashAlgorithm`. The enum default is **Argon2id**.
 Source (tag `v0.16.24`, re-checked 2026-10-03):
 

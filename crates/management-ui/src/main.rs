@@ -21,10 +21,11 @@
 //!   for local reverse-proxies (Arti HS lean path) when primary is https
 //! - In-memory fixed-window rate limit; trusted client IP when peer is loopback
 //! - Ban decision layer (whitelist last-used, optional enforce/dry-run; default off)
-//! - Optional in-process ACME (DNS-01; default off). HTTP-01 on product :80 parked.
+//! - Optional in-process ACME (DNS-01; default off). HTTP-01 challenge files
+//!   are served from `SURMOUNT_ACME_HTTP01_WEBROOT` when that challenge is on.
 //!
 //! Stalwart remains the mail engine. Auth: Nostr foundation (mode off by default).
-//! ACME HTTP-01 on product :80 is parked (see RESIDUAL.md).
+//! Enduring Let's Encrypt renewal is the surmount-1 `surmount-cert-renew` timer.
 
 mod acme;
 mod apex_static;
@@ -64,7 +65,7 @@ use crate::apex_static::{
     apex_static_file, document_root_is_ready, public_site_csp, serve_apex_static_file,
 };
 use crate::client_ip::client_ip_for_rate_limit;
-use crate::config::AppConfig;
+use crate::config::{AcmeRenewSettings, AppConfig};
 use crate::directory::Directory;
 use crate::mta_sts::{mta_sts_policy_body, should_serve_mta_sts_policy};
 use crate::redirect::{
@@ -125,6 +126,37 @@ async fn main() -> anyhow::Result<()> {
     // crates can leave no automatic default; ACME's ClientConfig::builder()
     // and other rustls consumers panic without this. Already-installed is OK.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Host timer: `surmount-management-ui acme-renew`. Issues HTTP-01 and
+    // writes the PEM paths, then exits. Does not bind :80 or :443. The
+    // already-running process serves the challenge files.
+    //
+    // This branch is before AppConfig::from_env. That parse refuses nostr
+    // mode without the session secret. acme-renew is not an HTTP route and
+    // loads ACME and TLS settings only.
+    if std::env::args().nth(1).as_deref() == Some("acme-renew") {
+        if std::env::args().len() != 2 {
+            bail!("acme-renew takes no extra arguments");
+        }
+        let settings = AcmeRenewSettings::from_env()
+            .map_err(anyhow::Error::msg)
+            .context(
+                "acme-renew loads ACME and TLS settings only (no session secret; fail-closed)",
+            )?;
+        match crate::acme::renew_http01_if_due(&settings.tls, &settings.acme)
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("HTTP-01 renew (fail-closed; no Namecheap)")?
+        {
+            crate::acme::Http01RenewOutcome::NotDue => {
+                info!("HTTP-01 renew not due; existing PEMs still usable");
+            }
+            crate::acme::Http01RenewOutcome::WrotePems => {
+                info!("HTTP-01 renew wrote the TLS cert and key this host presents");
+            }
+        }
+        return Ok(());
+    }
 
     let config = AppConfig::from_env().map_err(anyhow::Error::msg)?;
     config
@@ -1600,6 +1632,17 @@ async fn http_redirect_handler(State(state): State<Arc<AppState>>, request: Requ
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/");
+    // HTTP-01 token, before the HTTPS redirect. Let's Encrypt fetches this
+    // on port 80. Other paths still redirect.
+    if let Some(body) = crate::acme::read_http01_challenge_file(&state.config.acme, path_and_query)
+    {
+        return (
+            StatusCode::OK,
+            [("content-type", "text/plain; charset=utf-8")],
+            body,
+        )
+            .into_response();
+    }
     let https_port = https_port_for_redirect(state.config.listen.port());
     match http_upgrade_location(
         true,
@@ -1631,6 +1674,16 @@ async fn apex_public_host_middleware(
     let primary = state.config.primary_domain.as_str();
     let services = state.config.services_hostname.as_str();
     let path_only = path.split('?').next().unwrap_or(path);
+
+    // HTTP-01 on the HTTPS listener too, in case a client followed the :80 redirect.
+    if let Some(body) = crate::acme::read_http01_challenge_file(&state.config.acme, path_only) {
+        return (
+            StatusCode::OK,
+            [("content-type", "text/plain; charset=utf-8")],
+            body,
+        )
+            .into_response();
+    }
 
     // Router::layer runs after routing. Onion Host rewrite sets the mapped
     // clearnet Host; serve MTA-STS here when that Host is the policy name.

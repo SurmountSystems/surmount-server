@@ -64,7 +64,7 @@ package bumps in this repo.
 | `nix/packages/surmount-mail-import.nix` | Maildir++ import via Vandelay (crane). `nix run .#surmount-mail-import-maildir`. |
 | `nix/packages/surmount-secrets-install.nix` | Domain A to Domain B install + Vaultwarden export-to-staging (crane). `nix run .#secrets-install-host` / `.#secrets-export-bw-to-staging`. |
 | `nix/packages/surmount-secrets-prompt.nix` | Domain A no-echo intake (crane). `nix run .#surmount-secrets-prompt`. `just secrets-prompt`. |
-| `nix/packages/surmount-rekey.nix` | SHC backup re-key paste (age crate + gpg wrap). `nix run .#surmount-rekey`. `just rekey`. Prints `age1...` for type PGP. Never prints the age secret. |
+| `nix/packages/surmount-rekey.nix` | SHC backup re-key paste (X25519 age identity + gpg wrap, not the age crate). `nix run .#surmount-rekey`. `just rekey`. Prints `age1...` for type PGP. Never prints the age secret. |
 | `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary) |
 | `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |

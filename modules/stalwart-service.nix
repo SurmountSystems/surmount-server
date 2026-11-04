@@ -279,6 +279,10 @@ in
         SyslogIdentifier = "stalwart-mail";
         StandardOutput = "journal";
         StandardError = "journal";
+        # RUST_LOG stays info (no message bodies). Raise the per-unit
+        # burst so auth and SMTP info lines are not dropped at 10000/30s.
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
         LoadCredential = lib.mapAttrsToList (key: value: "${key}:${value}") cfg.credentials;
 
         ReadWritePaths = [ cfg.dataDir ];

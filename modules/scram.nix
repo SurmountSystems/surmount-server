@@ -29,8 +29,38 @@ in
         # CPUSchedulingPolicy to fifo or rr, and do not set realtime I/O.
         Nice = -20;
         OOMScoreAdjust = -1000;
-        # Watchdog must be able to kill other uids.
+        # Watchdog must be able to kill other uids. Do not set PrivateUsers,
+        # ProcSubset, or ProtectProc: those hide other processes or block
+        # cross-uid SIGKILL. /proc/meminfo and systemctl kill stay available.
         User = "root";
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        PrivateDevices = true;
+        ProtectHome = true;
+        ProtectSystem = "strict";
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectKernelLogs = true;
+        ProtectHostname = true;
+        ProtectClock = true;
+        ProtectControlGroups = true;
+        RestrictNamespaces = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        SystemCallArchitectures = "native";
+        # systemctl kill talks to the private socket. libc kill needs no socket.
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        UMask = "0077";
+        # stderr plan and kill lines (no secret values). Default per-unit
+        # burst is 10000/30s; match the journal cap so a flood does not
+        # drop the first kill line.
+        SyslogIdentifier = "surmount-scram";
+        StandardOutput = "journal";
+        StandardError = "journal";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
       };
     };
 

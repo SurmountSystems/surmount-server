@@ -111,11 +111,9 @@ sha2 = "0.11"
 base64 = "0.23"
 # CSRF tokens + CSP nonces (already in lock via other crates; direct dep for auth).
 getrandom = "0.4"
-# rage CLI is built on this library (age-encryption.org). Used by just rekey.
-# 0.12.1+ pulls i18n-embed-fl 0.10.1, which uses proc-macro-error3.
-# RUSTSEC-2026-0173 is proc-macro-error2, which is not in this lock.
-# Identity::generate / to_public / to_string stay.
-age = { version = "0.12", default-features = false }
+# surmount-rekey mints X25519 age identity strings itself (x25519-dalek +
+# bech32 0.11). Do not depend on the age crate: 0.12.1 always pulls hpke
+# and p256, and that edge requires crypto-bigint 0.5 (RUSTSEC-2026-0387).
 
 # menhera 10d lists chacha20 0.10.2 and faster-hex 0.10.1 (checked
 # 2026-10-17). Those git lines are gone. crates-io is still replaced by
@@ -143,17 +141,14 @@ age = { version = "0.12", default-features = false }
 # https://rustsec.org/advisories/RUSTSEC-2026-0383 (accessed: 2026-10-24).
 # When menhera 10d lists 1.0.10 or later, drop this webpki-root-certs line.
 #
-# i18n-config 0.4.8 on crates.io / menhera still depends on basic-toml
-# (RUSTSEC-2026-0374, unmaintained, no patched versions). git master
-# 2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4 is still version 0.4.8 and
-# uses the toml crate. Do not ignore RUSTSEC-2026-0374.
+# i18n-config left with age. age 0.12.1 was the only crate that pulled
+# i18n-embed, and that edge required crypto-bigint 0.5. Do not re-add the
+# i18n-config git patch unless a crate depends on i18n-config again.
+# basic-toml (RUSTSEC-2026-0374) was only reached through that edge.
 # https://rustsec.org/advisories/RUSTSEC-2026-0374 (accessed: 2026-10-24).
-# When a crates.io i18n-config without basic-toml is on menhera 10d,
-# drop this i18n-config line.
 [patch.crates-io]
 rustls = { git = "https://github.com/rustls/rustls", rev = "f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb" }
 ctutils = { git = "https://github.com/RustCrypto/utils", rev = "88d6e90d4cfd2fc3333d00e13c99241507d2138f" }
 rustls-webpki = { git = "https://github.com/rustls/webpki", rev = "8ecdcc76f56b68fda67a6adf7976f5eed5006a4c" }
 webpki-root-certs = { git = "https://github.com/rustls/webpki-roots", rev = "7ebfa0b377fd0c7e0a2848f9d9b2867a4c2198cf" }
-i18n-config = { git = "https://github.com/kellpossible/cargo-i18n", rev = "2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4" }
 

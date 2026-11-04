@@ -5,7 +5,7 @@ offline Synology DiskStation (MailPlus + static sites) with a reproducible
 stack:
 
 - **Stalwart** - SMTP / submission / IMAP / ManageSieve / JMAP (mail engine
-  pinned in `nix/packages/stalwart-mail.nix`, currently **0.16.15**;
+  pinned in `nix/packages/stalwart-mail.nix`, currently **1.0.2**;
   **RocksDB** all-role co-location **fine for now**;
   [docs/DATASTORES.md](docs/DATASTORES.md). Internal FTS good enough for now;
   Surmount builds own search product later)
@@ -247,9 +247,9 @@ ssh -L 8080:127.0.0.1:8080 mail-vps
 # open http://127.0.0.1:8080
 ```
 
-Transitional nginx may also expose `/stalwart-admin/` on
-`services.surmount.systems` for bootstrap; remove or lock down once you no
-longer need it. Port numbers: confirm live defaults in modules (UI vs Stalwart
+Transitional nginx does not publish `/stalwart-admin/`. That public path
+was removed. Bootstrap is the SSH tunnel above, to the loopback Stalwart
+HTTP listener. Port numbers: confirm live defaults in modules (UI vs Stalwart
 HTTP split is documented in architecture-review).
 
 **NixOS option path:** Surmount-owned `services.stalwart` module for

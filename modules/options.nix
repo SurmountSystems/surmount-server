@@ -292,20 +292,24 @@ in
         '';
       };
 
-      # In-process ACME (DNS-01). Default off. Not ACME-only forever; static PEMs stay.
-      # HTTP-01 on product :80 parked. external-hook = operator DNS-01 adapter;
-      # live host LE + hot-reload residual (not a commercial DNS brand lock-in).
+      # In-process ACME. Default off. Not ACME-only forever; static PEMs stay.
+      # dns-01 uses an operator hook. http-01 is the surmount-1 renew path
+      # (timer surmount-cert-renew, webroot on the product :80 listener).
+      # Namecheap API credentials stay off surmount-1.
       acme = {
         enable = mkOption {
           type = types.bool;
           default = false;
           description = ''
-            Enable in-process ACME issuance inside management-ui (instant-acme,
-            DNS-01). Default false. When false, listenMode=https requires
-            existing host PEMs at tlsCertPath/tlsKeyPath. When true, the binary
-            reuses valid PEMs or attempts issuance (fail-closed on failure; no
-            silent cleartext). CI never requires live Let's Encrypt. Prefer
-            staging directory first. See docs/EDGE_AND_TLS.md and docs/OPS.md.
+            Enable ACME for the management UI (instant-acme). Default false.
+            When false, listenMode=https requires existing host PEMs at
+            tlsCertPath/tlsKeyPath. When true with challenge dns-01, the
+            binary reuses valid PEMs or attempts issuance (fail-closed; no
+            silent cleartext). When true with challenge http-01, the
+            long-running process keeps serving unexpired PEMs and the
+            surmount-cert-renew timer on this host writes new PEMs.
+            Public module default stays false. CI never requires live
+            Let's Encrypt. See docs/EDGE_AND_TLS.md and docs/OPS.md.
           '';
         };
 
@@ -357,12 +361,30 @@ in
         };
 
         challenge = mkOption {
-          type = types.enum [ "dns-01" ];
+          type = types.enum [
+            "dns-01"
+            "http-01"
+          ];
           default = "dns-01";
           description = ''
-            ACME challenge type. Only dns-01 in this build (fits redirect-only
-            product :80). HTTP-01 on product :80 is parked. Emitted as
+            ACME challenge type. dns-01 uses the DNS challenge adapter
+            (external-hook or mock). http-01 is the surmount-1 renew path:
+            the plain HTTP listener serves /.well-known/acme-challenge/
+            from http01Webroot, and systemd timer surmount-cert-renew runs
+            the ACME client. http-01 does not use Namecheap. Emitted as
             SURMOUNT_ACME_CHALLENGE.
+          '';
+        };
+
+        http01Webroot = mkOption {
+          type = types.str;
+          default = "";
+          example = "/var/lib/surmount/acme-http01";
+          description = ''
+            Absolute host path for HTTP-01 token files. Empty default.
+            When challenge is http-01 and this is empty, the management-ui
+            module uses ''${stateDir}/acme-http01. Emitted as
+            SURMOUNT_ACME_HTTP01_WEBROOT. Not a Namecheap credential path.
           '';
         };
 
@@ -442,8 +464,10 @@ in
           SURMOUNT_REDIRECT_HTTP_TO_HTTPS. Requires listenMode=https (eval
           asserts). Product path: web.enable=false. Fail-closed at eval if
           web.enable is true (nginx dual-run owns public :80/:443 ACME/redirect).
-          ACME HTTP-01 on the product :80 listener is not implemented (parked;
-          Q-EDGE / RESIDUAL).
+          When acme.challenge is http-01, this listener also serves
+          /.well-known/acme-challenge/ from the HTTP-01 webroot before
+          the redirect. That is the surmount-1 Let's Encrypt production
+          renew path. It does not use Namecheap.
         '';
       };
 

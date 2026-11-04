@@ -67,11 +67,11 @@ date in that row** until revalidated.
 | Host nixpkgs channel | **Living:** `nixos-26.05` @ `26f4107e47e3ad0ffd0db220469ba83b6f6d96e8` (`flake.lock` 2026-10-17, commit date 2026-10-15). Sample `system.stateVersion = "26.05"`. Prior lock `445d861c` was the 2026-08-07 note. |
 | Crane / management-ui rustc | **Living:** **1.99.1** from `nixpkgs-rust` `pkgs.rustc` (`nix/rust-toolchain.nix`; lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, checked 2026-10-18, `nix eval --raw` printed `1.99.1`). Not nixpkgs master (master HEAD `27347cc2965498fa03393739031c9ef8ecd72c0a` still has `rustcVersion = "1.99.0"`). Not `rustPackages_1_95`. Not beta 1.100. Host nixos-26.05 `pkgs.rustc` is still **1.95.0**. grok-oss uses the same toolchain. Leptos MSRV floor remains **>= 1.88**. Prior lock `c46e6c9a` was rustc 1.99.0. |
 | Stock Stalwart modules | **Living:** dual `disabledModules` (`services/mail/stalwart-mail.nix` + `services/mail/stalwart.nix`); Surmount option path `services.stalwart` |
-| Stalwart server FOD | **0.16.26** Surmount pin (not channel package). Upstream latest re-check **2026-10-17**: v0.16.26 (2026-10-11). Prior 2026-07-31 cell was 0.16.15. |
-| stalwart-cli FOD | **1.0.13** (re-check 2026-10-17: at latest, tag 2026-09-28) |
-| WebUI FOD | **1.0.11** (re-check 2026-10-17: at latest, tag 2026-09-15) |
-| spam-filter FOD | **3.0.2** (re-check 2026-10-17: at latest, tag 2026-09-22) |
-| vandelay FOD | **1.0.12** (re-check 2026-10-17: at latest, tag 2026-10-11). Prior tree pin was 1.0.11. |
+| Stalwart server FOD | **1.0.2** Surmount pin (not channel package). Upstream latest re-check **2026-11-03**: v1.0.2 (published 2026-11-02T15:42:44Z, not a prerelease). Prior 2026-10-17 cell was 0.16.26. Prior 2026-07-31 cell was 0.16.15. |
+| stalwart-cli FOD | **1.0.14** (re-check 2026-11-03: at latest, published 2026-10-25T18:15:42Z). Prior 2026-10-17 cell was 1.0.13. |
+| WebUI FOD | **2.0.4** (re-check 2026-11-03: at latest, published 2026-11-02T11:19:17Z). Prior 2026-10-17 cell was 1.0.11. |
+| spam-filter FOD | **3.0.4** (re-check 2026-11-03: at latest, published 2026-11-01T15:50:40Z). Rules archive only. Prior 2026-10-17 cell was 3.0.2, which still shipped `spam-filter.toml`. |
+| vandelay FOD | **1.0.14** (re-check 2026-11-03: at latest, published 2026-11-01T16:43:01Z). Prior 2026-10-17 cell was 1.0.12. |
 | Arti (Surmount HS package) | Surmount-owned source build **2.7.0** (GitLab `arti-v2.7.0`; `arti-onion-service.nix`; checked 2026-10-17). nixpkgs-rust `pkgs.arti.version` is **2.7.0**. Stock host `pkgs.arti` is channel-lagged client-default (not the HS path). |
 | crane / sops-nix flake locks | Crane is `bd63bf1` (2026-10-11), one internal flake.lock commit after `47b6b27`, newer than release v0.24.0. sops-nix is `44931708` (2026-10-15), still master. Re-checked 2026-10-17. |
 | management-ui Cargo.lock | 2026-10-17: reqwest ceiling is **0.13**, tower-http ceiling is **0.7**, rustls is **0.23.46** (git patch; menhera 10d still lists 0.23.45), nostr stays **0.45.5**, rcgen ceiling is **0.14**. |
@@ -97,13 +97,13 @@ Not source-built (vendor 403 / rustc notes; see package comments and
 
 | Pin | Tree version | Where | Latest upstream | Gap? | Source |
 |-----|--------------|-------|-----------------|------|--------|
-| Stalwart server | **0.16.26** | `nix/packages/stalwart-mail.nix` | **v0.16.26** (2026-10-11) | **no** (re-check 2026-10-17) | https://github.com/stalwartlabs/stalwart/releases/tag/v0.16.26 |
-| stalwart-cli | **1.0.13** | `nix/packages/stalwart-cli.nix` | **v1.0.13** (2026-09-28) | **no** | https://github.com/stalwartlabs/cli/releases/tag/v1.0.13 |
-| WebUI zip | **1.0.11** | `nix/packages/stalwart-webui.nix` | **v1.0.11** (2026-09-15) | **no** | https://github.com/stalwartlabs/webui/releases/tag/v1.0.11 |
-| spam-filter | **3.0.2** | `nix/packages/stalwart-spam-filter.nix` | **v3.0.2** (2026-09-22) | **no** | https://github.com/stalwartlabs/spam-filter/releases/tag/v3.0.2 |
-| vandelay | **1.0.12** | `nix/packages/vandelay.nix` | **v1.0.12** (2026-10-11) | **no** | https://github.com/stalwartlabs/vandelay/releases/tag/v1.0.12 |
+| Stalwart server | **1.0.2** | `nix/packages/stalwart-mail.nix` | **v1.0.2** (2026-11-02T15:42:44Z) | **no** (re-check 2026-11-03) | https://github.com/stalwartlabs/stalwart/releases/tag/v1.0.2 |
+| stalwart-cli | **1.0.14** | `nix/packages/stalwart-cli.nix` | **v1.0.14** (2026-10-25T18:15:42Z) | **no** | https://github.com/stalwartlabs/cli/releases/tag/v1.0.14 |
+| WebUI zip | **2.0.4** | `nix/packages/stalwart-webui.nix` | **v2.0.4** (2026-11-02T11:19:17Z) | **no** | https://github.com/stalwartlabs/webui/releases/tag/v2.0.4 |
+| spam-filter | **3.0.4** | `nix/packages/stalwart-spam-filter.nix` | **v3.0.4** (2026-11-01T15:50:40Z) | **no** | https://github.com/stalwartlabs/spam-filter/releases/tag/v3.0.4 |
+| vandelay | **1.0.14** | `nix/packages/vandelay.nix` | **v1.0.14** (2026-11-01T16:43:01Z) | **no** | https://github.com/stalwartlabs/vandelay/releases/tag/v1.0.14 |
 
-The 2026-07-31 cells were server 0.16.15, cli 1.0.12, WebUI 1.0.7, and spam-filter 3.0.0. Those are not the living pins.
+The 2026-10-17 cells were server 0.16.26, cli 1.0.13, WebUI 1.0.11, spam-filter 3.0.2, and vandelay 1.0.12. The 2026-07-31 cells were server 0.16.15, cli 1.0.12, WebUI 1.0.7, and spam-filter 3.0.0. Those are not the living pins. The 2026-11-02 pass held cli, vandelay, and spam-filter at the older patch because they were still the same major. That hold is lifted. Each row above is the GitHub `releases/latest` tag read on 2026-11-03.
 
 ### Asset URL shapes (for future bumps)
 
@@ -113,7 +113,7 @@ The 2026-07-31 cells were server 0.16.15, cli 1.0.12, WebUI 1.0.7, and spam-filt
 | server aarch64 | `.../stalwart-aarch64-unknown-linux-gnu.tar.gz` |
 | cli x86_64 | `https://github.com/stalwartlabs/cli/releases/download/vX.Y.Z/stalwart-cli-x86_64-unknown-linux-gnu.tar.xz` |
 | webui | `https://github.com/stalwartlabs/webui/releases/download/vX.Y.Z/webui.zip` |
-| spam-filter | `.../spam-filter.toml` and `.../spam-filter-rules.json.gz` |
+| spam-filter | `.../spam-filter-rules.json.gz` only (v3.0.3 and later). v3.0.2 was the last release that also published `spam-filter.toml` |
 
 Bump recipe is already in each package file header (`nix store prefetch-file`).
 
@@ -132,6 +132,10 @@ engine; Surmount FODs win):
 
 Surmount's FODs are intentionally **ahead of** nixpkgs for the mail stack.
 Do not "sync down" to channel packages.
+
+Those channel rows were measured 2026-07-30 against a Surmount pin of 0.16.15.
+On 2026-11-03 the living Surmount server pin is 1.0.2. Do not read
+"one patch behind Surmount" as a present-tense claim.
 
 ---
 
@@ -366,8 +370,9 @@ Do not treat host rustc 1.95.0 as the product pin. The 2026-10-03 lock
 
 Priority order (proposed, not accepted):
 
-1. **Stalwart FODs** were re-checked 2026-10-17: server **0.16.26**, cli
-   **1.0.13**, WebUI **1.0.11**, spam-filter **3.0.2**, vandelay **1.0.12**.
+1. **Stalwart FODs** were re-checked 2026-11-03: server **1.0.2**, cli
+   **1.0.14**, WebUI **2.0.4**, spam-filter **3.0.4** (rules archive only),
+   vandelay **1.0.14**. The 2026-10-17 cells are not the living pins.
    Re-check releases before every packaging PR.
 2. **Arti currency:** the Surmount package is **2.7.0** (GitLab
    `arti-v2.7.0`), equal to nixpkgs-rust `pkgs.arti.version`. Live Tor
@@ -431,11 +436,11 @@ re-running. Keep reports short under `~/.agents/reports/`.
 | Sample stateVersion 26.05 | `hosts/mail-vps/configuration.nix`, `tests/module-eval.nix`, `tests/mail.nix` |
 | Crane rustc = 1.99.1 from `nixpkgs-rust` `pkgs.rustc` | `nix/rust-toolchain.nix`. Lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332` (checked 2026-10-18). grok-oss native build inputs are `surmount-rust-1.99.1`. Not `rustPackages_1_95`. Host nixos-26.05 `pkgs.rustc` is still 1.95.0. Prior lock `c46e6c9a` was rustc 1.99.0. |
 | Dual stock module disable | `modules/stalwart-service.nix` `disabledModules` |
-| Stalwart latest = 0.16.26 | GitHub tag `v0.16.26` published 2026-10-11 (re-check 2026-10-17). The 2026-07-31 cell that said 0.16.15 is historical. |
-| CLI latest = 1.0.13 | GitHub tag `v1.0.13` 2026-09-28 (re-check 2026-10-17) |
-| WebUI latest = 1.0.11 | GitHub tag `v1.0.11` 2026-09-15 (re-check 2026-10-17) |
-| spam-filter latest = 3.0.2 | GitHub tag `v3.0.2` 2026-09-22 (re-check 2026-10-17) |
-| vandelay latest = 1.0.12 | GitHub tag `v1.0.12` 2026-10-11 (re-check 2026-10-17) |
+| Stalwart latest = 1.0.2 | GitHub tag `v1.0.2` published 2026-11-02T15:42:44Z (re-check 2026-11-03). The 2026-10-17 cell that said 0.16.26 is historical. The 2026-07-31 cell that said 0.16.15 is historical. |
+| CLI latest = 1.0.14 | GitHub tag `v1.0.14` published 2026-10-25T18:15:42Z (re-check 2026-11-03). The 2026-10-17 cell that said 1.0.13 is historical. |
+| WebUI latest = 2.0.4 | GitHub tag `v2.0.4` published 2026-11-02T11:19:17Z (re-check 2026-11-03). The 2026-10-17 cell that said 1.0.11 is historical. |
+| spam-filter latest = 3.0.4 | GitHub tag `v3.0.4` published 2026-11-01T15:50:40Z (re-check 2026-11-03). Asset is `spam-filter-rules.json.gz` only. The 2026-10-17 cell that said 3.0.2 is historical. |
+| vandelay latest = 1.0.14 | GitHub tag `v1.0.14` published 2026-11-01T16:43:01Z (re-check 2026-11-03). The 2026-10-17 cell that said 1.0.12 is historical. |
 | Surmount arti-onion-service = 2.7.0 | package expression, GitLab `arti-v2.7.0`, cargoDeps assert vs nixpkgs-rust `arti` 2.7.0 (checked 2026-10-17). |
 | rustc pin = 1.99.1 | Upstream stable is 1.99.1 (accessed: 2026-10-17). nixpkgs-rust `9ecc0a67` is that rustc. Master still has 1.99.0. Prior lock `c46e6c9a` was rustc 1.99.0. The 2026-07-31 cell that said 1.97.1 is historical. |
 | Historical host 25.05 / crane 1.88 | 2026-07-31 audit day only (see footnotes) |

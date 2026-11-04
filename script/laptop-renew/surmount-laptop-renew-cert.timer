@@ -5,6 +5,7 @@ Description=Weekly Surmount laptop Let's Encrypt renew (host ACME stays off)
 OnCalendar=weekly
 Persistent=true
 RandomizedDelaySec=1h
+Unit=surmount-laptop-renew-cert.service
 
 [Install]
 WantedBy=timers.target
