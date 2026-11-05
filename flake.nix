@@ -70,6 +70,15 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Rust nixfmt (Mic92/nixfmt-rs), not Haskell pkgs.nixfmt.
+    # Default-branch HEAD c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039,
+    # read 2026-11-05 (commit date 2026-10-14). Do not float main.
+    # Their published byte match is Haskell nixfmt 1.2.0, not this
+    # channel's pkgs.nixfmt 1.5.0. Do not set inputs.nixpkgs.follows:
+    # their flake pins its own nixpkgs, so this repo's gcc.arch overlay
+    # cannot reach the formatter build.
+    nixfmt-rs.url = "github:Mic92/nixfmt-rs/c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039";
+
     # Public static site for apex/www. Fetch the git tree (HTML/CSS/JS).
     # Operator bumps: just publish (nix flake update surmount-site).
     surmount-site = {
@@ -97,6 +106,7 @@
       nixpkgs-rust,
       crane,
       sops-nix,
+      nixfmt-rs,
       surmount-site,
       advisory-db,
       splora,
@@ -446,10 +456,14 @@
           splora-liquid =
             sploraInput.packages.${system}.splora-liquid
               or (throw "splora flake input has no packages.${system}.splora-liquid (fail-closed)");
-          # RFC-style nixfmt (same as formatter / checks.ci / devShell).
-          # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt …
-          # nixos-26.05: nixfmt-rfc-style is an alias of pkgs.nixfmt (prefer the latter).
-          nixfmt = pkgs.nixfmt;
+          # Rust nixfmt-rs (Mic92). Not Haskell pkgs.nixfmt and not
+          # nixfmt-rfc-style (that alias is the channel Haskell package).
+          # Upstream attribute is packages.${system}.default. Binary name
+          # is nixfmt. Author claims byte-identical output with Haskell
+          # nixfmt 1.2.0, not with nixos-26.05 pkgs.nixfmt 1.5.0.
+          # Pin c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039, read 2026-11-05.
+          # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt ...
+          nixfmt = nixfmt-rs.packages.${system}.default;
           # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
           # bootstrap without a host just install.
           just = pkgs.just;
@@ -981,7 +995,10 @@
           nix-fmt-check =
             pkgs.runCommand "nix-fmt-check"
               {
-                nativeBuildInputs = [ pkgs.nixfmt ];
+                nativeBuildInputs = [
+                  # Rust nixfmt-rs. Not pkgs.nixfmt (Haskell, compiles GHC).
+                  nixfmt-rs.packages.${system}.default
+                ];
               }
               ''
                 set -euo pipefail
@@ -1116,18 +1133,19 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
+            packages = [
               # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.99.1).
               (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
-              rust-analyzer
-              pkg-config
-              nixfmt
-              just
-              sops
-              age
-              ssh-to-age
-              git
-              jq
+              pkgs.rust-analyzer
+              pkgs.pkg-config
+              # Rust nixfmt-rs. Not pkgs.nixfmt (Haskell, compiles GHC).
+              nixfmt-rs.packages.${system}.default
+              pkgs.just
+              pkgs.sops
+              pkgs.age
+              pkgs.ssh-to-age
+              pkgs.git
+              pkgs.jq
             ];
             RUST_LOG = "info,surmount_management_ui=debug";
             shellHook = ''
@@ -1154,6 +1172,8 @@
         }
       );
 
-      formatter = forAllSystems (system: (mkPkgs system).nixfmt);
+      # Rust nixfmt-rs. Not (mkPkgs system).nixfmt: that attr is Haskell
+      # pkgs.nixfmt, and the mail-host gcc.arch overlay must not build it.
+      formatter = forAllSystems (system: nixfmt-rs.packages.${system}.default);
     };
 }

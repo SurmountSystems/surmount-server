@@ -131,9 +131,16 @@ nix build .#management-ui
 required (Stalwart chip stays down until something answers `SURMOUNT_STALWART_URL`).
 Ctrl-C stops it. Override any `SURMOUNT_*` env before invoking.
 
-**nixfmt (Nix formatter):** the flake already ships `nixfmt-rfc-style` as
-`packages.nixfmt`, `formatter`, and in `devShells.default`. Prefer the flake
-over a distro package so CI and laptop match.
+**nixfmt (Nix formatter):** the flake ships the Rust formatter
+[nixfmt-rs](https://github.com/Mic92/nixfmt-rs) (accessed: 2026-11-05),
+pinned at `c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039` (default-branch HEAD
+read 2026-11-05), as `packages.nixfmt`, `formatter`, and in
+`devShells.default`. The binary is still named `nixfmt`, and `nixfmt
+--check` is the check flag. This is not Haskell `pkgs.nixfmt` and not
+`nixfmt-rfc-style` (on nixos-26.05 that alias is the Haskell package).
+The nixfmt-rs author claims byte-identical output with Haskell nixfmt
+1.2.0, not with 1.5.0. Prefer the flake over a distro package so CI and
+the laptop match.
 
 ```bash
 # one-shot (no install)
@@ -152,10 +159,9 @@ On Arch, you do **not** need a pacman/AUR package for day-to-day work if you
 use the flake above. If you still want a system package for other repos:
 
 ```bash
-# AUR (names vary; check with paru/yay search)
-paru -S nixfmt          # or nixfmt-bin / nixfmt-git, depending on AUR
-# or always-nix from nixpkgs (same RFC style as this flake):
-nix profile install nixpkgs#nixfmt-rfc-style
+# AUR names vary (nixfmt, nixfmt-bin, nixfmt-git). This flake does not
+# use them. Do not install nixpkgs#nixfmt-rfc-style for this repo: that
+# name is the Haskell package.
 ```
 
 **Host quality bar:** `just check` runs format check (no write), clippy with
