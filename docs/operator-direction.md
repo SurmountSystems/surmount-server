@@ -38,7 +38,7 @@ Operator answers while reviewing the service list. These override a
 public-module default when `just deploy` copies the private overlay
 from horizon onto surmount-1.
 
-1. surmount-1 stays a Nix builder and a Lean builder. `surmount-scram.service` stays. This repo does not pin Lean 4.35.
+1. surmount-1 stays a Nix builder and a Lean builder. `surmount-scram.service` stays. On 2026-11-04 the operator directed this repo to pin Lean 4.35. The pin is the official release tag v4.35.0 in `nix/packages/lean4.nix`, used by the nixbuilder login profile. It is not nixpkgs `pkgs.lean4` (4.29.1 on nixos-26.05). The live switch was not run as part of that pin.
 2. Vaultwarden stays off. The operator is not using it yet.
 3. Splora mainnet stays off. The other Splora instances already enabled in the private overlay stay as they are.
 4. Host renewal on surmount-1 is on. HTTP-01 on surmount-1 refreshes the Let's Encrypt production certificate that host already presents. horizon does not have to stay online for that renewal. Namecheap API credentials stay off surmount-1. No Namecheap ClientIp change. Closing horizon does not stop surmount-1 from serving the PEMs already on disk.

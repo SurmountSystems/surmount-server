@@ -190,6 +190,22 @@ let
     assert !(mail ? Nice);
     assert !(sshd ? Nice);
     "t39o-builder-is-preferred-oom-victim-ok";
+
+  # Login profile only. The nix-daemon unit path must not gain this
+  # package: sandbox builds use the derivation stdenv, not this PATH.
+  t39q-builder-user-packages-devtools =
+    let
+      e = evalRB { remoteBuilder.enable = true; };
+      off = evalRB { remoteBuilder.enable = false; };
+      names = map (p: p.name or "") (e.config.users.users.nixbuilder.packages or [ ]);
+      daemonPaths = e.config.systemd.services.nix-daemon.path or [ ];
+      daemonNames = map (p: p.name or "") daemonPaths;
+    in
+    assert failedAssertions e == [ ];
+    assert lib.any (lib.hasInfix "surmount-builder-devtools") names;
+    assert !(lib.any (lib.hasInfix "surmount-builder-devtools") daemonNames);
+    assert !(off.config.users.users ? nixbuilder);
+    "t39q-builder-user-packages-devtools-ok";
 in
 {
   ok = [
@@ -203,5 +219,6 @@ in
     t39m-extra-system-features-advertises-surmount-remote
     t39n-disabled-does-not-require-surmount-remote
     t39o-builder-is-preferred-oom-victim
+    t39q-builder-user-packages-devtools
   ];
 }

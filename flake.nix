@@ -36,6 +36,8 @@
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
     # nix/packages/arti-onion-service.nix (Surmount-owned 2.7.0 source build).
+    # Builder-login Lean is NOT pkgs.lean4 from this channel (4.29.1).
+    # See nix/packages/lean4.nix (official release v4.35.0).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     # rustc/cargo for crane packages and the Arti source build. Not host
@@ -125,6 +127,10 @@
           inherit system;
         };
 
+      # Extra pins live in nix/overlays.nix (tzdata doCheck). Not a second
+      # overlay home. surmountOverlay remains the Surmount package set.
+      surmountPins = import ./nix/overlays.nix;
+
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.
       mkArtiRustPlatform =
         system:
@@ -169,6 +175,8 @@
         surmount-secrets-install = self.packages.${system}.surmount-secrets-install;
         surmount-secrets-prompt = self.packages.${system}.surmount-secrets-prompt;
         surmount-rekey = self.packages.${system}.surmount-rekey;
+        # Official Lean 4.35.0 linux x86_64. Not channel pkgs.lean4.
+        surmount-lean4 = self.packages.${system}.surmount-lean4;
         # Flake-input packages. Upstream crane src omits .cargo/config.toml
         # (laptop cargo still uses Menhera). Do not wrap src again here.
         splora = self.packages.${system}.splora;
@@ -181,7 +189,10 @@
         system:
         import nixpkgs {
           inherit system;
-          overlays = [ (surmountOverlay system) ];
+          overlays = [
+            surmountPins
+            (surmountOverlay system)
+          ];
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
@@ -315,7 +326,10 @@
             (
               { ... }:
               {
-                nixpkgs.overlays = [ (surmountOverlay "x86_64-linux") ];
+                nixpkgs.overlays = [
+                  surmountPins
+                  (surmountOverlay "x86_64-linux")
+                ];
               }
             )
           ]
@@ -442,6 +456,8 @@
           # Mutinynet-only bitcoind. Does not replace pkgs.bitcoind.
           # testnet3 and testnet4 stay on the stock 32.1 package.
           bitcoind-mutinynet = pkgs.callPackage ./nix/packages/bitcoind-mutinynet.nix { };
+          # Official Lean v4.35.0 linux x86_64 release. Not pkgs.lean4.
+          surmount-lean4 = pkgs.callPackage ./nix/packages/lean4.nix { };
           # Ookla Speedtest CLI with --accept-license --accept-gdpr.
           # Unfree predicate is only ookla-speedtest. nix run .#speedtest
           speedtest =

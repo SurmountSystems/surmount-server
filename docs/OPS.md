@@ -861,7 +861,29 @@ any flag above `x86-64-v3`. AVX-512 is absent, so this is not
 `hosts/mail-vps/configuration.nix` sets `surmount.mailHostCpu.enable`.
 `modules/mail-host-cpu.nix` then sets `nixpkgs.hostPlatform` to this
 host's system with `gcc.arch = "x86-64-v3"`. The host Nix daemon must
-advertise gccarch-x86-64-v3 or the v3 stdenv will not build. The nixpkgs cc-wrapper
+advertise gccarch-x86-64-v3 or the v3 stdenv will not build. Nixpkgs
+adds that token to `nix.settings.system-features` when `gcc.arch` is
+`x86-64-v3`, and it also adds the inferior tokens `gccarch-x86-64-v2`
+and `gccarch-x86-64`. The mail-host module appends `gccarch-x86-64-v3`
+again on `nix.settings.extra-system-features`. That list concatenates
+with `surmount-remote` from the remote builder module. Do not replace
+`system-features` with only the march token. Do not remove `gcc.arch`
+and do not set a lower march to make a build pass.
+
+The running daemon does not read that evaluated list until a switch
+activates the new `nix.conf`. The switch builds the v3 stdenv first.
+A cache miss (zlib, gcc, glibc, and the rest of that chain) requires
+`gccarch-x86-64-v3` on the daemon that is already running. A
+`NIX_CONFIG` drop-in does not make that build check pass. The conf
+the daemon reads is the store file behind `/etc/nix/nix.conf`. As
+root, put `extra-system-features = surmount-remote gccarch-x86-64-v3`
+in a copy of that file and bind-mount the copy over the store path,
+then restart `nix-daemon`. Keep `benchmark`, `big-parallel`, `kvm`,
+`nixos-test`, and `surmount-remote`. A bind under `/run` does not
+survive reboot. `just deploy-dry-run` only prints planned commands
+and does not build, so a green dry-run does not show this feature.
+
+The nixpkgs cc-wrapper
 reads `targetPlatform.gcc.arch` and writes `-march=x86-64-v3` into
 `cc-cflags-before`. That flag applies to every C and C++ compile that
 uses this host's stdenv, including dependencies such as nixpkgs
@@ -1025,8 +1047,11 @@ missing system features. `extra-` keeps NixOS auto-detected
 `surmount-remote`. After a module change, rebuild and switch this host
 (`just deploy-host` or host `nixos-rebuild switch`) so
 `/etc/nix/nix.conf` picks up the extra feature; then restart is
-implied by the switch. Do not advertise a fake
-high slot count. Speed factor is
+implied by the switch. That order works for `surmount-remote` only
+when the daemon can already build the closure. `gccarch-x86-64-v3`
+is required to build the v3 stdenv, so it has to be on the running
+daemon before that switch. See Mail-host compiler CPU above.
+Do not advertise a fake high slot count. Speed factor is
 not a substitute for `MemoryMax`. Disk refuse at `diskGuardPercent`
 (default 95). Enable from private host-local. Host-local may set a
 real `memoryMax` as the **builder budget**; never publish that number
@@ -1047,12 +1072,96 @@ unset. Do not set builder `Nice=19` on mail to deprioritize it.
 `nix-daemon` **does** get `Nice=19` and idle I/O when the module is
 enabled (dev builds only; not mail).
 
+### Builder login cc, C++, and Lean (2026-11-04)
+
+When `surmount.remoteBuilder.enable` is true,
+`modules/remote-builder.nix` adds `surmount-builder-devtools` to
+`users.users.nixbuilder.packages`. NixOS activation installs that list
+at `/etc/profiles/per-user/nixbuilder/bin`. Measured ssh as nixbuilder,
+including a login shell, already has that directory on PATH. The
+directory was missing because the user had no packages. A later switch
+rebuilds the profile from this list, so the names stay. The public
+module default of `remoteBuilder.enable` stays false. The private
+overlay on horizon sets enable and does not list these packages. The
+module supplies them when enable is true.
+
+This does not set `systemd.services.nix-daemon.path`. It does not
+change the sandbox. Live `/etc/nix/nix.conf` on surmount-1 had
+`sandbox = true`, `sandbox-fallback = false`, and an empty
+`extra-sandbox-paths`. Derivations still use their own stdenv.
+`surmount-remote` and mail-host `gccarch-x86-64-v3` stay on
+`extra-system-features`. `pkgs.gcc` is the host `pkgs` wrapper, so
+mail-host `gcc.arch` still applies to that `cc`.
+
+`cc`, `c++`, `gcc`, `g++`, `clang`, `clang++`, `ld`, `lld`, `ld.lld`,
+and `make` are symlinks. `lean`, `lake`, `leanc`, and `leanmake` are
+wrappers that exec the pinned store paths. `leanmake` uses `dirname`
+of its own path to find `share/lean/lean.mk`, so a symlink in this
+devtools tree would point at the wrong directory. The derivation
+checks that the source paths exist when it is built. On 2026-11-04
+`nix eval --raw .#surmount-lean4.version` printed `4.35.0` and
+`nix eval --raw .#surmount-lean4.outPath` printed
+`/nix/store/v22cg43c1292h1wwbrl32xjl42h84snh-lean4-4.35.0`.
+That store path's `bin/lean --version` printed
+`Lean (version 4.35.0, x86_64-unknown-linux-gnu, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)`.
+The devtools profile derivation was not built in that same command.
+The switch was not run.
+
+1. `cc`, `c++`, `gcc`, and `g++` from `pkgs.gcc`. That attribute is
+   wrapCC of gcc 15.3.0 on non-i686
+   (`pkgs/development/compilers/gcc/versions.nix` at nixpkgs
+   `7dcdd87373d72e7a2173e4db02e20d3d7f495cfd`). cc-wrapper creates
+   `bin/cc` and `bin/c++`. It does not install `ld`. There is no live
+   `gcc --version` because `gcc` was not on PATH.
+2. `clang` and `clang++` from `pkgs.llvmPackages.clang-unwrapped`
+   (`llvmPackages_21`). Not wrapped `pkgs.clang`, which also ships
+   `cc`.
+3. `ld` from `pkgs.binutils`.
+4. `lld` and `ld.lld` from `pkgs.lld`.
+5. `make` from `pkgs.gnumake` (package expression version 4.4.1). The
+   on-disk leanmake script calls `make`.
+6. `lean`, `lake`, `leanc`, and `leanmake` from
+   `nix/packages/lean4.nix` (official release tag `v4.35.0`, version
+   4.35.0). Operator directed Lean 4.35 on 2026-11-04. This is not
+   `pkgs.lean4` (package expression version 4.29.1 on nixpkgs
+   `7dcdd87373d72e7a2173e4db02e20d3d7f495cfd`).
+
+Measured on surmount-1 as nixbuilder before this edit: the login PATH
+did not contain `cc`, `c++`, `gcc`, `g++`, `clang`, `clang++`, `ld`,
+`lld`, `lean`, `lake`, or `leanc`. Those names were also absent from
+`/run/current-system/sw/bin`. An elan tree was on disk at
+`/home/nixbuilder/.elan/toolchains/leanprover--lean4---v4.32.0/bin`
+and was not on PATH. `lean`, `lake`, `leanc`, `clang`, and `ld.lld`
+there failed `--version` with the NixOS stub dynamic linker.
+`leanmake` is a shell script and printed `make: command not found`.
+`leantar` printed `leantar 0.1.19`. This nixpkgs pin has no `leantar`
+attribute, so it is not in the profile. Activation does not delete
+that home tree. The directory name v4.32.0 is not the pin. The pin
+is official tag v4.35.0 in `nix/packages/lean4.nix`. nixpkgs
+`pkgs.lean4` on this lock remains 4.29.1 and is not what the login
+profile installs. The live login PATH does not have 4.35.0 until a
+switch. `just deploy` was not run for this pin.
+
+`~/.nix-profile` pointed at a profile with no `bin`. There was no
+bashrc. A switch would not put the elan bin directory on PATH. It
+replaces `/run/current-system` and the per-user profile from this
+module. Declaring the package is what makes the next switch install
+the tools.
+
+The switch was not run. These names are not on the live nixbuilder
+login PATH until that switch. The flake attribute `.#surmount-lean4`
+evaluates to version 4.35.0, and the built binary at
+`/nix/store/v22cg43c1292h1wwbrl32xjl42h84snh-lean4-4.35.0/bin/lean`
+prints Lean 4.35.0 commit eb6cafb. The login profile on surmount-1
+still does not include that binary until a generation switch.
+
 Hermetic tests: crate `surmount-niced-builder` in `checks.*.ci`, `just test-remote-builder-eval`,
 `just test-logging-eval`, `nix eval --impure --json --file tests/lake-contract.nix`,
 and `tests/module-eval.nix` t39* / t42* / t44*.
 No live SSH. t39* prove the builder contract (user, trusted-users, slice
 caps, nix-daemon MemoryMax/Nice, max-jobs, extra-system-features
-`surmount-remote`, niced stdio, `onlineCpus` multi-CPU quota). t44*
+`surmount-remote`, niced stdio, `onlineCpus` multi-CPU quota, login
+devtools package t39q). t44*
 prove Lake is default off and, when enabled, MemoryMax/Nice land on
 `surmount-lake.service`. t39e still refuses a Lake overlay that is not
 `surmount.lake.enable`.

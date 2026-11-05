@@ -10,8 +10,15 @@
 # pkgs.arti). Surmount-owned Arti 2.5.1 source build + onion-service-service;
 # not a feature-only override of channel 1.4.2. See
 # nix/packages/arti-onion-service.nix.
+#
+# tzdata 2026e: now.ck is date-dependent. On or after 2026-11-01 the check
+# fails because America/Phoenix and America/Vancouver are identical from
+# now on (America/Edmonton and America/Winnipeg are the same class). This
+# is not a gcc or x86-64-v3 failure. Same attribute change as
+# NixOS/nixpkgs pull 582069. gcc.arch and x86-64-v3 stay as they are.
 
-_final: _prev: {
-  # Intentionally empty. Prefer flake packages + nixosModule specialArgs
-  # over a heavy overlay unless many packages need sharing.
+_final: prev: {
+  tzdata = prev.tzdata.overrideAttrs (_old: {
+    doCheck = false; # https://lists.iana.org/hyperkitty/list/tz@iana.org/thread/CBEK3HXYBOXGD34ZFDSF64QIDT7ZWGBB/
+  });
 }

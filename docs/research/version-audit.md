@@ -356,7 +356,7 @@ Do not treat host rustc 1.95.0 as the product pin. The 2026-10-03 lock
 
 | Item | Pin / state | Gap notes |
 |------|-------------|-----------|
-| `nix/overlays.nix` | empty | no extra pins |
+| `nix/overlays.nix` | tzdata 2026e `doCheck = false` | Same attribute change as NixOS/nixpkgs pull 582069. Date-dependent `now.ck` (America/Phoenix and America/Vancouver identical from now on, on or after 2026-11-01). Not a gcc or x86-64-v3 change. |
 | management-ui product version | 0.1.0 | Surmount-owned |
 | rust-overlay flake input | commented out | not active |
 | modules / hosts | no independent fetchurl pins | versions come from flake packages + nixpkgs |

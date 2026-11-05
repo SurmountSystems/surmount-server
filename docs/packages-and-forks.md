@@ -51,6 +51,7 @@ package bumps in this repo.
 | `nix/packages/surmount-host-logs.nix` | Host journal status/follow (crane). `nix run .#surmount-host-logs`. `just host-logs`. Journald stays source of truth. |
 | `nix/packages/surmount-shc.nix` | SHC customer user-api client (crane; rDNS PTR + tickets). `nix run .#surmount-shc`. `just rdns-shc`. No python3. |
 | `nix/packages/surmount-niced-builder.nix` | Niced ssh-ng nix-daemon helper (crane). `nix run .#surmount-niced-builder`. Installed as `/etc/surmount/niced-builder` when remote builder is on. MemoryMax stays on the NixOS module. Not a mail wrapper. |
+| `nix/packages/lean4.nix` | Official Lean **4.35.0** linux x86_64 release (tag `v4.35.0`). `nix run` is not the builder path. `modules/remote-builder.nix` puts `lean`, `lake`, `leanc`, and `leanmake` on the nixbuilder login PATH from this pin. Not channel `pkgs.lean4` (4.29.1). |
 | `nix/packages/surmount-leftover-homes.nix` | Refuse leftover repo `.agents` / `.grok` homes (crane). `nix run .#surmount-leftover-homes`. Fixtures live under `crates/surmount-leftover-homes/testdata/`. |
 | `nix/packages/surmount-host-probe.nix` | inxi (no TTY), btop (TTY), hybrid TLS probe, Eternal Terminal client. `nix run .#surmount-inxi-host` / `.#surmount-btop-host` / `.#surmount-tls-hybrid` / `.#surmount-et`. |
 | `nix/packages/surmount-static-sites.nix` | Apex/www publish + proven DS3018xs extra vhosts. `nix run .#surmount-deploy-static-sites` / `.#surmount-sync-static-sites`. |
@@ -65,7 +66,7 @@ package bumps in this repo.
 | `nix/packages/surmount-secrets-install.nix` | Domain A to Domain B install + Vaultwarden export-to-staging (crane). `nix run .#secrets-install-host` / `.#secrets-export-bw-to-staging`. |
 | `nix/packages/surmount-secrets-prompt.nix` | Domain A no-echo intake (crane). `nix run .#surmount-secrets-prompt`. `just secrets-prompt`. |
 | `nix/packages/surmount-rekey.nix` | SHC backup re-key paste (X25519 age identity + gpg wrap, not the age crate). `nix run .#surmount-rekey`. `just rekey`. Prints `age1...` for type PGP. Never prints the age secret. |
-| `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary) |
+| `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary). tzdata 2026e sets `doCheck = false` (same change as NixOS/nixpkgs pull 582069). |
 | `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
@@ -297,6 +298,24 @@ Stalwart binaries.
 ---
 
 ## 6. Version validation
+
+### tzdata 2026e `now.ck` (2026-11-04)
+
+Locked nixpkgs is `github:NixOS/nixpkgs/nixos-26.05` rev
+`7dcdd87373d72e7a2173e4db02e20d3d7f495cfd`. That rev builds tzdata
+2026e with `doCheck = true`. On or after 2026-11-01 the `now.ck` test
+fails (`make: *** [Makefile:1006: now.ck] Error 1`) because
+America/Phoenix and America/Vancouver are identical from now on. The
+same check also names America/Mexico_City with America/Edmonton, and
+America/Jamaica with America/Winnipeg. That is a date-dependent check,
+not a gcc failure and not an x86-64-v3 failure. The failing step is
+`awk -f checknow.awk zonenow.tab` (make target `now.ck`). `nix/overlays.nix`
+copies [NixOS/nixpkgs pull 582069](https://github.com/NixOS/nixpkgs/pull/582069)
+(accessed: 2026-11-04) until this lock contains that change. The overlay
+sets `doCheck = false` with the same IANA thread comment as the pull.
+The flake applies that file beside
+`surmountOverlay` for `mkPkgs` and for `nixosConfigurations.mail-vps`.
+`gcc.arch` and x86-64-v3 stay as they are. `surmount-remote` stays.
 
 When touching package pins:
 

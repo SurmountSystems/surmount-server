@@ -1297,6 +1297,10 @@ in
           caps for ssh-ng. Trusted ssh-ng forwards rustc to system
           nix-daemon, so MemoryMax and Nice land on nix-daemon.service
           as well as the nixbuilder user slice.
+          When enabled, also installs cc, C++, make, and Lean 4.35.0
+          onto that user's login PATH (users.users.<user>.packages).
+          Lean is nix/packages/lean4.nix (tag v4.35.0), not channel
+          pkgs.lean4. That profile is not the nix-daemon sandbox PATH.
           Default false. Enable from private host-local.
           Does not set Nice= or MemoryMax on mail or other critical units.
         '';

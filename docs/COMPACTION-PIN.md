@@ -4,7 +4,11 @@
 Read this first, then follow links into child docs. Do not invent product
 scope from memory alone.
 
-**Last updated:** 2026-11-03 (number every parallel list in operator
+**Last updated:** 2026-11-04 (surmount-1 nix-daemon must list
+gccarch-x86-64-v3 before `just deploy` can build the x86-64-v3
+stdenv; the evaluated mail-vps config already requests it, and a
+`/run` bind of nix.conf does not survive reboot). Prior 2026-11-03
+(number every parallel list in operator
 chat; horizon is this laptop; surmount-1 is the mail host and the
 remote Nix builder; the private overlay directory is not a machine).
 Prior 2026-10-05 (`just publish` is the static-site command
@@ -176,6 +180,7 @@ Source of truth for FODs: `nix/packages/*.nix`. Audit:
 | Arti (HS package) | Surmount-owned source **2.7.0** (`arti-onion-service.nix`, GitLab `arti-v2.7.0`) + `onion-service-service` | Matches nixpkgs-rust `pkgs.arti.version` **2.7.0** (lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`). Not stock nixpkgs 1.4.2 lag. rustc via `nixpkgs-rust` is **1.99.1**. Prior lock `c46e6c9a` was rustc 1.99.0. Live Tor verify still residual |
 | management-ui rustc (crane) | **1.99.1** from `nixpkgs-rust` `pkgs.rustc` (`nix/rust-toolchain.nix`, lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`) | Host channel nixos-26.05 `pkgs.rustc` is still **1.95.0**. grok-oss uses the same `surmount-rust-1.99.1` toolchain, not host cargo 1.95.0. Not `rustPackages_1_95`. Leptos MSRV is >=1.88 |
 | Host nixpkgs channel | **nixos-26.05** lock | Engine is **not** from channel; channel lag is separate |
+| Lean (builder login) | **4.35.0** official linux x86_64 release (`nix/packages/lean4.nix`, tag `v4.35.0`, published 2026-10-12) | Operator directed Lean 4.35 on 2026-11-04. Not nixpkgs `pkgs.lean4` 4.29.1. Not an elan pin. The live login PATH is unchanged until a switch. `just deploy` was not run for this pin. |
 | Stock Stalwart modules | dual `disabledModules` | `stalwart-mail.nix` + `stalwart.nix`; Surmount option `services.stalwart` (not stock TOML body) |
 | PQConnect upstream | **1.2.x** Python (tree saw **1.2.3**) | Sibling path packaging; not Rust |
 | PQConnect Nix flake | Sibling `feat/nix-flake`, **uncommitted** (human owns commit) | [research/pqconnect-local-packaging.md](research/pqconnect-local-packaging.md) |
