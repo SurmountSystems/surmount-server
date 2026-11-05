@@ -4,10 +4,19 @@
 Read this first, then follow links into child docs. Do not invent product
 scope from memory alone.
 
-**Last updated:** 2026-11-04 (surmount-1 nix-daemon must list
-gccarch-x86-64-v3 before `just deploy` can build the x86-64-v3
-stdenv; the evaluated mail-vps config already requests it, and a
-`/run` bind of nix.conf does not survive reboot). Prior 2026-11-03
+**Last updated:** 2026-11-04 (`surmount-deploy-host` bootstraps
+gccarch-x86-64-v3 on the target before the system build when the
+running nix-daemon omits that feature. The tool writes
+`/run/surmount-nix.conf`, bind-mounts it over the store nix.conf, and
+restarts nix-daemon only when the feature was missing. The `/run` bind
+does not survive reboot. A successful switch is what puts the feature
+in the generation's nix.conf. An operator or an agent does not SSH a
+bind before `just deploy`. The evaluated mail-vps config still
+requests the feature for the next generation). Prior 2026-11-04
+(surmount-1 nix-daemon must list gccarch-x86-64-v3 before `just
+deploy` can build the x86-64-v3 stdenv; the evaluated mail-vps config
+already requests it, and a `/run` bind of nix.conf does not survive
+reboot). Prior 2026-11-03
 (number every parallel list in operator
 chat; horizon is this laptop; surmount-1 is the mail host and the
 remote Nix builder; the private overlay directory is not a machine).

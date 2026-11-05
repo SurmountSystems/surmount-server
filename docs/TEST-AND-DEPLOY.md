@@ -326,8 +326,11 @@ What the dry-run prints (it must not rebuild the guest):
   `crates/target/`, secrets patterns)
 - rsync of private host-local to
   `root@surmount-1:/root/surmount-server/host-local/`
-- `nixos-rebuild switch --flake path:/root/surmount-server#mail-vps`
-  as a planned remote command
+- planned remote command that bootstraps `gccarch-x86-64-v3` when
+  the daemon's system-features omit it, then
+  `nixos-rebuild switch --flake path:/root/surmount-server#mail-vps`.
+  Dry-run prints that plan and does not apply the bootstrap, does not
+  bind-mount, and does not restart nix-daemon
 - post-switch smoke as a planned remote command
 
 Success is a printed plan and exit 0. It is not a new generation.
@@ -367,7 +370,17 @@ Explicit equivalent (`just deploy-host` has no default target):
 just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
 ```
 
-That rsyncs, then runs `nixos-rebuild switch` on the guest. A generation
+That rsyncs, then on the guest bootstraps `gccarch-x86-64-v3` when
+`nix config show` system-features omits it, then runs `nixos-rebuild
+switch`. The bootstrap reads the nix.conf the daemon is using, writes
+`/run/surmount-nix.conf` (it does not write the store file in place),
+bind-mounts that file over the store path, and restarts nix-daemon
+only when the feature was missing. If the feature is still absent, the
+tool stops and does not start the system build. If the daemon already
+advertises the feature, it does not rewrite the conf and does not
+restart the daemon. The `/run` bind does not survive reboot. A
+successful switch is what puts the feature in the generation's
+nix.conf. Do not SSH a separate bind before `just deploy`. A generation
 that compiles Splora can sit on one `building ...drv` line for a long
 time. Check guest rustc before killing it.
 

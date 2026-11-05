@@ -875,13 +875,26 @@ activates the new `nix.conf`. The switch builds the v3 stdenv first.
 A cache miss (zlib, gcc, glibc, and the rest of that chain) requires
 `gccarch-x86-64-v3` on the daemon that is already running. A
 `NIX_CONFIG` drop-in does not make that build check pass. The conf
-the daemon reads is the store file behind `/etc/nix/nix.conf`. As
-root, put `extra-system-features = surmount-remote gccarch-x86-64-v3`
-in a copy of that file and bind-mount the copy over the store path,
-then restart `nix-daemon`. Keep `benchmark`, `big-parallel`, `kvm`,
-`nixos-test`, and `surmount-remote`. A bind under `/run` does not
-survive reboot. `just deploy-dry-run` only prints planned commands
-and does not build, so a green dry-run does not show this feature.
+the daemon reads is the store file behind `/etc/nix/nix.conf`.
+`surmount-deploy-host` bootstraps that feature on the target before
+the system build. When `nix config show` system-features omits
+`gccarch-x86-64-v3`, the tool reads that conf, writes
+`extra-system-features` so the line contains `surmount-remote` and
+`gccarch-x86-64-v3` (other tokens on that line stay), leaves the
+`system-features` line unchanged (`benchmark`, `big-parallel`, `kvm`,
+and `nixos-test` stay on that line; `surmount-remote` stays on the
+extra line), copies the result to
+`/run/surmount-nix.conf`, and bind-mounts that file over the store
+path. It does not write the store file in place. It restarts
+`nix-daemon` only when the feature was missing. If the daemon already
+advertises the feature, it does not rewrite the conf and does not
+restart the daemon. If the feature is still absent after that
+restart, the tool stops and does not start the system build. The
+`/run` bind does not survive reboot. A successful switch is what puts
+the feature in the generation's `nix.conf`. An operator or an agent
+does not SSH a bind before `just deploy`. `just deploy-dry-run` only
+prints planned commands and does not build, so a green dry-run does
+not apply this bootstrap.
 
 The nixpkgs cc-wrapper
 reads `targetPlatform.gcc.arch` and writes `-march=x86-64-v3` into
@@ -1049,8 +1062,11 @@ missing system features. `extra-` keeps NixOS auto-detected
 `/etc/nix/nix.conf` picks up the extra feature; then restart is
 implied by the switch. That order works for `surmount-remote` only
 when the daemon can already build the closure. `gccarch-x86-64-v3`
-is required to build the v3 stdenv, so it has to be on the running
-daemon before that switch. See Mail-host compiler CPU above.
+is required to build the v3 stdenv, so `surmount-deploy-host`
+bootstraps it on the running daemon before that system build. See
+Mail-host compiler CPU above. The `/run` bind does not survive
+reboot. A successful switch is what puts the feature in the
+generation's `nix.conf`.
 Do not advertise a fake high slot count. Speed factor is
 not a substitute for `MemoryMax`. Disk refuse at `diskGuardPercent`
 (default 95). Enable from private host-local. Host-local may set a

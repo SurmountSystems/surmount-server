@@ -5,6 +5,7 @@
 mod args;
 mod error;
 mod keys;
+mod nix_conf;
 mod paths;
 mod run;
 mod smoke;

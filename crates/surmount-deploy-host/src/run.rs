@@ -315,6 +315,9 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
             "deploy-host: dry-run: rebuild uses path: flake so host-local (rsync'd, not in public git) is visible to Nix (git flake would omit untracked/gitignored paths)"
         );
         println!(
+            "deploy-host: dry-run: before the system build, bootstrap gccarch-x86-64-v3 when nix config show system-features omits it (write /run/surmount-nix.conf, bind-mount over the store nix.conf, restart nix-daemon only if the feature was missing). Dry-run does not apply that bootstrap. A /run bind does not survive reboot."
+        );
+        println!(
             "deploy-host: dry-run: ssh -- {} {}",
             shell_quote(&opts.target),
             shell_quote(&rebuild_remote_cmd)
@@ -530,13 +533,17 @@ fn ssh_status_label(code: Option<i32>) -> String {
 }
 
 /// One remote switch. Prints `synthetic-built-generation:` after the rebuild.
-/// A new profile link (`system-N-link`) is the generation the switch built.
-/// The same link name as before the switch is `unchanged`, not a generation.
-/// The fake ssh matches `*nixos-rebuild*` before `*readlink*` and does not run
-/// this script; it prints the same generation line itself.
+/// Before that build, bootstrap `gccarch-x86-64-v3` on the running daemon
+/// when `nix config show` system-features omits it. The bootstrap writes
+/// `/run/surmount-nix.conf` and bind-mounts it. That bind does not survive
+/// reboot. A new profile link (`system-N-link`) is the generation the switch
+/// built. The same link name as before the switch is `unchanged`, not a
+/// generation. The fake ssh matches `*nixos-rebuild*` before `*readlink*`
+/// and does not run this script; it prints the same generation line itself.
 fn switch_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
-    [
+    let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
+    let switch = [
         "before=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
         // Live nix.conf still has max-jobs 8 until this generation
         // switches. 32 matches surmount.remoteBuilder.maxJobs. cores 0
@@ -549,7 +556,8 @@ fn switch_remote_command(flake_ref: &str) -> String {
         "if [ -n \"$after\" ] && [ \"$after\" != \"$before\" ]; then printf '%s\\n' \"synthetic-built-generation: $after\"; else printf '%s\\n' \"synthetic-built-generation: unchanged\"; fi",
         "exit \"$rc\"",
     ]
-    .join("; ")
+    .join("; ");
+    format!("{bootstrap}\n{switch}")
 }
 
 /// Later readlink. The fake ssh prints the booted generation number for any
@@ -961,5 +969,33 @@ mod tests {
         assert!(cmd.contains("path:/tmp/repo#mail-vps"));
         assert!(cmd.contains("synthetic-built-generation:"));
         assert!(!cmd.contains("post-switch-smoke"));
+        let rebuild_at = cmd
+            .find("nixos-rebuild switch")
+            .expect("system build command");
+        let bootstrap = &cmd[..rebuild_at];
+        assert!(
+            bootstrap.contains("/run/surmount-nix.conf"),
+            "bootstrap must run before the system build"
+        );
+        assert!(
+            bootstrap.contains("gccarch-x86-64-v3"),
+            "bootstrap must name the missing feature"
+        );
+        assert!(
+            !bootstrap.contains("nixos-rebuild"),
+            "bootstrap text must not add a second nixos-rebuild line for the fake ssh log"
+        );
+    }
+
+    #[test]
+    fn switch_bootstraps_gccarch_before_the_system_build() {
+        let cmd = switch_remote_command("path:/tmp/repo#mail-vps");
+        let rebuild_at = cmd.find("nixos-rebuild switch").expect("rebuild");
+        assert!(cmd.find("/run/surmount-nix.conf").unwrap() < rebuild_at);
+        assert!(cmd.find("mount --bind").unwrap() < rebuild_at);
+        assert!(cmd.find("systemctl restart nix-daemon").unwrap() < rebuild_at);
+        assert!(cmd.find("nix config show system-features").unwrap() < rebuild_at);
+        assert!(!cmd.contains("nix config show extra-system-features"));
+        assert!(cmd.contains("not starting the system build"));
     }
 }

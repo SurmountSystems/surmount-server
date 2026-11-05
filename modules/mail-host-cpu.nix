@@ -206,6 +206,9 @@ in
     # The v3 stdenv requires gccarch-x86-64-v3. extra-system-features is
     # a freeform list and concatenates, so this does not drop
     # surmount-remote or the daemon's system-features defaults.
+    # This list is the next generation. It does not change the daemon
+    # that builds that generation. surmount-deploy-host bootstraps the
+    # running daemon before the system build.
     nix.settings.extra-system-features = [ "gccarch-${march}" ];
 
     nixpkgs.overlays = lib.mkAfter [ mailHostCpuOverlay ];
