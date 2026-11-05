@@ -1145,7 +1145,7 @@ in
       enable = mkOption {
         type = types.bool;
         default = true;
-        description = "Apply SSH hardening, fail2ban sketch, and sensible defaults.";
+        description = "Apply SSH hardening, sshguard, and sensible defaults.";
       };
 
       allowPasswordAuth = mkOption {
@@ -1204,7 +1204,7 @@ in
         default = true;
         description = ''
           Persistent journald paper trail for host services (mail, management-ui,
-          sshd, Arti, nft/fail2ban, nix-daemon, optional Vaultwarden, optional
+          sshd, Arti, sshguard, nix-daemon, optional Vaultwarden, optional
           Lake). Default true when surmount.enable. Completeness and start-of-OOM
           clues beat aggressive rate-limit vacuum. Size-capped so logs cannot
           fill the disk (SHC ticket 261 class). Operator-only; no public log dump.

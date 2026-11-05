@@ -43,7 +43,7 @@ from horizon onto surmount-1.
 3. Splora mainnet stays off. The other Splora instances already enabled in the private overlay stay as they are.
 4. Host renewal on surmount-1 is on. HTTP-01 on surmount-1 refreshes the Let's Encrypt production certificate that host already presents. horizon does not have to stay online for that renewal. Namecheap API credentials stay off surmount-1. No Namecheap ClientIp change. Closing horizon does not stop surmount-1 from serving the PEMs already on disk.
 5. Restic backups stay off for now.
-6. fail2ban for sshd stays on. The management UI nftables ban helper stays off.
+6. sshguard watches sshd. A ban is permanent after 3 failures. fail2ban is not installed. The management UI nftables ban helper stays off.
 7. Say horizon or surmount-1. The private overlay directory is not a machine name.
 8. `just deploy` keeps surmount-1 as the remote Nix builder. The private overlay on horizon already sets `surmount.remoteBuilder.enable = true`. The public module default of false applies only when that file is absent.
 
@@ -183,7 +183,7 @@ Research: [research/pqconnect-and-pqc.md](research/pqconnect-and-pqc.md)
 | Ban | Any unauthorized access of any kind -> **immediate blacklist** on the box (precise signal classes still open; see research) |
 | Whitelist | Explicit whitelist IPs: never blacklisted; may bypass blacklist |
 | Hygiene | Track **last-used** on whitelist entries |
-| Implementation lean | Prefer nftables + custom Rust long-term; fail2ban is Python transitional sketch only |
+| Implementation lean | Prefer nftables + custom Rust long-term. sshguard is the sshd ban, permanent after 3 failures. fail2ban is not installed. |
 
 Research: [research/access-control-fail2ban.md](research/access-control-fail2ban.md).
 Module pointer: `modules/hardening.nix` header.

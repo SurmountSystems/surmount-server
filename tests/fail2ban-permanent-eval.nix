@@ -1,8 +1,13 @@
-# Hermetic contract: sshd fail2ban ban is permanent after 3 failures,
-# and the ban action is the one this host's firewall applies.
+# Hermetic contract: sshd bans are permanent after 3 failures, the
+# ban uses the host firewall, and fail2ban is not installed.
+# sshguard 2.5.1 scores a normal sshd auth failure at 10. Block and
+# blacklist both use >=, so attack_threshold 30 and
+# blacklist_threshold 30 are 3 failures and a permanent blacklist.
 # Host firewall is modules/networking.nix: networking.firewall on,
-# networking.nftables.enable left false, so the backend is iptables.
-# Do not enable the management UI nft helper. Do not add jails.
+# networking.nftables.enable left false, so the pinned nixpkgs module
+# selects sshg-fw-ipset (iptables + ipset) and partOf firewall.service.
+# Turning nftables on in this eval only switches that backend to
+# sshg-fw-nft-sets. Do not enable the management UI nft helper.
 # Never embeds host SKUs, addresses, RAM, or guest disk sizes.
 let
   flake = builtins.getFlake (toString ./..);
@@ -33,88 +38,80 @@ let
       ++ extraModules;
     };
   failedAssertions = e: builtins.filter (a: !a.assertion) e.config.assertions;
+  pathNames = e: map (p: p.pname or p.name or "") e.config.systemd.services.sshguard.path;
+  execText = e: toString e.config.systemd.services.sshguard.serviceConfig.ExecStart;
 
-  # Product jail is sshd. DEFAULT is the fail2ban defaults section the
-  # NixOS module always writes (bantime, maxretry, banaction). It is
-  # not a second jail we added.
-  wantJails = [
-    "DEFAULT"
-    "sshd"
-  ];
+  checkPermanent =
+    e:
+    let
+      sg = e.config.services.sshguard;
+    in
+    assert lib.assertMsg (sg.enable == true) "sshguard must be enabled";
+    assert lib.assertMsg (sg.services == [ "sshd" ]) "sshguard must watch sshd only";
+    assert lib.assertMsg (
+      sg.attack_threshold == 30
+    ) "attack_threshold is ${toString sg.attack_threshold}, want 30 (3 sshd failures)";
+    assert lib.assertMsg (
+      sg.blacklist_threshold == 30
+    ) "blacklist_threshold is ${toString sg.blacklist_threshold}, want 30 (permanent after 3)";
+    assert lib.assertMsg (
+      toString sg.blacklist_file == "/var/lib/sshguard/blacklist.db"
+    ) "blacklist file is ${toString sg.blacklist_file}";
+    assert lib.assertMsg (e.config.services.fail2ban.enable == false) "fail2ban must be disabled";
+    assert lib.assertMsg (lib.hasInfix "-a 30" (execText e)) "sshguard command must pass -a 30";
+    assert lib.assertMsg (lib.hasInfix "-b 30:/var/lib/sshguard/blacklist.db" (
+      execText e
+    )) "sshguard command must pass a permanent blacklist of 30";
+    assert lib.assertMsg (builtins.elem "firewall.service" e.config.systemd.services.sshguard.partOf)
+      "sshguard must be part of the host firewall unit";
+    assert lib.assertMsg (e.config.surmount.accessControl.nftHelper == false) "nftHelper must stay off";
+    assert lib.assertMsg (
+      e.config.surmount.accessControl.enable == false
+    ) "accessControl must stay off";
+    true;
 
   checkHostFirewall =
     let
       e = evalHardening [ ];
-      f2b = e.config.services.fail2ban;
-      defs = f2b.jails.DEFAULT.settings;
-      sshd = f2b.jails.sshd.settings;
       fw = e.config.networking.firewall;
-      jailNames = builtins.attrNames f2b.jails;
+      names = pathNames e;
+      preStart = e.config.systemd.services.sshguard.preStart or "";
     in
     assert failedAssertions e == [ ];
-    assert lib.assertMsg (f2b.maxretry == 3) "maxretry is ${toString f2b.maxretry}, want 3";
-    assert lib.assertMsg (f2b.bantime == "-1") "bantime is ${f2b.bantime}, want -1 (permanent)";
-    assert lib.assertMsg (defs.maxretry == 3) "DEFAULT maxretry is ${toString defs.maxretry}, want 3";
-    assert lib.assertMsg (
-      defs.bantime == "-1"
-    ) "DEFAULT bantime is ${defs.bantime}, want -1 (permanent)";
-    assert lib.assertMsg (!(sshd ? maxretry)) "sshd jail must inherit maxretry, not override it";
-    assert lib.assertMsg (!(sshd ? bantime)) "sshd jail must inherit bantime, not override it";
-    assert lib.assertMsg (f2b.enable == true) "fail2ban must be enabled";
-    assert lib.assertMsg (sshd.enabled == true) "sshd jail must be enabled";
-    assert lib.assertMsg (sshd.filter == "sshd") "sshd jail filter must be sshd";
-    assert lib.assertMsg (sshd.backend == "systemd") "sshd jail backend must be systemd";
-    assert lib.assertMsg (
-      jailNames == wantJails
-    ) "jails are ${builtins.concatStringsSep "," jailNames}, want DEFAULT,sshd";
+    assert checkPermanent e;
     assert lib.assertMsg (fw.enable == true) "host firewall must be enabled";
     assert lib.assertMsg (
       e.config.networking.nftables.enable == false
     ) "host firewall must not turn on native nftables";
     assert lib.assertMsg (fw.backend == "iptables") "firewall backend is ${fw.backend}, want iptables";
     assert lib.assertMsg (
-      f2b.banaction == "iptables-multiport"
-    ) "banaction is ${f2b.banaction}, want iptables-multiport";
-    assert lib.assertMsg (
-      defs.banaction == "iptables-multiport"
-    ) "DEFAULT banaction is ${defs.banaction}, want iptables-multiport";
-    assert lib.assertMsg (!(sshd ? action)) "sshd jail must not override action";
-    assert lib.assertMsg (!(sshd ? banaction)) "sshd jail must not override banaction";
-    assert lib.assertMsg (
-      f2b.packageFirewall == fw.package
-    ) "fail2ban firewall package must be the host firewall package";
-    assert lib.assertMsg (
       fw.package.pname == "iptables"
     ) "firewall package is ${fw.package.pname}, want iptables";
-    assert lib.assertMsg (builtins.elem "firewall.service" e.config.systemd.services.fail2ban.partOf)
-      "fail2ban must be part of the host firewall unit";
-    assert lib.assertMsg (f2b.bantime-increment.enable == false) "bantime increment must stay off";
+    assert lib.assertMsg (builtins.elem "iptables" names) "sshguard path must include iptables";
+    assert lib.assertMsg (builtins.elem "ipset" names) "sshguard path must include ipset";
     assert lib.assertMsg (
-      (f2b.daemonSettings.Definition.dbfile or "") == "/var/lib/fail2ban/fail2ban.sqlite3"
-    ) "permanent bans need the fail2ban sqlite db";
-    assert lib.assertMsg (e.config.surmount.accessControl.nftHelper == false) "nftHelper must stay off";
+      !(builtins.elem "nftables" names)
+    ) "iptables host must not put nftables on the sshguard path";
     assert lib.assertMsg (
-      e.config.surmount.accessControl.enable == false
-    ) "accessControl must stay off";
+      lib.hasInfix "iptables" preStart
+      && lib.hasInfix "sshguard4" preStart
+      && lib.hasInfix "DROP" preStart
+    ) "sshguard must install a host-firewall DROP for sshguard4";
     "host-firewall-permanent-sshd-ban-ok";
 
-  # If native nftables is turned on, ip_tables is blacklisted. The ban
-  # action must switch to nftables-multiport or the ban never installs.
-  # This check forces that in the eval only. It does not enable nftHelper
-  # and it does not add a jail.
+  # Native nftables blacklists ip_tables. The pinned sshguard module
+  # then puts nftables on the unit path (sshg-fw-nft-sets). Thresholds
+  # stay 3 failures and permanent. This does not enable nftHelper.
   checkNftablesSwitch =
     let
       e = evalHardening [
         { networking.nftables.enable = true; }
       ];
-      f2b = e.config.services.fail2ban;
       fw = e.config.networking.firewall;
+      names = pathNames e;
     in
     assert failedAssertions e == [ ];
-    assert lib.assertMsg (
-      f2b.maxretry == 3
-    ) "nftables-switch maxretry is ${toString f2b.maxretry}, want 3";
-    assert lib.assertMsg (f2b.bantime == "-1") "nftables-switch bantime is ${f2b.bantime}, want -1";
+    assert checkPermanent e;
     assert lib.assertMsg (
       e.config.networking.nftables.enable == true
     ) "nftables switch eval must enable nftables";
@@ -122,26 +119,18 @@ let
       fw.backend == "nftables"
     ) "nftables switch backend is ${fw.backend}, want nftables";
     assert lib.assertMsg (
-      f2b.banaction == "nftables-multiport"
-    ) "nftables switch banaction is ${f2b.banaction}, want nftables-multiport";
-    assert lib.assertMsg (
-      f2b.jails.DEFAULT.settings.banaction == "nftables-multiport"
-    ) "nftables switch DEFAULT banaction drifted";
-    assert lib.assertMsg (!(f2b.jails.sshd.settings ? action)) "sshd jail must not pin an action";
-    assert lib.assertMsg (
-      f2b.packageFirewall == fw.package
-    ) "nftables switch packageFirewall must match the firewall package";
-    assert lib.assertMsg (
       fw.package.pname == "nftables"
     ) "nftables switch package is ${fw.package.pname}, want nftables";
+    assert lib.assertMsg (builtins.elem "nftables" names)
+      "nftables host must put nftables on the sshguard path";
+    assert lib.assertMsg (
+      !(builtins.elem "iptables" names)
+    ) "nftables host must not put iptables on the sshguard path";
     assert lib.assertMsg (builtins.elem "ip_tables" e.config.boot.blacklistedKernelModules)
-      "nftables firewall must blacklist ip_tables, so an iptables ban action cannot install";
+      "nftables firewall must blacklist ip_tables";
     assert lib.assertMsg (
-      e.config.surmount.accessControl.nftHelper == false
-    ) "nftHelper must stay off when nftables is on";
-    assert lib.assertMsg (
-      builtins.attrNames f2b.jails == wantJails
-    ) "nftables switch must not add jails";
+      e.config.services.sshguard.services == [ "sshd" ]
+    ) "nftables switch must not add services";
     "nftables-switch-permanent-sshd-ban-ok";
 in
 {

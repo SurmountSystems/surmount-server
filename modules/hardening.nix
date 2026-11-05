@@ -1,4 +1,4 @@
-# Security defaults: SSH hardening, fail2ban sketch, edge-friendly limits.
+# Security defaults: SSH hardening, sshguard, edge-friendly limits.
 # nginx is transitional-to-delete; prefer limits that transfer to Axum-first edge.
 # Keep this boring and reversible; deep custom hardening belongs in host config.
 #
@@ -7,12 +7,11 @@
 # - Ban decision layer in management-ui (default enforcement off; lean private)
 # - Unauthorized access -> fast/immediate host blacklist (nftables lean; Q-ACL-1 open)
 # - Explicit whitelist IPs never banned; track last-used for hygiene
-# - Long-term prefer Rust ban helper over Python fail2ban as product identity
-# This module's fail2ban block is a LIGHT TRANSITIONAL SKETCH (sshd only),
-# not final merciless policy. Design:
+# - Long-term prefer Rust ban helper over a host Python service
+# sshguard is the sshd ban: permanent after 3 failures. fail2ban is not
+# installed. Design notes:
 #   docs/research/access-control-fail2ban.md
-# Do not expand aggressive mail jails here without that design + false-positive
-# review. Stalwart owns mail anti-abuse first.
+# Do not add mail watchers here. Stalwart owns mail anti-abuse first.
 #
 # SSH host keys: advertise and generate ed25519 only. NixOS 26.05 default
 # also offers RSA; this module stops that. Existing RSA files on disk are
@@ -72,44 +71,25 @@ in
         };
       };
 
-      # fail2ban: sshd jail only. Permanent ban after 3 failures.
-      # bantime "-1" is fail2ban's never-unban value. The option type is
-      # a string. iptables-multiport inserts a rule with no kernel
-      # timeout. Restore keeps bips rows whose bantime is -1.
-      # Mail abuse stays with Stalwart. Do not add jails here.
-      services.fail2ban = {
-        enable = mkDefault true;
-        maxretry = 3;
-        bantime = "-1";
-        # modules/networking.nix leaves networking.nftables.enable false,
-        # so the host firewall backend is iptables and this action is
-        # iptables-multiport (same package as networking.firewall).
-        # Native nftables blacklists ip_tables, so the action must
-        # switch or the ban never installs.
-        banaction =
-          if config.networking.nftables.enable then "nftables-multiport" else "iptables-multiport";
-        # SYSTEMD-JOURNAL is the native journal path. SYSLOG depends on
-        # /dev/log while journald ForwardToSyslog is no. INFO records
-        # ban, unban, and found lines. DEBUG is not set (it copies matched
-        # log lines). No mail jails.
-        daemonSettings.Definition = {
-          logtarget = "SYSTEMD-JOURNAL";
-          loglevel = "INFO";
-        };
-        jails = {
-          sshd = {
-            settings = {
-              enabled = true;
-              port = "ssh";
-              filter = "sshd";
-              backend = "systemd";
-            };
-          };
-        };
+      # sshguard 2.5.1 (pinned nixos-26.05): an sshd auth failure scores
+      # 10. Block and blacklist both fire when cumulated danger >= the
+      # threshold, so 30 is 3 failures. blacklist pardontime 0 is never
+      # unblocked and is reloaded from blacklist_file. The nixpkgs module
+      # uses sshg-fw-ipset with the host iptables firewall, or
+      # sshg-fw-nft-sets when networking.nftables.enable is true, and
+      # partOf firewall.service. fail2ban is Python and stays off.
+      # Do not enable surmount.accessControl or the nft helper.
+      services.fail2ban.enable = false;
+      services.sshguard = {
+        enable = true;
+        services = [ "sshd" ];
+        attack_threshold = 30;
+        blacklist_threshold = 30;
+        blacklist_file = "/var/lib/sshguard/blacklist.db";
       };
 
-      systemd.services.fail2ban.serviceConfig = {
-        SyslogIdentifier = "fail2ban";
+      systemd.services.sshguard.serviceConfig = {
+        SyslogIdentifier = "sshguard";
         LogRateLimitIntervalSec = "30s";
         LogRateLimitBurst = 50000;
       };

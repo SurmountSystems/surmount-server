@@ -35,7 +35,8 @@
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.7.0 source build).
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.8.0 source build;
+    # cargoHash is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=).
     # Builder-login Lean is NOT pkgs.lean4 from this channel (4.29.1).
     # See nix/packages/lean4.nix (official release v4.35.0).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -96,7 +97,7 @@
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
     # JSON-RPC and a cookie; a local bitcoind datadir is not required.
-    splora.url = "github:SurmountSystems/splora/surmount";
+    splora.url = "github:SurmountSystems/splora/28eb3ea077eee02bd8a9c0cba63ee9a611b10e54";
   };
 
   outputs =
@@ -137,9 +138,15 @@
           inherit system;
         };
 
-      # Extra pins live in nix/overlays.nix (tzdata doCheck). Not a second
-      # overlay home. surmountOverlay remains the Surmount package set.
-      surmountPins = import ./nix/overlays.nix;
+      # nix/overlays.nix exports .pins and .tzdata. Not a second overlay
+      # home. surmountOverlay remains the Surmount package set.
+      # .pins is the Nix 2.35.4 cli (not nix-everything).
+      # .tzdata sets tzdata 2026e doCheck = false (now.ck). The mail-host
+      # nixosSystem below imports .tzdata. mkPkgs does not, so
+      # checks.x86_64-linux.ci does not rebuild CPython for that skip.
+      surmountOverlayParts = import ./nix/overlays.nix;
+      surmountPins = surmountOverlayParts.pins;
+      surmountTzdata = surmountOverlayParts.tzdata;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.
       mkArtiRustPlatform =
@@ -338,6 +345,7 @@
               {
                 nixpkgs.overlays = [
                   surmountPins
+                  surmountTzdata
                   (surmountOverlay "x86_64-linux")
                 ];
               }
@@ -376,10 +384,13 @@
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.7.0 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.8.0 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
-          # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
-          # vendor handoff avoids crates.io 403). C deps from host pkgs.
+          # rustPlatform from nixpkgs-rust (MSRV 1.92). The Arti 2.8.0
+          # cargoHash is set to
+          # sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=.
+          # Do not use artiUnstable.cargoDeps (that tree is 2.7.0).
+          # C deps from host pkgs.
           arti-onion-service = pkgs.callPackage ./nix/packages/arti-onion-service.nix {
             rustPlatform = mkArtiRustPlatform system;
             artiUnstable = (mkPkgsRust system).arti;
@@ -456,6 +467,7 @@
           splora-liquid =
             sploraInput.packages.${system}.splora-liquid
               or (throw "splora flake input has no packages.${system}.splora-liquid (fail-closed)");
+          splora-web = pkgs.callPackage ./nix/packages/splora-web.nix { inherit craneLib sploraInput; };
           # Rust nixfmt-rs (Mic92). Not Haskell pkgs.nixfmt and not
           # nixfmt-rfc-style (that alias is the channel Haskell package).
           # Upstream attribute is packages.${system}.default. Binary name

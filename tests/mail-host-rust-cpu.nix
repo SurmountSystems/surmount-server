@@ -66,7 +66,8 @@ let
 
   goodHook =
     text:
-    lib.hasInfix "target-cpu=x86-64-v3" text
+    lib.hasInfix ''set -- "$@" "-Ctarget-cpu=x86-64-v3"'' text
+    && !(lib.hasInfix ''-C "target-cpu='' text)
     && lib.hasInfix "RUSTFLAGS" text
     && lib.hasInfix "CARGO_ENCODED_RUSTFLAGS" text;
 

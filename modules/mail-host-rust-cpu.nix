@@ -1,7 +1,9 @@
-# Mail-host Cargo builds: -C target-cpu=x86-64-v3 on every rustc Cargo
-# runs, including dependency crates and proc-macros. Gated on
-# surmount.mailHostCpu.enable (no second option). enable false installs
-# nothing, so CI and mkPkgsBare stay generic.
+# Mail-host Cargo builds: one rustc argv, -Ctarget-cpu=x86-64-v3, on
+# every rustc Cargo runs, including dependency crates and proc-macros.
+# Appended, not prepended. cargo-auditable treats its first argument as
+# the rustc path. A split "-C" "target-cpu=..." in front made it exec
+# "-C". Gated on surmount.mailHostCpu.enable (no second option). enable
+# false installs nothing, so CI and mkPkgsBare stay generic.
 #
 # Crane buildDepsOnly is a separate derivation (cargoArtifacts). A flag
 # on the top-level package does not reach that derivation. Stamp both.
@@ -49,7 +51,7 @@ let
       *target-cpu=*) need=0 ;;
     esac
     if [ "$need" -eq 1 ]; then
-      set -- -C "target-cpu=x86-64-v3" "$@"
+      set -- "$@" "-Ctarget-cpu=x86-64-v3"
     fi
     if [ -n "''${SURMOUNT_RUSTC_WRAPPER_NEXT-}" ]; then
       exec "''${SURMOUNT_RUSTC_WRAPPER_NEXT}" "$real" "$@"

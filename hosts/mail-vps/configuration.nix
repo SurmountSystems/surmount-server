@@ -66,7 +66,7 @@
 #      a production leaf that names mail.<apex>, run
 #      `just point-stalwart-mail-tls -- --live --restart` on the host.
 #      Same durable PEMs as Axum. Not product browser :443.
-#  14. Review fail2ban/ssh exposure; lock SSH to admin nets if possible.
+#  14. Review sshguard bans and SSH exposure; lock SSH to admin nets if possible.
 #  15. Enable surmount.artiHiddenService when HS identity is on host (later).
 #      With https UI, leave arti backendAddress null so the module auto-
 #      binds loopback cleartext API for the onion reverse-proxy (or set
@@ -337,7 +337,9 @@
     curl
     dig
     tcpdump
-    git
+    # nixos-26.05 git defaults pythonSupport to true, which installs
+    # python3. The mail host still has git. The flag stays off.
+    (git.override { pythonSupport = false; })
     scc
     fio
     sysstat

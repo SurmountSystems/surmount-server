@@ -46,7 +46,7 @@ package bumps in this repo.
 | `nix/packages/stalwart-spam-filter.nix` | Spam rules FODs |
 | `nix/packages/management-ui.nix` | Surmount Axum UI (crane) |
 | `nix/packages/surmount-public-site.nix` | Apex/www static site from flake input `github:SurmountSystems/site` (no NPM; operator bumps rev) |
-| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.7.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti`. Kept equal to nixpkgs-rust `pkgs.arti.version` |
+| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.8.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti`. `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. Does not reuse nixpkgs-rust `pkgs.arti` **2.7.0** `cargoDeps` |
 | `nix/packages/surmount-private-data.nix` | Private-data pattern scanner (crane). `nix run .#surmount-private-data`. Pre-commit + `just check-private-data` / `just private-data`. |
 | `nix/packages/surmount-host-logs.nix` | Host journal status/follow (crane). `nix run .#surmount-host-logs`. `just host-logs`. Journald stays source of truth. |
 | `nix/packages/surmount-shc.nix` | SHC customer user-api client (crane; rDNS PTR + tickets). `nix run .#surmount-shc`. `just rdns-shc`. No python3. |
@@ -66,7 +66,7 @@ package bumps in this repo.
 | `nix/packages/surmount-secrets-install.nix` | Domain A to Domain B install + Vaultwarden export-to-staging (crane). `nix run .#secrets-install-host` / `.#secrets-export-bw-to-staging`. |
 | `nix/packages/surmount-secrets-prompt.nix` | Domain A no-echo intake (crane). `nix run .#surmount-secrets-prompt`. `just secrets-prompt`. |
 | `nix/packages/surmount-rekey.nix` | SHC backup re-key paste (X25519 age identity + gpg wrap, not the age crate). `nix run .#surmount-rekey`. `just rekey`. Prints `age1...` for type PGP. Never prints the age secret. |
-| `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary). tzdata 2026e sets `doCheck = false` (same change as NixOS/nixpkgs pull 582069). |
+| `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary). tzdata 2026e sets `doCheck = false` (same change as NixOS/nixpkgs pull 582069). Nix package pin is **2.35.4** (commit `21286d605815196c3fff1960550ab08700fc4e6f`) on the nixos-26.05 2.35.3 recipe. Channel `pkgs.nix` was stable **2.34.9**. NixOS stays **nixos-26.05** because 26.11 is not released. Release notes still read 2026.11/??. Branch-off is scheduled 2026-11-16 to 2026-11-23. Release is scheduled 2026-11-23 to 2026-11-30. See [NixOS 26.11 release schedule](https://github.com/NixOS/nixpkgs/issues/567567) (accessed: 2026-11-05). |
 | `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
@@ -134,19 +134,18 @@ thin just alias.
 
 **Arti note:** stock nixpkgs `pkgs.arti` often lags (client-default, not
 HS-capable). Surmount owns the Arti pin at
-`nix/packages/arti-onion-service.nix` (`2.7.0` from GitLab `arti-v2.7.0`).
-That version is this lock's nixpkgs-rust `pkgs.arti.version` (rev
-`9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, rustc 1.99.1). The package enables
-cargo feature `onion-service-service` and is exposed as
+`nix/packages/arti-onion-service.nix` (`2.8.0` from GitLab `arti-v2.8.0`).
+nixpkgs-rust `pkgs.arti.version` on rev
+`9ecc0a672e9ef2ca4eec8e87dbee653607a7d332` is still **2.7.0** (rustc 1.99.1).
+The package does not use that `cargoDeps`. `cargoHash` for 2.8.0 is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=.
+The package enables cargo feature `onion-service-service` and is exposed as
 `pkgs.artiOnionService` / `packages.*.arti-onion-service` (it does **not**
 replace `pkgs.arti`). rustc
 comes from flake input `nixpkgs-rust` when Arti MSRV exceeds the host
-channel pin. Vendor crates use matching `nixpkgs-rust` `arti.cargoDeps`
-with a version assert (crates.io `fetch-cargo-vendor` 403 workaround); bump
-`nixpkgs-rust` until `pkgs.arti.version` matches, or restore plain `cargoHash`
-when crates.io vendor works again. Module `arti-hidden-service.nix` prefers
+channel pin. Module `arti-hidden-service.nix` prefers
 the Surmount package when `package` is null. Cargo build is heavy and is
-**not** in `checks.*.ci`; eval-only version/feature/passthru contract is.
+**not** in `checks.*.ci`; the eval contract asserts version 2.8.0 and does
+not embed a fake hash.
 Live Tor publish remains residual (operator HS keys + network verify). No
 official multi-arch Arti release binaries, so this is source build not binary
 FOD.

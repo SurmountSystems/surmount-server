@@ -24,11 +24,13 @@ blob `bf8ac6194a0ef4befa6bb3204caea46800b20a31` is the same file as
 prior pin `93b590222` and as prior nixpkgs-rust lock `c46e6c9a`. An update
 does not replace that package. `doCheck` stays
 `stdenv.hostPlatform.isLinux`. This pass did not build sqlite.
-**Arti HS package refresh:** 2026-10-17 (UTC). Surmount `arti-onion-service`
-pin is **2.7.0** (GitLab tag `arti-v2.7.0`, 2026-10-01). It matches this
-nixpkgs-rust snapshot's `pkgs.arti.version` **2.7.0**. MSRV is 1.92.
-High-severity TROVE-2026-047 (half-open streams) is fixed in this tag.
-`onion_services`, `proxy_ports`, and `socks_listen` stay the module keys.
+**Arti HS package refresh:** 2026-11-05 (UTC). Surmount `arti-onion-service`
+pin is **2.8.0** (GitLab tag `arti-v2.8.0`, changelog date 3 November 2026).
+`cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. It does not reuse this
+nixpkgs-rust snapshot's `pkgs.arti` **2.7.0** `cargoDeps`. The arti crate
+`rust-version` in that tag is 1.92. The 2026-10-17 pin was **2.7.0**
+(GitLab `arti-v2.7.0`). `onion_services`, `proxy_ports`, and `socks_listen`
+stay the module keys.
 **Prior full package audit:** 2026-07-31 (UTC). Stalwart FOD / cargo / upstream
 "latest" cells below stay labeled as that audit day unless revalidated.
 
@@ -72,7 +74,8 @@ date in that row** until revalidated.
 | WebUI FOD | **2.0.4** (re-check 2026-11-03: at latest, published 2026-11-02T11:19:17Z). Prior 2026-10-17 cell was 1.0.11. |
 | spam-filter FOD | **3.0.4** (re-check 2026-11-03: at latest, published 2026-11-01T15:50:40Z). Rules archive only. Prior 2026-10-17 cell was 3.0.2, which still shipped `spam-filter.toml`. |
 | vandelay FOD | **1.0.14** (re-check 2026-11-03: at latest, published 2026-11-01T16:43:01Z). Prior 2026-10-17 cell was 1.0.12. |
-| Arti (Surmount HS package) | Surmount-owned source build **2.7.0** (GitLab `arti-v2.7.0`; `arti-onion-service.nix`; checked 2026-10-17). nixpkgs-rust `pkgs.arti.version` is **2.7.0**. Stock host `pkgs.arti` is channel-lagged client-default (not the HS path). |
+| Arti (Surmount HS package) | Surmount-owned source build **2.8.0** (GitLab `arti-v2.8.0`; `arti-onion-service.nix`; checked 2026-11-05). `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. nixpkgs-rust `pkgs.arti.version` is still **2.7.0** and is not `cargoDeps`. Stock host `pkgs.arti` is channel-lagged client-default (not the HS path). |
+| Nix package | **2.35.4** from `nix/overlays.nix` on the nixos-26.05 `nixVersions.nix_2_35` recipe (that recipe was **2.35.3**). Channel `pkgs.nix` was `nixVersions.stable` **2.34.9**. Source commit `21286d605815196c3fff1960550ab08700fc4e6f`. No cargoHash in that recipe. NixOS stays **nixos-26.05** because 26.11 is not released. Release notes still read 2026.11/??. Branch-off is scheduled 2026-11-16 to 2026-11-23. Release is scheduled 2026-11-23 to 2026-11-30. See [NixOS 26.11 release schedule](https://github.com/NixOS/nixpkgs/issues/567567) (accessed: 2026-11-05). |
 | crane / sops-nix flake locks | Crane is `bd63bf1` (2026-10-11), one internal flake.lock commit after `47b6b27`, newer than release v0.24.0. sops-nix is `44931708` (2026-10-15), still master. Re-checked 2026-10-17. |
 | management-ui Cargo.lock | 2026-10-17: reqwest ceiling is **0.13**, tower-http ceiling is **0.7**, rustls is **0.23.46** (git patch; menhera 10d still lists 0.23.45), nostr stays **0.45.5**, rcgen ceiling is **0.14**. |
 | RocksDB | Embedded in upstream Stalwart lock (`10.4.2` via `librocksdb-sys`); Surmount does **not** use system `pkgs.rocksdb` for the mail binary |
@@ -293,9 +296,9 @@ optional `blobSize` / `bufferSize`; it does not pin a system rocksdb package.
 ## 5b. Arti (HS publish package)
 
 Packaging mode: **Surmount-owned source build** of Arti from Tor
-Project GitLab (`fetchFromGitLab` tag `arti-v2.7.0`), with cargo feature
-`onion-service-service`. The package version is **2.7.0**. It is not 2.5.1
-and not 2.6.0.
+Project GitLab (`fetchFromGitLab` tag `arti-v2.8.0`), with cargo feature
+`onion-service-service`. The package version is **2.8.0**. It is not 2.5.1,
+not 2.6.0, and not 2.7.0. `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=.
 Distinct attribute `pkgs.artiOnionService` /
 `packages.*.arti-onion-service`. Does **not** replace stock `pkgs.arti`.
 
@@ -304,16 +307,16 @@ is a hermetic cargo source build, not a binary FOD.
 
 | Item | Value | Source |
 |------|-------|--------|
-| Surmount package version | **2.7.0** | `nix/packages/arti-onion-service.nix` (checked 2026-10-17). |
-| Source | GitLab `tpo/core/arti` tag **`arti-v2.7.0`** | package `src` |
+| Surmount package version | **2.8.0** | `nix/packages/arti-onion-service.nix` (checked 2026-11-05). |
+| Source | GitLab `tpo/core/arti` tag **`arti-v2.8.0`** | package `src` |
 | Cargo feature | **`onion-service-service`** (lean; not nixpkgs `full`) | package `buildFeatures` |
 | Capability passthru | `surmountOnionServiceCapable = true` | package `passthru` |
 | Toolchain | rustc from flake input **`nixpkgs-rust`** (pinned rev 9ecc0a67, rustc **1.99.1**; Arti MSRV **1.92**) | `flake.nix` `mkArtiRustPlatform` |
-| Vendor | `cargoDeps` from matching nixpkgs-rust `arti` (crates.io 403 workaround) | package `artiUnstable.cargoDeps` |
+| Vendor | `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. Does not use nixpkgs-rust 2.7.0 `cargoDeps` | package `cargoHash` |
 | Stock nixpkgs `pkgs.arti` | channel-lagged client-default (COMPACTION-PIN: often **1.4.2**); not used for HS path | host channel, not this pin |
-| Upstream GitLab tag | **`arti-v2.7.0`** (2026-10-01) | this package |
-| nixpkgs-rust `pkgs.arti.version` | **2.7.0** | lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332` (`nix eval --raw` printed `2.7.0`, 2026-10-18). Prior lock `c46e6c9a` was also 2.7.0. |
-| Gap vs upstream tag | **closed** | pin equals `arti-v2.7.0` so `artiUnstable.version == version` stays true |
+| Upstream GitLab tag | **`arti-v2.8.0`** (changelog date 3 November 2026) | this package |
+| nixpkgs-rust `pkgs.arti.version` | **2.7.0** | lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332` (`nix eval --raw` printed `2.7.0`, 2026-10-18). Prior lock `c46e6c9a` was also 2.7.0. Not the Surmount src. |
+| Gap vs upstream tag | **src pinned.** `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY= | src tag is `arti-v2.8.0`. `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. Do not treat 2.7.0 `cargoDeps` as 2.8.0. |
 
 Honest limits:
 
@@ -326,9 +329,10 @@ Honest limits:
 - **Build proof (2026-07-31):** `nix build .#arti-onion-service` green for
   then-current **2.5.0**; cargo features include `onion-service-service`.
   **2026-08-27** the pin was **2.5.1**. The 2026-10-10 pin was **2.6.0**
-  (GitLab `arti-v2.6.0`). Living pin checked 2026-10-17 is **2.7.0**
+  (GitLab `arti-v2.6.0`). The 2026-10-17 check was **2.7.0**
   (GitLab `arti-v2.7.0`), equal to this nixpkgs-rust `pkgs.arti.version`.
-  Cargo rebuild of the HS binary is not this note.
+  The living pin on 2026-11-05 is **2.8.0** (GitLab `arti-v2.8.0`).
+  `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. Cargo rebuild of the HS binary is not this note.
 
 ## 5c. rustc (management-ui vs host vs stable)
 
@@ -356,12 +360,12 @@ Do not treat host rustc 1.95.0 as the product pin. The 2026-10-03 lock
 
 | Item | Pin / state | Gap notes |
 |------|-------------|-----------|
-| `nix/overlays.nix` | tzdata 2026e `doCheck = false` | Same attribute change as NixOS/nixpkgs pull 582069. Date-dependent `now.ck` (America/Phoenix and America/Vancouver identical from now on, on or after 2026-11-01). Not a gcc or x86-64-v3 change. |
+| `nix/overlays.nix` | tzdata 2026e `doCheck = false`. Nix package **2.35.4** | tzdata: same attribute change as NixOS/nixpkgs pull 582069. Date-dependent `now.ck` (America/Phoenix and America/Vancouver identical from now on, on or after 2026-11-01). Not a gcc or x86-64-v3 change. Nix: commit `21286d605815196c3fff1960550ab08700fc4e6f` on the 2.35.3 recipe. Channel stable was **2.34.9**. NixOS stays nixos-26.05 because 26.11 is not released. Release notes still read 2026.11/??. Branch-off is scheduled 2026-11-16 to 2026-11-23. Release is scheduled 2026-11-23 to 2026-11-30. See [NixOS 26.11 release schedule](https://github.com/NixOS/nixpkgs/issues/567567) (accessed: 2026-11-05). |
 | management-ui product version | 0.1.0 | Surmount-owned |
 | rust-overlay flake input | commented out | not active |
 | modules / hosts | no independent fetchurl pins | versions come from flake packages + nixpkgs |
 | Stalwart packaging mode | `release-binary-fod` | source build deferred (vendor 403 / rustc) |
-| arti-onion-service | Surmount-owned source **2.7.0** (GitLab `arti-v2.7.0`) + `onion-service-service` | equals nixpkgs-rust `pkgs.arti.version` 2.7.0 (section 5b). |
+| arti-onion-service | Surmount-owned source **2.8.0** (GitLab `arti-v2.8.0`) + `onion-service-service` | `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. Does not equal nixpkgs-rust `pkgs.arti.version` 2.7.0 (section 5b). |
 | Stock Stalwart modules | dual `disabledModules` | `modules/stalwart-service.nix` |
 
 ---
@@ -374,9 +378,10 @@ Priority order (proposed, not accepted):
    **1.0.14**, WebUI **2.0.4**, spam-filter **3.0.4** (rules archive only),
    vandelay **1.0.14**. The 2026-10-17 cells are not the living pins.
    Re-check releases before every packaging PR.
-2. **Arti currency:** the Surmount package is **2.7.0** (GitLab
-   `arti-v2.7.0`), equal to nixpkgs-rust `pkgs.arti.version`. Live Tor
-   verify remains residual. Do not claim onion published from pin alone.
+2. **Arti currency:** the Surmount package src is **2.8.0** (GitLab
+   `arti-v2.8.0`). `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. nixpkgs-rust
+   `pkgs.arti.version` is still **2.7.0** and is not the vendor tree.
+   Live Tor verify remains residual. Do not claim onion published from pin alone.
 3. **OS channel:** **done** for 25.05 -> 26.05 (living host is 26.05). Further
    bumps only with release notes + measured need. May retire `nixpkgs-rust`
    if host channel rustc meets Arti MSRV without it.
@@ -441,7 +446,7 @@ re-running. Keep reports short under `~/.agents/reports/`.
 | WebUI latest = 2.0.4 | GitHub tag `v2.0.4` published 2026-11-02T11:19:17Z (re-check 2026-11-03). The 2026-10-17 cell that said 1.0.11 is historical. |
 | spam-filter latest = 3.0.4 | GitHub tag `v3.0.4` published 2026-11-01T15:50:40Z (re-check 2026-11-03). Asset is `spam-filter-rules.json.gz` only. The 2026-10-17 cell that said 3.0.2 is historical. |
 | vandelay latest = 1.0.14 | GitHub tag `v1.0.14` published 2026-11-01T16:43:01Z (re-check 2026-11-03). The 2026-10-17 cell that said 1.0.12 is historical. |
-| Surmount arti-onion-service = 2.7.0 | package expression, GitLab `arti-v2.7.0`, cargoDeps assert vs nixpkgs-rust `arti` 2.7.0 (checked 2026-10-17). |
+| Surmount arti-onion-service = 2.8.0 | package expression, GitLab `arti-v2.8.0`, src hash from the 2026-11-05 prefetch. `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. The 2026-10-17 cell that said 2.7.0 with nixpkgs-rust `cargoDeps` is historical. |
 | rustc pin = 1.99.1 | Upstream stable is 1.99.1 (accessed: 2026-10-17). nixpkgs-rust `9ecc0a67` is that rustc. Master still has 1.99.0. Prior lock `c46e6c9a` was rustc 1.99.0. The 2026-07-31 cell that said 1.97.1 is historical. |
 | Historical host 25.05 / crane 1.88 | 2026-07-31 audit day only (see footnotes) |
 | Current stable branch name 26.05 | channels.nixos.org + nixpkgs README Hydra links for release-26.05 (2026-07-30) |

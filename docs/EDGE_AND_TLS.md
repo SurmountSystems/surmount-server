@@ -346,23 +346,28 @@ when those indexer units run.
 One public Host: `splora.surmount.systems`. The sample proxy map does not
 list `esplora.surmount.systems`, `testnet3.esplora.surmount.systems`,
 `testnet4.esplora.surmount.systems`, `mutinynet.esplora.surmount.systems`,
-or `liquid.esplora.surmount.systems`. The Rust explorer UI belongs to
-Splora, not this repo. Do not add block, transaction, or address pages.
+or `liquid.esplora.surmount.systems`. The Leptos explorer route table belongs to Splora
+`frontend/web/src/views.rs` (`App`). This Axum process serves that table
+as SSR HTML on `/testnet/` (testnet3), `/testnet4/`, `/signet/`,
+`/mutinynet/`, and `/liquid/`. It does not serve a mainnet frontend on
+`/api/`. The Splora crate mounts `App` with `leptos::mount::mount_to_body`
+on wasm32 only. This server does not start a second HTTP server, and it
+does not build that wasm crate.
 
-The network prefix is stripped before the Unix socket. The query string
-is kept. `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is the WebSocket
+The network prefix is stripped before the Unix socket for indexer REST.
+The query string is kept. `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is the WebSocket
 upgrade. `POST /splora/queue` stays the queue and is not a network prefix.
 `GET /` on that host is a short same-host path list (`/api/`, `/testnet/`,
 `/testnet4/`, `/signet/`, `/mutinynet/`, `/liquid/`), not an explorer.
 
 | Public path on `splora.surmount.systems` | Socket | Notes |
 |------------------------------------------|--------|-------|
-| `/api` and `/api/...` | mainnet | 404 while the mainnet indexer is off. |
-| `/testnet` and `/testnet/...` | testnet3 | Public path is `/testnet`, not `/testnet3`. |
-| `/testnet4` and `/testnet4/...` | testnet4 | |
-| `/signet` and `/signet/...` | mutinynet | No redirect between `/signet` and `/mutinynet`. |
-| `/mutinynet` and `/mutinynet/...` | the same mutinynet socket | No redirect between them. |
-| `/liquid` and `/liquid/...` | liquid | |
+| `/api` and `/api/...` | mainnet | 404 while the mainnet indexer is off. Not a Leptos frontend. |
+| `/testnet` and `/testnet/...` | testnet3 | REST `/api` uses the socket. Screen routes are Leptos HTML. Not `/testnet3`. |
+| `/testnet4` and `/testnet4/...` | testnet4 | REST `/api` uses the socket. Screen routes are Leptos HTML. |
+| `/signet` and `/signet/...` | mutinynet | Same mutinynet frontend as `/mutinynet`. No redirect. |
+| `/mutinynet` and `/mutinynet/...` | the same mutinynet socket | REST `/api` uses the socket. Screen routes are Leptos HTML. No redirect. |
+| `/liquid` and `/liquid/...` | liquid | REST `/api` uses the socket. Screen routes are Leptos HTML. |
 
 Mempool / Esplora REST is the indexer process on a Unix socket. It does
 **not** require extra public Hosts, certificate names, or HTTP/3. Unix
@@ -379,13 +384,17 @@ to each Splora Unix socket is still HTTP/1.1. A client that arrived on
 HTTP/3 does not make the indexer speak HTTP/3. Splora does not listen
 on UDP.
 
-Under a network prefix, a remainder that is not the REST API is forwarded
-to that network Unix socket. This edge does not answer it with 404 and
-does not render it. A REST remainder still drops a leading `/api`, except
+Under a network prefix, a remainder of `/api` or `/api/...` is still
+forwarded to that network Unix socket. A remainder that matches the
+Splora Leptos `App` router is HTML from this Axum process and is not
+forwarded. Any other remainder is 404. `/docs/api/...` is a screen, not
+indexer REST. A REST remainder still drops a leading `/api`, except
 exact `/api/v1/ws`, which stays and is the WebSocket upgrade. `/api` on
-mainnet is 404 only while the mainnet indexer is off. Public
-`/testnet3/...` is not a prefix. The Electrum newline socket is not
-proxied (fail-closed if configured).
+mainnet is 404 only while the mainnet indexer is off, and it is not a
+Leptos frontend. Public `/testnet3/...` is not a prefix. `/signet` and
+`/mutinynet` both serve the mutinynet frontend. There is no redirect
+between them. The Electrum newline socket is not proxied (fail-closed
+if configured).
 
   **Live in browsers (2026-08-20):** Namecheap NS, exclusive A matching
   this host, HTTPS **200**, the Let's Encrypt certificate this host presents covers apex+www, packaged

@@ -1011,7 +1011,8 @@ mod tests {
 /// `/run/splora/<instance>.http.sock`. The queue is a separate socket and
 /// path. NIP-98 stays in splora. This edge does not add API keys. Not nginx.
 /// Not the Electrum newline socket (fail-closed if that socket is configured).
-/// Not an explorer: no block, transaction, or address pages.
+/// Block, transaction, and address paths under a network prefix are the Trunk
+/// shell, not indexer REST. Unprefixed `/block`, `/tx`, and `/address` stay unmatched.
 pub(crate) mod splora {
 
     use std::collections::BTreeMap;
@@ -1086,6 +1087,10 @@ pub(crate) mod splora {
         /// Public portal Host (one DNS name). Not an indexer. Env
         /// `SURMOUNT_SPLORA_PORTAL_HOST`. None when the proxy is off or unset.
         pub portal_host: Option<String>,
+        /// Trunk `dist` directory (the `splora-web` package output). Env
+        /// `SURMOUNT_SPLORA_WEB_ROOT`. Empty when unset. A missing directory
+        /// does not invent HTML.
+        pub web_root: PathBuf,
     }
 
     impl Default for SploraProxyConfig {
@@ -1097,6 +1102,7 @@ pub(crate) mod splora {
                 queue_path: DEFAULT_QUEUE_PATH.to_string(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
                 portal_host: None,
+                web_root: PathBuf::new(),
             }
         }
     }
@@ -1156,6 +1162,11 @@ pub(crate) mod splora {
                 );
             }
 
+            let web_root = match get("SURMOUNT_SPLORA_WEB_ROOT") {
+                Some(v) if !v.trim().is_empty() => PathBuf::from(v.trim()),
+                _ => PathBuf::new(),
+            };
+
             let portal_host = parse_portal_host(get("SURMOUNT_SPLORA_PORTAL_HOST"), enable)?;
             if let Some(ref portal) = portal_host {
                 if instances
@@ -1176,6 +1187,7 @@ pub(crate) mod splora {
                 queue_path,
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
                 portal_host,
+                web_root,
             })
         }
 
@@ -1268,12 +1280,21 @@ pub(crate) mod splora {
     }
 
     /// Where one public path goes. No redirect arm: `/signet` and `/mutinynet`
-    /// are both proxies to the mutinynet socket.
+    /// are both the mutinynet indexer. Screen routes and the prefix root are
+    /// the Trunk `index.html` shell. `/api` stays the indexer socket.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum SploraPublicRoute {
         Index,
         Queue,
         NotFound,
+        /// Trunk CSR shell, or a file under the web root. Not proxied.
+        /// Not mainnet. `rel` is the path inside the Trunk dist
+        /// (`""` is `index.html`).
+        Frontend {
+            instance: &'static str,
+            prefix: &'static str,
+            rel: String,
+        },
         Proxy {
             socket_name: &'static str,
             backend_path: String,
@@ -1284,15 +1305,16 @@ pub(crate) mod splora {
 
     /// Path routing for the portal Host.
     ///
-    /// Network prefix is stripped first. The query string is kept. A
-    /// remainder of `/api` or `/api/...` keeps the Splora REST rule: drop a
-    /// leading `/api`, except exact `/api/v1/ws`, which stays and is the
-    /// only upgrade. Any other remainder (`/block/...`, `/tx/...`,
-    /// `/address/...`, `/`, and later UI paths) is forwarded to that network
-    /// socket. This repo does not render those pages. Unprefixed `/block`,
-    /// `/tx`, and `/address` are not routes here. `/testnet3` is not
-    /// `/testnet`. The queue path is not a network prefix. `/api` with no
-    /// network prefix is mainnet, and is not proxied when mainnet is absent.
+    /// Network prefix is stripped first. The query string is kept on indexer
+    /// REST. A remainder of `/api` or `/api/...` keeps the Splora REST rule:
+    /// drop a leading `/api`, except exact `/api/v1/ws`, which stays and is
+    /// the only upgrade. Any other remainder is the Trunk shell (SPA
+    /// fallback) unless that relative path is a file in the web root. That
+    /// does not include `/docs/api/...`, which is a screen, not indexer REST.
+    /// Unprefixed `/block`, `/tx`, and `/address` are not routes here.
+    /// `/testnet3` is not `/testnet`. The queue path is not a network prefix.
+    /// `/api` with no network prefix is mainnet REST, not a frontend,
+    /// and is not proxied when mainnet is absent.
     pub fn route_splora_public(
         path: &str,
         query: Option<&str>,
@@ -1311,22 +1333,22 @@ pub(crate) mod splora {
             _ => None,
         };
         if let Some(rest) = strip_named_prefix(path, "/testnet4") {
-            return proxy_after_network("testnet4", rest, kept, enabled);
+            return route_after_network("testnet4", "/testnet4", rest, kept, enabled);
         }
         if let Some(rest) = strip_named_prefix(path, "/testnet") {
-            return proxy_after_network("testnet3", rest, kept, enabled);
+            return route_after_network("testnet3", "/testnet", rest, kept, enabled);
         }
         if let Some(rest) = strip_named_prefix(path, "/signet") {
-            return proxy_after_network("mutinynet", rest, kept, enabled);
+            return route_after_network("mutinynet", "/signet", rest, kept, enabled);
         }
         if let Some(rest) = strip_named_prefix(path, "/mutinynet") {
-            return proxy_after_network("mutinynet", rest, kept, enabled);
+            return route_after_network("mutinynet", "/mutinynet", rest, kept, enabled);
         }
         if let Some(rest) = strip_named_prefix(path, "/liquid") {
-            return proxy_after_network("liquid", rest, kept, enabled);
+            return route_after_network("liquid", "/liquid", rest, kept, enabled);
         }
         if path == "/api" || path.starts_with("/api/") {
-            return proxy_after_network("mainnet", path, kept, enabled);
+            return route_after_network("mainnet", "", path, kept, enabled);
         }
         SploraPublicRoute::NotFound
     }
@@ -1343,8 +1365,9 @@ pub(crate) mod splora {
         }
     }
 
-    fn proxy_after_network(
+    fn route_after_network(
         socket_name: &'static str,
+        public_prefix: &'static str,
         after_network: &str,
         query: Option<String>,
         enabled: &[&str],
@@ -1353,28 +1376,107 @@ pub(crate) mod splora {
             return SploraPublicRoute::NotFound;
         }
         let rest_is_api = after_network == "/api" || after_network.starts_with("/api/");
-        let backend_path = if rest_is_api {
-            backend_path_for_indexer(after_network)
-        } else {
-            forward_ui_remainder(after_network)
-        };
-        SploraPublicRoute::Proxy {
-            socket_name,
-            backend_path,
-            query,
-            websocket: rest_is_api && after_network == INDEXER_WS_PATH,
+        if rest_is_api {
+            return SploraPublicRoute::Proxy {
+                socket_name,
+                backend_path: backend_path_for_indexer(after_network),
+                query,
+                websocket: after_network == INDEXER_WS_PATH,
+            };
+        }
+        // Mainnet `/api` is the only unprefixed indexer path. Do not mount
+        // the Trunk app on it.
+        if socket_name == "mainnet" {
+            return SploraPublicRoute::NotFound;
+        }
+        SploraPublicRoute::Frontend {
+            instance: socket_name,
+            prefix: public_prefix,
+            rel: trunk_rel(after_network),
         }
     }
 
-    /// Remainder after the network prefix, when it is not REST.
-    /// Empty is the prefix itself (`/testnet4`). Not HTML from this repo.
-    fn forward_ui_remainder(after_network: &str) -> String {
-        if after_network.is_empty() || after_network == "/" {
-            "/".to_string()
-        } else if after_network.starts_with('/') {
-            after_network.to_string()
-        } else {
-            format!("/{after_network}")
+    /// Path inside the Trunk dist. Empty means `index.html`.
+    fn trunk_rel(after_network: &str) -> String {
+        after_network.trim_start_matches('/').to_string()
+    }
+
+    /// Trunk dist file, or `index.html` for a client route. A missing
+    /// web root does not invent HTML.
+    fn frontend_response(method: &Method, web_root: &std::path::Path, rel: &str) -> Response {
+        if *method != Method::GET && *method != Method::HEAD {
+            return (StatusCode::METHOD_NOT_ALLOWED, "GET only").into_response();
+        }
+        if web_root.as_os_str().is_empty() || !web_root.is_dir() {
+            return (StatusCode::NOT_FOUND, "not found").into_response();
+        }
+        if !rel.is_empty() {
+            let Some(path) = web_root_join(web_root, rel) else {
+                return (StatusCode::NOT_FOUND, "not found").into_response();
+            };
+            if path.is_file() {
+                return web_file_response(&path);
+            }
+            if trunk_rel_is_asset(rel) {
+                return (StatusCode::NOT_FOUND, "not found").into_response();
+            }
+        }
+        let index = web_root.join("index.html");
+        if index.is_file() {
+            return web_file_response(&index);
+        }
+        (StatusCode::NOT_FOUND, "not found").into_response()
+    }
+
+    fn web_root_join(root: &std::path::Path, rel: &str) -> Option<std::path::PathBuf> {
+        if rel.contains('\0') {
+            return None;
+        }
+        let mut out = root.to_path_buf();
+        for seg in rel.split('/') {
+            if seg.is_empty() || seg == "." || seg == ".." {
+                return None;
+            }
+            out.push(seg);
+        }
+        Some(out)
+    }
+
+    /// A dotted final segment is a Trunk asset. A missing asset is 404.
+    /// A path with no extension is a client route and falls back to the shell.
+    fn trunk_rel_is_asset(rel: &str) -> bool {
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        match name.rsplit_once('.') {
+            Some((stem, ext)) => !stem.is_empty() && !ext.is_empty(),
+            None => false,
+        }
+    }
+
+    fn web_file_response(path: &std::path::Path) -> Response {
+        match std::fs::read(path) {
+            Ok(bytes) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, web_content_type(path))],
+                bytes,
+            )
+                .into_response(),
+            Err(_) => (StatusCode::NOT_FOUND, "not found").into_response(),
+        }
+    }
+
+    fn web_content_type(path: &std::path::Path) -> &'static str {
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("html") => "text/html; charset=utf-8",
+            Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+            Some("css") => "text/css; charset=utf-8",
+            Some("wasm") => "application/wasm",
+            Some("json") | Some("map") => "application/json",
+            Some("svg") => "image/svg+xml",
+            Some("png") => "image/png",
+            Some("ico") => "image/x-icon",
+            Some("woff2") => "font/woff2",
+            Some("txt") => "text/plain; charset=utf-8",
+            _ => "application/octet-stream",
         }
     }
 
@@ -1581,6 +1683,9 @@ pub(crate) mod splora {
                 SploraPublicRoute::Queue => proxy_queue(state, request).await,
                 SploraPublicRoute::Index => portal_response(cfg, request.method(), &path),
                 SploraPublicRoute::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
+                SploraPublicRoute::Frontend { rel, .. } => {
+                    frontend_response(request.method(), &cfg.web_root, &rel)
+                }
                 SploraPublicRoute::Proxy {
                     socket_name,
                     backend_path,
@@ -2104,6 +2209,18 @@ pub(crate) mod splora {
             let cfg = SploraProxyConfig::from_env_map(|_| None).unwrap();
             assert!(!cfg.enable);
             assert!(cfg.instances.is_empty());
+            assert!(cfg.web_root.as_os_str().is_empty());
+        }
+
+        #[test]
+        fn web_root_comes_from_env() {
+            let cfg = SploraProxyConfig::from_env_map(|k| match k {
+                "SURMOUNT_SPLORA_WEB_ROOT" => Some("/nix/store/splora-web".into()),
+                _ => None,
+            })
+            .unwrap();
+            assert_eq!(cfg.web_root, PathBuf::from("/nix/store/splora-web"));
+            assert!(!cfg.enable);
         }
 
         #[test]
@@ -2170,6 +2287,7 @@ pub(crate) mod splora {
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
                 portal_host: Some(portal.to_string()),
+                web_root: PathBuf::new(),
             }
         }
 
@@ -2200,6 +2318,157 @@ pub(crate) mod splora {
                 }
                 other => panic!("expected proxy to {socket} {backend}, got {other:?}"),
             }
+        }
+
+        fn expect_shell(route: SploraPublicRoute, instance: &str, prefix: &str, rel: &str) {
+            match route {
+                SploraPublicRoute::Frontend {
+                    instance: got_instance,
+                    prefix: got_prefix,
+                    rel: got_rel,
+                } => {
+                    assert_eq!(got_instance, instance);
+                    assert_eq!(got_prefix, prefix);
+                    assert_eq!(got_rel, rel);
+                }
+                other => {
+                    panic!("expected trunk shell {instance} {prefix} rel={rel}, got {other:?}")
+                }
+            }
+        }
+
+        /// Named contract: client paths under a public prefix are the Trunk
+        /// shell, not a screen list and not indexer REST. `/testnet` is
+        /// testnet3. `/signet` and `/mutinynet` are mutinynet. `/api` is
+        /// not a frontend. `/testnet3` is not `/testnet`.
+        #[test]
+        fn splora_trunk_shell_routes_follow_public_prefixes() {
+            let rows = [
+                ("/testnet", "testnet3", "/testnet", "dashboard"),
+                ("/testnet/", "testnet3", "/testnet", "dashboard"),
+                ("/testnet/blocks", "testnet3", "/testnet", "blocks"),
+                ("/testnet4/block/abc", "testnet4", "/testnet4", "block"),
+                (
+                    "/testnet4/block-height/abc",
+                    "testnet4",
+                    "/testnet4",
+                    "block-height",
+                ),
+                ("/liquid/asset/abc", "liquid", "/liquid", "asset"),
+                ("/liquid/assets", "liquid", "/liquid", "assets"),
+                (
+                    "/liquid/assets/asset/abc",
+                    "liquid",
+                    "/liquid",
+                    "assets-asset",
+                ),
+                (
+                    "/liquid/assets/registry",
+                    "liquid",
+                    "/liquid",
+                    "assets-registry",
+                ),
+                (
+                    "/liquid/assets/registry/abc",
+                    "liquid",
+                    "/liquid",
+                    "assets-registry-entry",
+                ),
+                (
+                    "/signet/scripthash/abc",
+                    "mutinynet",
+                    "/signet",
+                    "scripthash",
+                ),
+                (
+                    "/mutinynet/widget/wallet",
+                    "mutinynet",
+                    "/mutinynet",
+                    "widget-wallet",
+                ),
+                ("/testnet/tx/push", "testnet3", "/testnet", "tx-push"),
+                ("/testnet/pushtx", "testnet3", "/testnet", "pushtx"),
+                ("/testnet/tx/test", "testnet3", "/testnet", "tx-test"),
+                ("/testnet4/tx/abc", "testnet4", "/testnet4", "tx"),
+                ("/testnet/address/abc", "testnet3", "/testnet", "address"),
+                ("/testnet4/mempool", "testnet4", "/testnet4", "mempool"),
+                ("/signet/calculator", "mutinynet", "/signet", "calculator"),
+                ("/mutinynet/fiat", "mutinynet", "/mutinynet", "fiat"),
+                ("/liquid/statistics", "liquid", "/liquid", "statistics"),
+                ("/liquid/mining", "liquid", "/liquid", "mining"),
+                ("/liquid/lightning", "liquid", "/liquid", "lightning"),
+                ("/testnet4/graphs", "testnet4", "/testnet4", "graphs"),
+                ("/testnet4/hashrate", "testnet4", "/testnet4", "hashrate"),
+                (
+                    "/testnet4/price-chart",
+                    "testnet4",
+                    "/testnet4",
+                    "price-chart",
+                ),
+                (
+                    "/testnet/terms-of-service",
+                    "testnet3",
+                    "/testnet",
+                    "terms-of-service",
+                ),
+                (
+                    "/testnet/privacy-policy",
+                    "testnet3",
+                    "/testnet",
+                    "privacy-policy",
+                ),
+                (
+                    "/testnet/trademark-policy",
+                    "testnet3",
+                    "/testnet",
+                    "trademark-policy",
+                ),
+                ("/testnet/docs", "testnet3", "/testnet", "docs"),
+                ("/testnet/docs/faq", "testnet3", "/testnet", "docs-faq"),
+                (
+                    "/testnet/docs/api/rest",
+                    "testnet3",
+                    "/testnet",
+                    "docs-api-rest",
+                ),
+                (
+                    "/testnet/docs/api/websocket",
+                    "testnet3",
+                    "/testnet",
+                    "docs-api-type",
+                ),
+            ];
+            for (path, instance, prefix, _) in rows {
+                let rel = path
+                    .strip_prefix(prefix)
+                    .unwrap_or("")
+                    .trim_start_matches('/');
+                expect_shell(route_four(path, None), instance, prefix, rel);
+            }
+            expect_shell(
+                route_four("/testnet4/not-a-screen", None),
+                "testnet4",
+                "/testnet4",
+                "not-a-screen",
+            );
+            expect_shell(
+                route_four("/testnet4/pkg.js", None),
+                "testnet4",
+                "/testnet4",
+                "pkg.js",
+            );
+            assert!(matches!(
+                route_four("/api/blocks", None),
+                SploraPublicRoute::NotFound
+            ));
+            assert!(matches!(
+                route_four("/testnet3/", None),
+                SploraPublicRoute::NotFound
+            ));
+            assert!(matches!(
+                route_splora_public("/testnet/", None, DEFAULT_QUEUE_PATH, &["liquid"]),
+                SploraPublicRoute::NotFound
+            ));
         }
 
         /// Named contract: each public prefix selects that network socket.
@@ -2329,52 +2598,119 @@ pub(crate) mod splora {
             );
         }
 
-        /// Named contract: block, tx, and address paths are forwarded to the
-        /// network socket. This repo does not render that HTML. Unprefixed
-        /// `/block`, `/tx`, and `/address` stay unmatched so another app on
-        /// this router keeps those paths on other hosts.
+        /// Trunk `index.html` that `trunk build` serves. The rust link stays
+        /// so the wasm app can mount. This is not a screen list.
+        const TRUNK_INDEX_HTML: &str = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Splora</title>
+  <link data-trunk rel="rust" data-wasm-opt="z" />
+  <style>
+    html, body { background: #000000; color: #FFFFFF; margin: 0; }
+    a { color: #FFD100; }
+    button { background: #000000; color: #FFFFFF; border: 1px solid #FFD100; }
+  </style>
+</head>
+<body></body>
+</html>
+"#;
+
+        /// Named contract: screen routes and each prefix root return the Trunk
+        /// shell from `SURMOUNT_SPLORA_WEB_ROOT`. A file that exists in that
+        /// directory is served as a file. Indexer REST stays a socket proxy.
+        /// Unprefixed `/block`, `/tx`, and `/address` stay unmatched.
+        /// `/api` is not a frontend. A missing web root does not invent HTML.
         #[tokio::test]
-        async fn splora_ui_paths_forward_without_html() {
-            expect_proxy(
+        async fn splora_leptos_frontend_mounted_on_each_indexer() {
+            let missing = frontend_response(
+                &Method::GET,
+                std::path::Path::new("/tmp/splora-web-root-missing-not-a-dir"),
+                "",
+            );
+            assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+            let missing_body = axum::body::to_bytes(missing.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(missing_body.as_ref(), b"not found");
+
+            expect_shell(
                 route_four("/testnet4/tx/abc", Some("x=1")),
                 "testnet4",
-                "/tx/abc",
-                Some("x=1"),
-                false,
+                "/testnet4",
+                "tx/abc",
             );
             assert!(!matches!(
                 route_four("/testnet4/tx/abc", Some("x=1")),
-                SploraPublicRoute::Index
+                SploraPublicRoute::Index | SploraPublicRoute::Proxy { .. }
             ));
-            expect_proxy(
+            expect_shell(
                 route_four("/testnet4/block/abc", None),
                 "testnet4",
-                "/block/abc",
-                None,
-                false,
+                "/testnet4",
+                "block/abc",
             );
-            expect_proxy(
+            expect_shell(
                 route_four("/testnet/address/abc", None),
                 "testnet3",
-                "/address/abc",
-                None,
-                false,
+                "/testnet",
+                "address/abc",
             );
-            expect_proxy(
+            expect_shell(
                 route_four("/liquid/block/abc", None),
                 "liquid",
-                "/block/abc",
+                "/liquid",
+                "block/abc",
+            );
+            expect_shell(
+                route_four("/signet/tx/abc", None),
+                "mutinynet",
+                "/signet",
+                "tx/abc",
+            );
+            expect_shell(
+                route_four("/mutinynet/tx/abc", None),
+                "mutinynet",
+                "/mutinynet",
+                "tx/abc",
+            );
+            expect_shell(route_four("/testnet/", None), "testnet3", "/testnet", "");
+            expect_shell(route_four("/testnet4/", None), "testnet4", "/testnet4", "");
+            expect_shell(route_four("/signet/", None), "mutinynet", "/signet", "");
+            expect_shell(
+                route_four("/mutinynet/", None),
+                "mutinynet",
+                "/mutinynet",
+                "",
+            );
+            expect_shell(route_four("/liquid/", None), "liquid", "/liquid", "");
+            expect_shell(
+                route_four("/testnet/docs/api/rest", None),
+                "testnet3",
+                "/testnet",
+                "docs/api/rest",
+            );
+            expect_proxy(
+                route_four("/testnet/api/tx/x", None),
+                "testnet3",
+                "/tx/x",
                 None,
                 false,
             );
-            let signet = route_four("/signet/tx/abc", None);
-            let mutiny = route_four("/mutinynet/tx/abc", None);
-            expect_proxy(signet.clone(), "mutinynet", "/tx/abc", None, false);
-            expect_proxy(mutiny.clone(), "mutinynet", "/tx/abc", None, false);
-            assert_eq!(signet, mutiny);
-            assert!(!matches!(signet, SploraPublicRoute::NotFound));
-            expect_proxy(route_four("/testnet4", None), "testnet4", "/", None, false);
-            expect_proxy(route_four("/testnet4/", None), "testnet4", "/", None, false);
+            assert!(matches!(
+                route_four("/api/", None),
+                SploraPublicRoute::NotFound
+            ));
+            assert!(matches!(
+                route_four("/testnet3/", None),
+                SploraPublicRoute::NotFound
+            ));
+            expect_shell(
+                route_four("/testnet4/not-a-screen", None),
+                "testnet4",
+                "/testnet4",
+                "not-a-screen",
+            );
 
             for path in [
                 "/block/abc",
@@ -2398,6 +2734,10 @@ pub(crate) mod splora {
             }
 
             let sock = tmp_sock("splora-ui");
+            let web = std::env::temp_dir().join(format!("splora-web-shell-{}", std::process::id()));
+            std::fs::create_dir_all(&web).unwrap();
+            std::fs::write(web.join("index.html"), TRUNK_INDEX_HTML).unwrap();
+            std::fs::write(web.join("pkg.js"), "console.log(\"splora\");\n").unwrap();
             let seen = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
             let seen_c = seen.clone();
             let mock = Router::new().fallback(any(move |req: AxumRequest| {
@@ -2444,6 +2784,7 @@ pub(crate) mod splora {
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
                 portal_host: Some("splora.surmount.systems".into()),
+                web_root: web.clone(),
             };
             let state = test_state_for(cfg, false);
             let app = Router::new()
@@ -2474,15 +2815,97 @@ pub(crate) mod splora {
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
             assert!(
-                !tx_type.contains("text/html"),
-                "UI forward must not be local HTML, content-type={tx_type}"
+                tx_type.contains("text/html"),
+                "Trunk shell must be HTML, content-type={tx_type}"
             );
             let tx_body = tx.text().await.unwrap();
-            assert_eq!(tx_body, "upstream-bytes");
-            assert!(!tx_body.contains("<!DOCTYPE html"));
+            assert_eq!(tx_body, TRUNK_INDEX_HTML);
+            assert!(tx_body.contains("data-trunk"));
+            assert!(tx_body.contains("rel=\"rust\""));
+            assert!(!tx_body.contains("data-surmount-ssr"));
+            assert!(!tx_body.contains("splora-frontend instance="));
+            assert_ne!(tx_body, "upstream-bytes");
             assert!(!tx_body.contains("esplora.surmount.systems"));
+
+            for path in [
+                "/testnet/",
+                "/testnet4/",
+                "/signet/",
+                "/mutinynet/",
+                "/liquid/",
+            ] {
+                let page = client
+                    .get(format!("http://{addr}{path}"))
+                    .header("Host", "splora.surmount.systems")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(page.status(), reqwest::StatusCode::OK, "{path}");
+                let body = page.text().await.unwrap();
+                assert_eq!(body, TRUNK_INDEX_HTML, "{path}");
+                assert!(body.contains("data-trunk"), "{path}");
+                assert!(body.contains("rel=\"rust\""), "{path}");
+                assert_ne!(body, "upstream-bytes");
+            }
+
+            let asset = client
+                .get(format!("http://{addr}/testnet4/pkg.js"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(asset.status(), reqwest::StatusCode::OK);
+            let asset_type = asset
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            assert!(
+                asset_type.contains("javascript"),
+                "asset must not be the shell, content-type={asset_type}"
+            );
+            assert_eq!(asset.text().await.unwrap(), "console.log(\"splora\");\n");
+
+            let missing_js = client
+                .get(format!("http://{addr}/testnet4/missing.js"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(missing_js.status(), reqwest::StatusCode::NOT_FOUND);
+            let missing_js_body = missing_js.text().await.unwrap();
+            assert_eq!(missing_js_body, "not found");
+            assert!(!missing_js_body.contains("<!DOCTYPE html"));
+
+            let posted = client
+                .post(format!("http://{addr}/testnet4/tx/abc"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(posted.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+
+            let mainnet = client
+                .get(format!("http://{addr}/api/"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(mainnet.status(), reqwest::StatusCode::NOT_FOUND);
+
+            let wrong_prefix = client
+                .get(format!("http://{addr}/testnet3/"))
+                .header("Host", "splora.surmount.systems")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(wrong_prefix.status(), reqwest::StatusCode::NOT_FOUND);
+
             let hits = seen.lock().unwrap().clone();
-            assert_eq!(hits, vec![("/tx/abc".to_string(), "x=1".to_string())]);
+            assert!(
+                hits.is_empty(),
+                "Trunk shell must not hit the indexer socket, got {hits:?}"
+            );
 
             let root = client
                 .get(format!("http://{addr}/"))
@@ -2527,6 +2950,7 @@ pub(crate) mod splora {
             serve.abort();
             mock_serve.abort();
             let _ = std::fs::remove_file(&sock);
+            let _ = std::fs::remove_dir_all(&web);
         }
 
         /// Named contract: only `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is an upgrade.
@@ -2904,6 +3328,7 @@ pub(crate) mod splora {
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
                 portal_host: None,
+                web_root: PathBuf::new(),
             };
             let state = test_state_for(cfg, true);
             let app = Router::new()
@@ -3011,6 +3436,7 @@ pub(crate) mod splora {
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
                 portal_host: None,
+                web_root: PathBuf::new(),
             };
             let state = test_state_for(cfg, false);
             let app = Router::new()
@@ -3096,6 +3522,7 @@ pub(crate) mod splora {
                 queue_path: DEFAULT_QUEUE_PATH.into(),
                 body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
                 portal_host: None,
+                web_root: PathBuf::new(),
             };
             let state = test_state_for(cfg, true);
             let app = Router::new()

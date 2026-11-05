@@ -15,6 +15,9 @@
   lib,
   pkgs,
   options,
+  # mail-vps passes the flake as specialArgs.self. Module eval without
+  # that argument leaves the web root unset.
+  self ? null,
   ...
 }:
 let
@@ -374,6 +377,9 @@ let
       hs.onionServiceStateDir
       "${hs.stateDir}/published-hostnames"
     ]
+    ++ lib.optionals (sploraWebRoot != "") [
+      sploraWebRoot
+    ]
   );
 
   # EnvironmentFile expects KEY=value lines (e.g. SURMOUNT_SESSION_SECRET=...).
@@ -481,7 +487,8 @@ let
     # Burst keeps http_request and tls_handshake_failed during a scan.
     LogRateLimitIntervalSec = "30s";
     LogRateLimitBurst = 50000;
-    Environment = envList;
+    Environment = envList
+      ++ optional (sploraWebRoot != "") "SURMOUNT_SPLORA_WEB_ROOT=${sploraWebRoot}";
     NoNewPrivileges = true;
     PrivateTmp = true;
     ProtectSystem = "strict";
@@ -559,6 +566,20 @@ let
   # host generation includes the site without a mutable /var/lib copy.
   # Operator may still set apexPublicRoot to a host directory.
   packagedPublicSite = if pkgs ? surmount-public-site then "${pkgs.surmount-public-site}" else "";
+
+  # Trunk client. Flake attribute packages.<system>.splora-web
+  # (nix/packages/splora-web.nix). Overlay name wins when present.
+  # Otherwise the mail host uses specialArgs.self. Not a store hash.
+  # Empty when neither is in scope, so module eval without the flake
+  # does not instantiate the Trunk build.
+  sploraWebPkg =
+    if pkgs ? splora-web then
+      pkgs.splora-web
+    else if self == null then
+      null
+    else
+      (self.packages.${pkgs.stdenv.hostPlatform.system} or { }).splora-web or null;
+  sploraWebRoot = if sploraWebPkg == null then "" else "${sploraWebPkg}";
 
   # Oneshot script the timer execs. builtins.readFile of this path is the
   # hermetic proof the unit names the management UI and the PEM paths.

@@ -3605,7 +3605,6 @@ let
       scOf = name: e.config.systemd.services.${name}.serviceConfig;
       journal = e.config.services.journald.extraConfig or "";
       ssh = e.config.services.openssh.settings;
-      f2b = e.config.services.fail2ban.daemonSettings.Definition;
       scram = scOf "surmount-scram";
       sshdSc = scOf "sshd";
       etSc = scOf "eternal-terminal";
@@ -3617,7 +3616,8 @@ let
       etNice = etSc.Nice or null;
       etMem = etSc.MemoryMax or null;
       tcpForward = ssh.AllowTcpForwarding or null;
-      jailNames = builtins.attrNames e.config.services.fail2ban.jails;
+      gitPkgs = builtins.filter (p: (p.pname or "") == "git") e.config.environment.systemPackages;
+      gitHasPython = p: builtins.any (d: (d.pname or "") == "python3") (p.buildInputs or [ ]);
       scramFlags = [
         "NoNewPrivileges"
         "PrivateTmp"
@@ -3676,7 +3676,7 @@ let
     assert requireJournalBurst "surmount-management-ui" (scOf "surmount-management-ui");
     assert requireJournalBurst "surmount-scram" (scOf "surmount-scram");
     assert requireJournalBurst "sshd" (scOf "sshd");
-    assert requireJournalBurst "fail2ban" (scOf "fail2ban");
+    assert requireJournalBurst "sshguard" (scOf "sshguard");
     assert requireJournalBurst "eternal-terminal" (scOf "eternal-terminal");
     assert requireJournalBurst "nix-daemon" (scOf "nix-daemon");
     assert requireSyslog "nix-daemon" "nix-daemon" (scOf "nix-daemon");
@@ -3689,7 +3689,7 @@ let
     assert requireJournalStreams "surmount-management-ui" (scOf "surmount-management-ui");
     assert requireSyslog "surmount-scram" "surmount-scram" (scOf "surmount-scram");
     assert requireJournalStreams "surmount-scram" (scOf "surmount-scram");
-    assert requireSyslog "fail2ban" "fail2ban" (scOf "fail2ban");
+    assert requireSyslog "sshguard" "sshguard" (scOf "sshguard");
     assert requireSyslog "eternal-terminal" "eternal-terminal" (scOf "eternal-terminal");
     assert (scOf "surmount-scram").NoNewPrivileges == true;
     assert (scOf "surmount-scram").ProtectSystem == "strict";
@@ -3699,8 +3699,11 @@ let
     assert (toString ssh.LoginGraceTime) == "60";
     assert (ssh.LogLevel or "") == "VERBOSE";
     assert (ssh.AuthenticationMethods or "") == "publickey";
-    assert f2b.logtarget == "SYSTEMD-JOURNAL";
-    assert f2b.loglevel == "INFO";
+    assert e.config.services.fail2ban.enable == false;
+    assert e.config.services.sshguard.enable == true;
+    assert e.config.services.sshguard.services == [ "sshd" ];
+    assert e.config.services.sshguard.attack_threshold == 30;
+    assert e.config.services.sshguard.blacklist_threshold == 30;
     assert e.config.services.eternal-terminal.enable == true;
     assert e.config.services.eternal-terminal.verbosity == 2;
     assert e.config.services.eternal-terminal.silent == false;
@@ -3726,8 +3729,8 @@ let
     assert etMem == null;
     assert tcpForward != "no";
     assert tcpForward != false;
-    assert builtins.elem "sshd" jailNames;
-    assert builtins.all (n: !(lib.hasInfix "mail" (lib.toLower n))) jailNames;
+    assert gitPkgs != [ ];
+    assert builtins.all (p: !(gitHasPython p)) gitPkgs;
     # Gates this sample does not turn on.
     assert e.config.surmount.vaultwarden.enable == false;
     assert e.config.surmount.lake.enable == false;
