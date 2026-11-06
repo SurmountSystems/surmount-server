@@ -229,6 +229,28 @@ Living maps: [docs/DNS.md](docs/DNS.md), [docs/SECURITY.md](docs/SECURITY.md),
 - **No NPM** ecosystem.
 - Short form why: [docs/principles.md](docs/principles.md).
 
+## No GHC, Haskell, or Python (operator 2026-11-06)
+
+This repo builds with Rust or C. GHC, Haskell, and Python are forbidden,
+including transitive dependencies. An eval that reaches them fails.
+
+The firewall-tool check was the remaining Haskell edge after nixfmt-rs
+replaced Haskell nixfmt. That package is now a non-Haskell script
+(`writeShellScriptBin`). `networking.nftables.enable` and
+`networking.firewall.enable` stay on. Do not construct upstream
+`nixos-firewall-tool`. Referencing `ghc`, `haskellPackages`,
+`haskell.compiler`, `hadrian`, ShellCheck, `python`, `python3`, or
+`pythonPackages` throws during mail-host eval. The mail-host build and
+install closure must contain no derivation whose name or pname contains
+shellcheck, ShellCheck, ghc, hadrian, or haskell, and none whose name or
+pname contains python, including python3, pythonPackages, dbus-python,
+pandas, pip, and json-schema-for-humans. That walk is
+`t73-no-haskell-mail-host-closure` in `tests/module-eval.nix`. An empty
+walk does not pass. Git on the mail host keeps `pythonSupport` false.
+Do not add a replacement Python or Haskell tool.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Edge and security (operator direction 2026-07-30)
 
 - **No nginx** as product edge. In-tree nginx is **transitional-to-delete**.

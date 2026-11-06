@@ -16,6 +16,18 @@
   sploraNixosModule ? null,
 }:
 let
+  # Same overlay flake.nix applies to nixosConfigurations.mail-vps.
+  # Replaces nixos-firewall-tool with writeShellScriptBin (no upstream
+  # nixos-firewall-tool) and throws on ghc, haskellPackages,
+  # haskell.compiler, hadrian, ShellCheck, python, python3, and
+  # pythonPackages.
+  noHaskellOverlay = (import ../nix/overlays.nix).noHaskell;
+  # Same glibc header generator as nixosConfigurations.mail-vps.
+  glibcHeaderGenOverlay = import ../nix/glibc-header-gen-overlay.nix;
+  # Mail-host Nix pin (nix-cli, not nix-everything). t73 applies it so the
+  # closure walk matches nixosConfigurations.mail-vps.
+  pinsOverlay = (import ../nix/overlays.nix).pins;
+
   # Cheap stand-ins so eval does not pull Stalwart binary FOD or real arti.
   # arti = stock client-shaped fake (no surmountOnionServiceCapable).
   # artiOnionService = Surmount service-capable fake (passthru claim only).
@@ -112,7 +124,11 @@ let
         (
           { ... }:
           {
-            nixpkgs.overlays = [ fakeOverlay ];
+            nixpkgs.overlays = [
+              fakeOverlay
+              noHaskellOverlay
+              glibcHeaderGenOverlay
+            ];
             nixpkgs.config.allowUnfree = false;
             system.stateVersion = "26.05";
             networking.hostName = "surmount-eval";
@@ -4226,6 +4242,182 @@ let
     assert requireJournalBurst "nix-daemon" sc;
     "t72-nix-daemon-journal-when-builder-on-ok";
 
+  # Mail-host install and build closure, not only the firewall tool's
+  # direct nativeBuildInputs. nftables stays on so firewall-nftables.nix
+  # actually installs nixos-firewall-tool. A Haskell derivation anywhere
+  # under those roots fails this assert. A derivation whose name or pname
+  # contains python, python3, pythonPackages, dbus-python, pandas, pip, or
+  # json-schema-for-humans fails the same walk. An empty walk does not pass.
+  t73-no-haskell-mail-host-closure =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          ../hosts/mail-vps/configuration.nix
+          {
+            networking.nftables.enable = true;
+            networking.firewall.enable = true;
+            # nix-cli, not nix-everything (that package pulls the HTML
+            # manual and a Python pip dependency). Same pin as mail-vps.
+            nixpkgs.overlays = lib.mkAfter [ pinsOverlay ];
+          }
+        ];
+      };
+      haskellMarks = [
+        "shellcheck"
+        "ShellCheck"
+        "ghc"
+        "hadrian"
+        "haskell"
+        "Haskell"
+        "pandoc"
+      ];
+      textMarked = text: text != "" && builtins.any (mark: lib.hasInfix mark text) haskellMarks;
+      isHaskellDrv = drv: textMarked (drv.name or "") || textMarked (drv.pname or "");
+      # "pip" is a hyphen-separated component so libpipeline and pipewire
+      # are not Python. python3, pythonPackages, and dbus-python also match
+      # the "python" infix below.
+      pythonMarks = [
+        "python"
+        "python3"
+        "pythonPackages"
+        "dbus-python"
+        "pandas"
+        "json-schema-for-humans"
+      ];
+      isPipComponent =
+        text:
+        let
+          pieces = builtins.filter builtins.isString (builtins.split "[^A-Za-z0-9]+" text);
+        in
+        builtins.elem "pip" pieces;
+      textMarkedPython =
+        text:
+        text != ""
+        && (
+          builtins.any (mark: lib.hasInfix mark text) pythonMarks || isPipComponent text
+        );
+      isPythonDrv = drv: textMarkedPython (drv.name or "") || textMarkedPython (drv.pname or "");
+      asDrvs =
+        value:
+        if value == null then
+          [ ]
+        else if lib.isDerivation value then
+          [ value ]
+        else if builtins.isList value then
+          lib.concatMap asDrvs value
+        else
+          [ ];
+      # Every list stdenv uses as a build or runtime edge, plus the
+      # buildEnv path list and the inputDerivation whose runtime
+      # dependencies are the parent derivation's build inputs.
+      edgeNames = [
+        "buildInputs"
+        "nativeBuildInputs"
+        "propagatedBuildInputs"
+        "propagatedNativeBuildInputs"
+        "checkInputs"
+        "nativeCheckInputs"
+        "installCheckInputs"
+        "nativeInstallCheckInputs"
+        "depsBuildBuild"
+        "depsBuildBuildPropagated"
+        "depsBuildTarget"
+        "depsBuildTargetPropagated"
+        "depsHostHost"
+        "depsHostHostPropagated"
+        "depsTargetTarget"
+        "depsTargetTargetPropagated"
+        "depsBuildHost"
+        "depsBuildHostPropagated"
+        "depsHostTarget"
+        "depsHostTargetPropagated"
+        "paths"
+        "propagatedUserEnvPackages"
+        "propagated-user-env-packages"
+        "src"
+        "inputDerivation"
+      ];
+      directDeps = pkg: lib.concatMap (name: asDrvs (pkg.${name} or null)) edgeNames;
+      optionalDrvs = value: asDrvs value;
+      roots = lib.concatLists [
+        (asDrvs e.config.environment.systemPackages)
+        (asDrvs (e.config.environment.defaultPackages or [ ]))
+        (optionalDrvs e.config.system.path)
+        (optionalDrvs e.config.system.build.toplevel)
+        (optionalDrvs (e.config.system.modulesTree or null))
+        (optionalDrvs (e.config.system.extraDependencies or [ ]))
+        (optionalDrvs (e.config.boot.kernelPackages.kernel or null))
+        (optionalDrvs e.config.networking.firewall.package)
+        (optionalDrvs e.pkgs.nixos-firewall-tool)
+        (optionalDrvs (e.config.nix.package or null))
+        (asDrvs (lib.concatMap (svc: svc.path or [ ]) (builtins.attrValues e.config.systemd.services)))
+        (asDrvs (
+          lib.concatMap (etc: optionalDrvs (etc.source or null)) (
+            builtins.attrValues e.config.environment.etc
+          )
+        ))
+      ];
+      startSet = builtins.attrValues (
+        builtins.listToAttrs (
+          map (drv: {
+            name = builtins.unsafeDiscardStringContext drv.outPath;
+            value = {
+              key = builtins.unsafeDiscardStringContext drv.outPath;
+              inherit drv;
+            };
+          }) roots
+        )
+      );
+      closure = builtins.genericClosure {
+        inherit startSet;
+        operator =
+          item:
+          map (drv: {
+            key = builtins.unsafeDiscardStringContext drv.outPath;
+            inherit drv;
+          }) (directDeps item.drv);
+      };
+      bad = builtins.filter (item: isHaskellDrv item.drv) closure;
+      badDesc = lib.concatMapStringsSep ", " (item: item.drv.name or item.drv.pname or "unknown") bad;
+      badPython = builtins.filter (item: isPythonDrv item.drv) closure;
+      badPythonDesc = lib.concatMapStringsSep ", " (
+        item: item.drv.name or item.drv.pname or "unknown"
+      ) badPython;
+      tool = e.pkgs.nixos-firewall-tool;
+      toolInstalled = builtins.any (
+        p: lib.hasInfix "nixos-firewall-tool" (p.name or "")
+      ) e.config.environment.systemPackages;
+      toolInClosure = builtins.any (
+        item: lib.hasInfix "nixos-firewall-tool" (item.drv.name or "")
+      ) closure;
+    in
+    assert lib.assertMsg (lib.hasInfix "surmountNoHaskell" (
+      builtins.readFile ../flake.nix
+    )) "mail-vps nixpkgs.overlays must include surmountNoHaskell";
+    assert e.config.networking.nftables.enable == true;
+    assert e.config.networking.firewall.enable == true;
+    assert e.config.networking.firewall.backend == "nftables";
+    assert toolInstalled;
+    assert tool.doCheck == false;
+    assert (tool.nativeCheckInputs or [ ]) == [ ];
+    assert (tool.checkInputs or [ ]) == [ ];
+    assert (tool.nativeInstallCheckInputs or [ ]) == [ ];
+    assert (tool.installCheckInputs or [ ]) == [ ];
+    assert startSet != [ ];
+    assert closure != [ ];
+    assert toolInClosure;
+    assert lib.assertMsg (
+      bad == [ ]
+    ) "mail-host build and install closure still reaches Haskell: ${badDesc}";
+    assert lib.assertMsg (
+      badPython == [ ]
+    ) "mail-host build and install closure still reaches Python: ${badPythonDesc}";
+    assert lib.assertMsg (
+      !(lib.hasInfix "prev.nixos-firewall-tool" (builtins.readFile ../nix/overlays.nix))
+    ) "nixos-firewall-tool must be writeShellScriptBin, not the upstream derivation";
+    assert lib.hasInfix "writeShellScriptBin" (builtins.readFile ../nix/overlays.nix);
+    "t73-no-haskell-mail-host-closure-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -4361,6 +4553,7 @@ let
     t70-laptop-renew-example-journal
     t71-splora-popular-scripts-journal-burst
     t72-nix-daemon-journal-when-builder-on
+    t73-no-haskell-mail-host-closure
   ];
 in
 {

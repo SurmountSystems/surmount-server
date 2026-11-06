@@ -5,6 +5,8 @@
 # package output (flake packages.<system>.splora-web). The Axum edge
 # serves $out. Do not copy dist by hand.
 # wasm-bindgen in frontend/web/Cargo.lock is 0.2.128. The CLI must match.
+# That lock is in the Splora checkout. Crane's deps dummy keeps only the
+# repo-root Cargo.lock, so the web lock is copied back into the dummy.
 #
 # The Splora git tree still has .cargo/config.toml replace-with
 # menhera-cooldown for laptop cargo. That file is omitted from this Nix
@@ -63,6 +65,11 @@ craneLib.buildTrunkPackage {
   cargoExtraArgs = "--offline --locked --manifest-path frontend/web/Cargo.toml";
   trunkExtraArgs = "--offline";
   trunkExtraBuildArgs = "--locked --frozen";
+  # frontend/web is its own workspace. Copy its lock into the deps dummy.
+  extraDummyScript = ''
+    mkdir -p "$out/frontend/web"
+    cp ${src}/frontend/web/Cargo.lock "$out/frontend/web/Cargo.lock"
+  '';
   env = {
     CARGO_NET_OFFLINE = "true";
     TRUNK_OFFLINE = "true";

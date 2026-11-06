@@ -330,6 +330,11 @@
 
   nixpkgs.config.allowUnfree = false;
 
+  # nixos-render-docs is a Python application. The mail host does not
+  # install the NixOS HTML manual or the configuration man page that
+  # renderer builds. nftables and the firewall stay enabled.
+  documentation.nixos.enable = false;
+
   # ---- Minimal conveniences ------------------------------------------------
   environment.systemPackages = with pkgs; [
     vim

@@ -144,9 +144,18 @@
       # .tzdata sets tzdata 2026e doCheck = false (now.ck). The mail-host
       # nixosSystem below imports .tzdata. mkPkgs does not, so
       # checks.x86_64-linux.ci does not rebuild CPython for that skip.
+      # .noHaskell replaces nixos-firewall-tool with writeShellScriptBin.
+      # It does not call prev.nixos-firewall-tool. It throws if the mail
+      # host references ghc, haskellPackages, haskell.compiler, hadrian,
+      # ShellCheck, python, python3, or pythonPackages. The firewall-tool
+      # check was the remaining Haskell edge. mkPkgs does not import it.
       surmountOverlayParts = import ./nix/overlays.nix;
       surmountPins = surmountOverlayParts.pins;
       surmountTzdata = surmountOverlayParts.tzdata;
+      surmountNoHaskell = surmountOverlayParts.noHaskell;
+      # glibc library headers from nix/packages/glibc-header-gen.c.
+      # Mail-vps only, after noHaskell, so prev.glibc is the scrubbed one.
+      glibcHeaderGenOverlay = import ./nix/glibc-header-gen-overlay.nix;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.
       mkArtiRustPlatform =
@@ -347,6 +356,8 @@
                   surmountPins
                   surmountTzdata
                   (surmountOverlay "x86_64-linux")
+                  surmountNoHaskell
+                  glibcHeaderGenOverlay
                 ];
               }
             )

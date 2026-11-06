@@ -4,7 +4,11 @@
 Read this first, then follow links into child docs. Do not invent product
 scope from memory alone.
 
-**Last updated:** 2026-11-04 (`surmount-deploy-host` bootstraps
+**Last updated:** 2026-11-06 (this repo builds with Rust or C. GHC,
+Haskell, and Python are forbidden, including transitive dependencies.
+An eval that reaches them fails. The firewall-tool check was the
+remaining Haskell edge and is now a non-Haskell script. nftables and
+the firewall stay enabled). Prior 2026-11-04 (`surmount-deploy-host` bootstraps
 gccarch-x86-64-v3 on the target before the system build when the
 running nix-daemon omits that feature. The tool writes
 `/run/surmount-nix.conf`, bind-mounts it over the store nix.conf, and
@@ -149,6 +153,7 @@ Ladder detail: [fix-and-fixos.md](fix-and-fixos.md).
 |------|--------|
 | **NEVER secrets in git** | No plaintext, no ciphertext of production secrets, no age/sops private keys, no LUKS unlock material, no `.env`. **Never suggest** "encrypted in git." Host / operator channels only. [hygiene.md](hygiene.md), [SECRETS.md](SECRETS.md). |
 | **Stack language** | **NixOS + Nix + Rust**. **No Python** product/ops (fail2ban transitional-at-most). **No NPM**. Gaps filled in-house. [principles.md](principles.md) section 5b. |
+| **No GHC, Haskell, or Python** | Operator 2026-11-06: this repo builds with Rust or C. GHC, Haskell, and Python are forbidden, including transitive dependencies. An eval that reaches them fails. The firewall-tool check was the remaining Haskell edge after nixfmt-rs and is now a non-Haskell `writeShellScriptBin` script. nftables and the firewall stay enabled. Do not construct upstream `nixos-firewall-tool`. Mail-host eval throws on `ghc`, `haskellPackages`, `haskell.compiler`, `hadrian`, ShellCheck, `python`, `python3`, and `pythonPackages`. The mail-host closure walk is `t73-no-haskell-mail-host-closure` in `tests/module-eval.nix`. It rejects shellcheck, ShellCheck, ghc, hadrian, haskell, and a name or pname containing python (python3, pythonPackages, dbus-python, pandas, pip, json-schema-for-humans). An empty walk does not pass. Git keeps `pythonSupport` false. Dual-pin `AGENTS.md`. |
 | **No nginx product edge** | In-tree nginx is **transitional-to-delete**. Target **first-party Axum** HTTPS edge. [EDGE_AND_TLS.md](EDGE_AND_TLS.md). |
 | **No Cloudflare products** | Direct-to-VPS path required. CF Research blog posts may be **cited for learning** only. No orange-cloud, Workers, Tunnel, CF WAF, CF Access as critical path. |
 | **Agents never touch Git's index** | The index is how the operator tracks agent work. No `git add`, `git commit`, `git push`, stage, `git restore --staged`, `git reset`, `git rm --cached`. Do not "clean up" the index. Operator 2026-08-28: stop touching Git. Dual-pin host `~/.grok/AGENTS.md`. |
