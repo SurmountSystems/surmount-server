@@ -18,7 +18,14 @@ Required:
                          Must not start with '-' (option-shaped values rejected).
 
 Options:
-  --dry-run              Print planned commands; do not rsync or rebuild.
+  --dry-run              Rsync the public tree and the private host-local
+                         overlay, bootstrap gccarch-x86-64-v3 the same way
+                         as a real deploy, and run nixos-rebuild build
+                         with the same path: flake ref and
+                         --option max-jobs 32 --option cores 0.
+                         Does not run nixos-rebuild switch, does not change
+                         /nix/var/nix/profiles/system, does not run
+                         post-switch smoke, and does not install secrets.
   --host-local DIR       Path to host-local overlay (local machine or mount).
                          Or env SURMOUNT_HOST_LOCAL_DIR.
                          Required for lockout / layout checks unless --skip-host-local-check.
@@ -76,10 +83,12 @@ Environment:
                                Same as --secrets-from-secret-service
   SURMOUNT_SECRETS_HOST_ID     Same as --secrets-host-id
 
-After rebuild (success or non-zero), deploy-host always runs post-switch
-smoke on the remote via SSH (surmount-deploy-host-post-switch-smoke):
+After a real deploy (no --dry-run), success or non-zero, deploy-host
+runs post-switch smoke on the remote via SSH
+(surmount-deploy-host-post-switch-smoke):
   generation pointer, systemctl is-active sshd/stalwart-mail/
   surmount-management-ui (starts UI if inactive), loopback /health.
+Dry-run does not run that smoke and does not switch the running generation.
 "#;
 
 pub const ALLOWED_SECRETS_KINDS: &[&str] = &[

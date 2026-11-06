@@ -69,7 +69,7 @@ is only the static sites. It is not this sequence.
 
 The agent can and must run the entire procedure **up to and including**
 `just deploy-dry-run`. Named eval, `just check-remote` (fmt and
-nixfmt, then clippy), and the dry-run plan are how errors show up. Dumping those
+nixfmt, then clippy), and the dry-run build are how errors show up. Dumping those
 commands on the operator is a broken leftover. Standing law:
 [../AGENTS.md](../AGENTS.md) *Deploy dry-run is agent work* and *Prove
 the operator gate*. The explicit equivalent of the dry-run is
@@ -291,7 +291,8 @@ Do not use those as the mail-host quality bar.
 The **agent** runs this. Agents must have already run section 2 and
 section 3, then this dry-run, before asking the operator to switch.
 The dry-run does not switch. A dry-run failure (bad host-local, missing
-keys, rsync refuse) is an agent problem until it is green.
+keys, rsync refuse, or a failed `nixos-rebuild build`) is an agent
+problem until it is green.
 
 From the repo root:
 
@@ -319,21 +320,25 @@ nix run .#surmount-deploy-host -- --dry-run --target root@surmount-1 --host-loca
 The extra `--` after `just deploy-host` stops just from eating flags.
 `just deploy-dry-run` already includes those flags.
 
-What the dry-run prints (it must not rebuild the guest):
+What the dry-run does (it must not switch the guest):
 
 - rsync of the public tree to `root@surmount-1:/root/surmount-server/`
   (excludes `.git/`, `host-local/`, the workspace `target/` cargo cache,
   `crates/target/`, secrets patterns)
 - rsync of private host-local to
   `root@surmount-1:/root/surmount-server/host-local/`
-- planned remote command that bootstraps `gccarch-x86-64-v3` when
-  the daemon's system-features omit it, then
-  `nixos-rebuild switch --flake path:/root/surmount-server#mail-vps`.
-  Dry-run prints that plan and does not apply the bootstrap, does not
-  bind-mount, and does not restart nix-daemon
-- post-switch smoke as a planned remote command
+- on the guest, bootstraps `gccarch-x86-64-v3` when the daemon's
+  system-features omit it, the same way `just deploy` does, then runs
+  `nixos-rebuild build --flake path:/root/surmount-server#mail-vps`
+  with `--option max-jobs 32 --option cores 0`
+- does not run `nixos-rebuild switch`
+- does not change `/nix/var/nix/profiles/system`
+- does not run post-switch smoke
+- does not install secrets (that plan stays print-only)
 
-Success is a printed plan and exit 0. It is not a new generation.
+Success is a finished build and exit 0. The running generation was not
+switched. A later `just deploy` of the same tree reuses the store paths
+this build produced.
 
 Host-local never comes from public git. The flake on the guest is
 `path:` so untracked host-local is visible to Nix.
@@ -348,8 +353,9 @@ just deploy-host -- --dry-run --target root@surmount-1 \
   --secrets-require-kind tls-cert --secrets-require-kind tls-key
 ```
 
-Do not pass `--install-secrets` unless you mean to copy Domain B secrets
-in that same deploy. Schema: [SECRETS.md](SECRETS.md).
+On a dry-run, `--install-secrets` only prints the install plan and does
+not copy secrets. A real deploy with that flag does copy them. Schema:
+[SECRETS.md](SECRETS.md).
 
 ---
 

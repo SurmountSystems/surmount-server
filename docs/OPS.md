@@ -753,10 +753,9 @@ usable SSH key **files** (lockout risk if password auth is off), syncs the
 **public** tree (refuses copying host-local into tracked `hosts/` /
 `secrets/`), rsyncs private host-local to `REMOTE/host-local/`, optionally
 runs the secrets install bridge when `--install-secrets` is set, runs
-`nixos-rebuild switch --flake path:REMOTE_DIR#mail-vps` on the host (or prints
-that plan in `--dry-run`), then **always** runs post-switch smoke on the remote
+`nixos-rebuild switch --flake path:REMOTE_DIR#mail-vps` on a real deploy, then **always** runs post-switch smoke on the remote
 (`nix run .#surmount-deploy-host-post-switch-smoke`) even if rebuild exit was non-zero
-(activation may still have applied). Smoke checks generation current, unit
+(activation may still have applied). `--dry-run` rsyncs, bootstraps, and runs `nixos-rebuild build` instead of switch. It does not run post-switch smoke and it does not install secrets. Smoke checks generation current, unit
 activity (`sshd`, `stalwart-mail`, `surmount-management-ui`; starts UI if
 inactive), loopback `/health` (never invents a public URL), TLS PEM path
 presence when https edge or `SURMOUNT_TLS_*` is set (durable default
@@ -892,9 +891,9 @@ restart the daemon. If the feature is still absent after that
 restart, the tool stops and does not start the system build. The
 `/run` bind does not survive reboot. A successful switch is what puts
 the feature in the generation's `nix.conf`. An operator or an agent
-does not SSH a bind before `just deploy`. `just deploy-dry-run` only
-prints planned commands and does not build, so a green dry-run does
-not apply this bootstrap.
+does not SSH a bind before `just deploy`. `just deploy-dry-run` rsyncs,
+bootstraps gccarch-x86-64-v3 the same way, and runs `nixos-rebuild build`.
+It does not switch the running generation.
 
 The nixpkgs cc-wrapper
 reads `targetPlatform.gcc.arch` and writes `-march=x86-64-v3` into
@@ -2040,7 +2039,7 @@ exceptions*.
 | `nix run .#e2e-host` / `just e2e-host` | Host end-to-end (Rust flake app; `SURMOUNT_E2E_HOST=1` or exit 2; also requires `SURMOUNT_E2E_BASE_URL`; `LAB_IP` unless `SKIP_BAN=1`). **Never** a flake check |
 | `just publish` | Publish static sites (apex/www from locked `github:SurmountSystems/site` via `nix build .#surmount-public-site`, plus extra vhosts). Not a NixOS generation. |
 | `just deploy` | Operator's real mail-host switch. Defaults: `--target root@surmount-1` and `--host-local /home/hunter/.local/share/surmount/host-local`. Extra arguments append. Agents must not run this. Explicit equivalent: `just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
-| `just deploy-dry-run` | Same switch with `--dry-run` before `--target`. Agents may run this. Extra arguments append. Explicit equivalent: `just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
+| `just deploy-dry-run` | Rsyncs, bootstraps gccarch-x86-64-v3, and runs `nixos-rebuild build` on the mail host. Does not switch the running generation and does not install secrets. Agents may run this. Extra arguments append. Explicit equivalent: `just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
 | `nix run .#surmount-deploy-host` / `just deploy-host` | Flexible deploy driver with no default target: public rsync + host-local checks + `#mail-vps` rebuild (not CI). That is the NixOS generation. [deploy-host-local.md](deploy-host-local.md) |
 | `nix run .#surmount-deploy-host-post-switch-smoke` | Post-switch smoke (generation, units, loopback health, listen proof). |
 | `just fix-public-dashboard` / `nix run .#surmount-fix-public-dashboard` | Compose recovery pin + mint API key + free-443 dry-run (no operator password homework). Optional `--live-free-443` on operator host only. [SECRETS.md](SECRETS.md) |

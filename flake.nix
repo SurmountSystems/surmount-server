@@ -467,6 +467,9 @@
           splora-liquid =
             sploraInput.packages.${system}.splora-liquid
               or (throw "splora flake input has no packages.${system}.splora-liquid (fail-closed)");
+          # Trunk client from frontend/web. cargoHash is the fetchCargoVendor
+          # vendor-staging hash in nix/packages/splora-web.nix. This Nix src
+          # omits the laptop Menhera config. The build phase is offline.
           splora-web = pkgs.callPackage ./nix/packages/splora-web.nix { inherit craneLib sploraInput; };
           # Rust nixfmt-rs (Mic92). Not Haskell pkgs.nixfmt and not
           # nixfmt-rfc-style (that alias is the channel Haskell package).
