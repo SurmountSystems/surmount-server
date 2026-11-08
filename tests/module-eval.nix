@@ -23,6 +23,7 @@ let
   # pythonPackages.
   noHaskellOverlay = (import ../nix/overlays.nix).noHaskell;
   # Same glibc header generator as nixosConfigurations.mail-vps.
+  # Also covers glibcLocales configure. The locale archive stays localedef.
   glibcHeaderGenOverlay = import ../nix/glibc-header-gen-overlay.nix;
   # Mail-host Nix pin (nix-cli, not nix-everything). t73 applies it so the
   # closure walk matches nixosConfigurations.mail-vps.

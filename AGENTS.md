@@ -249,6 +249,25 @@ pandas, pip, and json-schema-for-humans. That walk is
 walk does not pass. Git on the mail host keeps `pythonSupport` false.
 Do not add a replacement Python or Haskell tool.
 
+## Existing Rust or C, and every dry-run root together (operator 2026-11-07)
+
+When a Python program is in the way, use an existing Rust project.
+Operator 2026-11-07, later the same day: prefer Rust over C. An existing
+C project is only the fallback when no Rust project does that job. Do
+not write a new C program to stand in for the Python. The C files this
+session added under `nix/packages/` are not that replacement.
+
+Jinja templates have existing Rust renderers. MiniJinja is one
+(https://github.com/mitsuhiko/minijinja, accessed: 2026-11-07). Do not
+reject a Rust renderer because it is not a line-for-line copy of the
+Python script, and do not write a C renderer in its place.
+
+A `just deploy-dry-run` transcript is one full run. The build line
+already passes `--keep-going`. Fix every builder-failed root from that
+transcript before the next dry-run. Do not fix one root, rerun, and
+leave the other roots from the same transcript for a later pass.
+Dependents of a failed root are not extra roots.
+
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
 ## Edge and security (operator direction 2026-07-30)
@@ -310,6 +329,14 @@ Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
   Thunderbird, or any other client, from an older mail thread. Read the
   screenshot: Evolution has Mail / Contacts / Calendar / Tasks / Memos.
   Say Evolution when that is what they opened.
+- **End a broken nested agent (operator 2026-11-07).** If an L2 or L3
+  is broken, end it and start a replacement when the work is still owed.
+  Do not spend the turn weighing that choice. Broken includes an early
+  exit with no land report, an L2 that is still reading or editing after
+  it should have spawned an L3, an L2 started with the wrong
+  instructions, and an L3 still on turn 1 with no file save after about
+  15 minutes. A healthy agent that is already doing the assigned work
+  stays up.
 
 ## Agent plans and reports live on the host (2026-08-18)
 

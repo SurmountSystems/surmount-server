@@ -21,14 +21,14 @@
   craneLib,
   rustPlatform,
   sploraInput,
+  # nixpkgs lld (same store path as llvmPackages.lld). wasm32 rustc
+  # execs the binary name `lld`. Not Python, GHC, or ShellCheck.
+  lld,
 }:
 
 let
-  wasmBindgenCli =
-    if pkgs ? wasm-bindgen-cli_0_2_128 then
-      pkgs.wasm-bindgen-cli_0_2_128
-    else
-      pkgs.wasm-bindgen-cli;
+  # wasm-bindgen-cli 0.2.128 from ./wasm-bindgen-cli.nix only.
+  wasmBindgenCli = pkgs.callPackage ./wasm-bindgen-cli.nix { };
 
   src = lib.cleanSourceWith {
     src = sploraInput;
@@ -63,8 +63,16 @@ craneLib.buildTrunkPackage {
   # loses to a project replace-with. cargoDeps is the fixed-output vendor.
   cargoVendorDir = null;
   cargoExtraArgs = "--offline --locked --manifest-path frontend/web/Cargo.toml";
-  trunkExtraArgs = "--offline";
-  trunkExtraBuildArgs = "--locked --frozen";
+  # Trunk 0.21+ (this pin is nixpkgs trunk 0.21.14) gives --offline,
+  # --release, --locked, and --frozen an optional value. A bare --offline
+  # consumes the next token, so crane's
+  # `trunk --offline build --release=true ...` parses `build` as that value
+  # and rejects --release before any subcommand. --offline=true leaves
+  # `build` as the subcommand. Crane then appends --release=true after
+  # `build` when trunk.version is at least 0.21. --locked=true and
+  # --frozen=true keep those flags from consuming the index path.
+  trunkExtraArgs = "--offline=true";
+  trunkExtraBuildArgs = "--locked=true --frozen=true";
   # frontend/web is its own workspace. Copy its lock into the deps dummy.
   extraDummyScript = ''
     mkdir -p "$out/frontend/web"
@@ -74,7 +82,44 @@ craneLib.buildTrunkPackage {
     CARGO_NET_OFFLINE = "true";
     TRUNK_OFFLINE = "true";
   };
+  # Trunk 0.21.14 config::load(None) calls Source::find on the unpack
+  # root (crane's cwd). Find prefers Trunk.toml, then Cargo.toml
+  # (trunk src/config/models/source/mod.rs). The root Cargo.toml is
+  # package splora and has no [workspace]. Keep that file. Do not
+  # rename it. Write Trunk.toml at the unpack root so find loads a
+  # file and does not select package splora. dist is frontend/web/dist,
+  # which is the directory the trunk install copies. frontend/web
+  # already has [workspace], so this cargo check does not walk up to
+  # package splora. If that table is missing, write an empty one.
+  # Drop the dev-dependency `splora = { path = "../.." }`. Leave
+  # splora-api and splora-frontend-shared. Do not hand-edit
+  # Cargo.lock. After the manifest no longer names the indexer,
+  # regenerate the unpacked web lock with cargo offline and without
+  # --locked, using the vendor dir from cargoDeps. Do not delete
+  # tempfile. The indexer packages keep the upstream root Cargo.toml.
   preConfigure = ''
+    grep -vxF \
+      -e 'splora = { path = "../.." }' \
+      -e '# Indexer library name is `electrs`. Package name is `splora`.' \
+      frontend/web/Cargo.toml > frontend/web/Cargo.toml.no-indexer-dev
+    mv frontend/web/Cargo.toml.no-indexer-dev frontend/web/Cargo.toml
+    if grep -F 'splora = { path = "../.." }' frontend/web/Cargo.toml; then
+      echo "frontend/web still depends on the indexer package splora" >&2
+      exit 1
+    fi
+    if ! grep -qxF '[workspace]' frontend/web/Cargo.toml; then
+      {
+        printf '%s\n' '[workspace]'
+        echo
+        cat frontend/web/Cargo.toml
+      } > frontend/web/Cargo.toml.workspace-root
+      mv frontend/web/Cargo.toml.workspace-root frontend/web/Cargo.toml
+    fi
+    cat > Trunk.toml <<'EOF'
+[build]
+target = "frontend/web/index.html"
+dist = "frontend/web/dist"
+EOF
     mkdir -p .cargo
     substitute ${cargoDeps}/.cargo/config.toml .cargo/config.toml \
       --subst-var-by vendor ${cargoDeps}
@@ -83,9 +128,17 @@ craneLib.buildTrunkPackage {
 [net]
 offline = true
 EOF
+    cargo generate-lockfile --offline --manifest-path frontend/web/Cargo.toml
   '';
   trunkIndexPath = "frontend/web/index.html";
   doCheck = false;
+  # buildTrunkPackage forwards this attrset to buildDepsOnly. That
+  # derivation is splora-web-deps (the wasm-streams link). The trunk
+  # derivation appends binaryen, trunk, and wasm-bindgen-cli onto this
+  # list; it does not replace it.
+  nativeBuildInputs = [
+    lld
+  ];
   wasm-bindgen-cli = wasmBindgenCli;
   passthru = {
     inherit cargoDeps cargoHash;

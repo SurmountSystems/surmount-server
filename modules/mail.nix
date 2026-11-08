@@ -47,8 +47,52 @@ let
 
   spamFilter = config.services.stalwart.package.spam-filter or null;
   webui = config.services.stalwart.package.webui or null;
+
+  # pkgs/build-support/trivial-builders/default.nix reads
+  # shellcheck-minimal.compiler inside writeShellApplication. The
+  # pre-switch option default calls that helper. This script does not.
+  preSwitchCheckScript = lib.concatLines (
+    lib.mapAttrsToList (name: text: ''
+      # pre-switch check ${name}
+      set +e
+      (
+        set -e
+        ${text}
+      ) >&2
+      _rc=$?
+      set -e
+      if [ "$_rc" -ne 0 ]; then
+        echo "Pre-switch check '${name}' failed" >&2
+        exit 1
+      fi
+    '') config.system.preSwitchChecks
+  );
 in
 {
+  # nixos/modules/system/activation/pre-switch-check.nix
+  disabledModules = [
+    "system/activation/pre-switch-check.nix"
+  ];
+
+  options.system.preSwitchChecks = lib.mkOption {
+    default = { };
+    type = lib.types.attrsOf lib.types.str;
+    description = ''
+      Shell fragments run before a switch to this system. A failing
+      fragment aborts the switch. The new configuration path and the
+      switch action are the first and second arguments.
+    '';
+  };
+
+  options.system.preSwitchChecksScript = lib.mkOption {
+    type = lib.types.pathInStore;
+    internal = true;
+    readOnly = true;
+    default = lib.getExe (
+      pkgs.writeShellScriptBin "pre-switch-checks" preSwitchCheckScript
+    );
+  };
+
   config = mkIf cfg.enable (mkMerge [
     {
       services.stalwart = {

@@ -465,6 +465,26 @@ Living maps: [DNS.md](DNS.md), [../AGENTS.md](../AGENTS.md),
 
 ---
 
+## 14. Follow-up (2026-11-07): existing tools, and the whole dry-run
+
+When a Python program blocks the mail-host build, the replacement is an
+existing Rust project. Prefer Rust over C. An existing C project is only
+the fallback when no Rust project does that job. Do not write a new C
+program to stand in for that Python. The C files added under
+`nix/packages/` during the 2026-11-07 dry-run loop are not that
+replacement.
+
+Jinja templates have existing Rust renderers. MiniJinja is one
+(https://github.com/mitsuhiko/minijinja, accessed: 2026-11-07). Do not
+reject a Rust renderer because it is not a line-for-line copy of the
+Python script, and do not write a C renderer in its place.
+
+One `just deploy-dry-run` transcript is the full failure list. Fix every
+builder-failed root from that transcript before the next dry-run. Do not
+fix one root and rerun while other roots from the same transcript remain.
+
+Dual-pin [../AGENTS.md](../AGENTS.md) and [COMPACTION-PIN.md](COMPACTION-PIN.md).
+
 ## Related updates
 
 Living docs updated to match this direction (same turn as this file and the

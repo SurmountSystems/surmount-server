@@ -484,12 +484,15 @@ fn ssh_status_label(code: Option<i32>) -> String {
 /// One remote build. Same gccarch bootstrap as `switch_remote_command`,
 /// then `nixos-rebuild build`. Does not switch and does not read or
 /// write `/nix/var/nix/profiles/system`. `nixos-rebuild build` leaves a
-/// `result` symlink in the remote working directory.
+/// `result` symlink in the remote working directory. `--keep-going` is
+/// only on this build so one dry-run lists every failure. The switch
+/// command does not use it.
 fn build_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
     let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
-    let build =
-        format!("nixos-rebuild build --flake {flake_q} --option max-jobs 32 --option cores 0");
+    let build = format!(
+        "nixos-rebuild build --flake {flake_q} --option max-jobs 32 --option cores 0 --keep-going"
+    );
     format!("{bootstrap}\n{build}")
 }
 
@@ -584,21 +587,48 @@ fn read_tee(mut src: impl Read, mut sink: impl Write) -> Vec<u8> {
     buf
 }
 
+fn ssh_command(host: &str, remote_cmd: &str) -> Command {
+    let extra = ssh_extra_args(host);
+    let mut cmd = Command::new(ssh_bin());
+    cmd.args(&extra).arg("--").arg(host).arg(remote_cmd);
+    cmd
+}
+
+/// Local exec of the ssh program. Retry only ETXTBSY (os error 26).
+///
+/// A shebang script the caller just closed can still be busy when exec
+/// starts it. On the Nix builder that is the `fake-ssh` script this
+/// crate's tests pass through `SURMOUNT_DEPLOY_SSH`. Each attempt is a
+/// new `Command`. Any other spawn error returns on the first try. The
+/// last ETXTBSY returns that error and is not a successful smoke. The
+/// program did not start, so this is not a second remote switch.
+fn retry_local_exec<T>(mut once: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    const ATTEMPTS: u32 = 5;
+    for attempt in 0..ATTEMPTS {
+        match once() {
+            Ok(value) => return Ok(value),
+            Err(err) if err.raw_os_error() == Some(26) && attempt + 1 < ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    20 * u64::from(attempt + 1),
+                ));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::from_raw_os_error(26))
+}
+
 /// Run one SSH. Copy stdout and stderr through as they arrive so a long
 /// rebuild stays visible, and return stdout for the generation line.
 /// Stderr is not dropped.
 fn ssh_captured(host: &str, remote_cmd: &str) -> (RemoteFinish, String) {
-    let extra = ssh_extra_args(host);
-    let mut child = match Command::new(ssh_bin())
-        .args(&extra)
-        .arg("--")
-        .arg(host)
-        .arg(remote_cmd)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let mut child = match retry_local_exec(|| {
+        let mut cmd = ssh_command(host, remote_cmd);
+        cmd.stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd.spawn()
+    }) {
         Ok(child) => child,
         Err(e) => {
             return (
@@ -640,14 +670,7 @@ fn read_profile_generation(host: &str) -> Option<u64> {
 }
 
 fn ssh_finish(host: &str, remote_cmd: &str) -> RemoteFinish {
-    let extra = ssh_extra_args(host);
-    match Command::new(ssh_bin())
-        .args(&extra)
-        .arg("--")
-        .arg(host)
-        .arg(remote_cmd)
-        .status()
-    {
+    match retry_local_exec(|| ssh_command(host, remote_cmd).status()) {
         Ok(status) => classify_ssh_code(status.code()),
         Err(e) => RemoteFinish::Local(format!("ssh failed: {e}")),
     }
@@ -944,6 +967,7 @@ mod tests {
         assert!(!cmd.contains("nixos-rebuild build"));
         assert!(cmd.contains("--option max-jobs 32"));
         assert!(cmd.contains("--option cores 0"));
+        assert!(!cmd.contains("--keep-going"), "{cmd}");
         assert!(cmd.contains("path:/tmp/repo#mail-vps"));
         assert!(cmd.contains("/nix/var/nix/profiles/system"));
         assert!(cmd.contains("synthetic-built-generation:"));
@@ -983,10 +1007,11 @@ mod tests {
         let cmd = build_remote_command("path:/tmp/repo#mail-vps");
         assert!(
             cmd.contains(
-                "nixos-rebuild build --flake path:/tmp/repo#mail-vps --option max-jobs 32 --option cores 0"
+                "nixos-rebuild build --flake path:/tmp/repo#mail-vps --option max-jobs 32 --option cores 0 --keep-going"
             ),
             "{cmd}"
         );
+        assert!(cmd.trim_end().ends_with("--keep-going"), "{cmd}");
         assert!(!cmd.contains("nixos-rebuild switch"), "{cmd}");
         assert!(!cmd.contains("/nix/var/nix/profiles/system"), "{cmd}");
         assert!(!cmd.contains("nix-env"), "{cmd}");
@@ -1012,6 +1037,10 @@ mod tests {
         );
         let switched = switch_remote_command("path:/tmp/repo#mail-vps");
         assert!(switched.contains("nixos-rebuild switch --flake"));
+        assert!(switched.contains(
+            "nixos-rebuild switch --flake path:/tmp/repo#mail-vps --option max-jobs 32 --option cores 0"
+        ));
         assert!(!switched.contains("nixos-rebuild build"));
+        assert!(!switched.contains("--keep-going"), "{switched}");
     }
 }

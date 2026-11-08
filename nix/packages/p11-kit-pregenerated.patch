@@ -1,0 +1,112 @@
+--- a/meson.build
++++ b/meson.build
+@@ -467,16 +467,6 @@
+ gnome = import('gnome')
+ i18n = import('i18n')
+ pkg = import('pkgconfig')
+-python = import('python').find_installation()
+-python_version = python.language_version()
+-python_version_req = '>=3.6'
+-if not python_version.version_compare(python_version_req)
+-  error('Requires Python @0@, @1@ found.'.format(python_version_req, python_version))
+-endif
+-
+-pkcs11_json_project = subproject('pkcs11-json')
+-pkcs11_json_gen = pkcs11_json_project.get_variable('pkcs11_json_gen')
+-pkcs11_json = pkcs11_json_gen.process('common/pkcs11.h')
+ 
+ subdir('common')
+ subdir('p11-kit')
+--- a/p11-kit/meson.build
++++ b/p11-kit/meson.build
+@@ -24,64 +24,13 @@
+   'rpc-client.c'
+ ]
+ 
+-libp11_kit_internal_sources += custom_target('generate virtual-ffi-generated.h',
+-                                             input: pkcs11_json,
+-                                             output: 'virtual-ffi-generated.h',
+-                                             command: [
+-                                               python,
+-                                               meson.current_source_dir() / 'gen-wrappers.py',
+-                                               '--template', meson.current_source_dir() / 'templates' / 'binding-wrappers.py',
+-                                               '--excludes', meson.current_source_dir() / 'templates' / 'virtual-excludes.list',
+-                                               '--infile', '@INPUT@',
+-                                               '--outfile', '@OUTPUT@',
+-                                             ])
+-libp11_kit_internal_sources += custom_target('generate virtual-fixed-wrappers.h',
+-                                             input: pkcs11_json,
+-                                             output: 'virtual-fixed-wrappers.h',
+-                                             command: [
+-                                               python,
+-                                               meson.current_source_dir() / 'gen-wrappers.py',
+-                                               '--template', meson.current_source_dir() / 'templates' / 'fixed-wrappers.py',
+-                                               '--excludes', meson.current_source_dir() / 'templates' / 'virtual-excludes.list',
+-                                               '--renames',
+-                                               'C_GetFunctionStatus:short',
+-                                               'C_CancelFunction:short',
+-                                               '--concat-lines',
+-                                               '--infile', '@INPUT@',
+-                                               '--outfile', '@OUTPUT@',
+-                                             ])
+-
+-libp11_kit_internal_sources += custom_target('generate virtual-fixed-closures.h',
+-                                             output: 'virtual-fixed-closures.h',
+-                                             command: [
+-                                               python,
+-                                               meson.current_source_dir() / 'gen-fixed-closures.py',
+-                                               '--closures', '@0@'.format(closures),
+-                                               '--outfile', '@OUTPUT@',
+-                                             ])
+-
+-libp11_kit_internal_sources += custom_target('generate virtual-stack-generated.h',
+-                                             input: pkcs11_json,
+-                                             output: 'virtual-stack-generated.h',
+-                                             command: [
+-                                               python,
+-                                               meson.current_source_dir() / 'gen-wrappers.py',
+-                                               '--template', meson.current_source_dir() / 'templates' / 'stack-wrappers.py',
+-                                               '--excludes', meson.current_source_dir() / 'templates' / 'virtual-excludes.list',
+-                                               '--infile', '@INPUT@',
+-                                               '--outfile', '@OUTPUT@',
+-                                             ])
+-libp11_kit_internal_sources += custom_target('generate virtual-base-generated.h',
+-                                             input: pkcs11_json,
+-                                             output: 'virtual-base-generated.h',
+-                                             command: [
+-                                               python,
+-                                               meson.current_source_dir() / 'gen-wrappers.py',
+-                                               '--template', meson.current_source_dir() / 'templates' / 'base-wrappers.py',
+-                                               '--excludes', meson.current_source_dir() / 'templates' / 'virtual-excludes.list',
+-                                               '--infile', '@INPUT@',
+-                                               '--outfile', '@OUTPUT@',
+-                                             ])
++libp11_kit_internal_sources += files(
++  'virtual-ffi-generated.h',
++  'virtual-fixed-wrappers.h',
++  'virtual-fixed-closures.h',
++  'virtual-stack-generated.h',
++  'virtual-base-generated.h',
++)
+ libp11_kit_internal_sources += 'virtual.c'
+ 
+ libp11_kit_internal_c_args = [
+@@ -112,17 +61,7 @@
+   'util.c'
+ ]
+ 
+-libp11_kit_sources += custom_target('generate proxy-generated.h',
+-                                    input: pkcs11_json,
+-                                    output: 'proxy-generated.h',
+-                                    command: [
+-                                      python,
+-                                      meson.current_source_dir() / 'gen-wrappers.py',
+-                                      '--template', meson.current_source_dir() / 'templates' / 'proxy-wrappers.py',
+-                                      '--excludes', meson.current_source_dir() / 'templates' / 'proxy-excludes.list',
+-                                      '--infile', '@INPUT@',
+-                                      '--outfile', '@OUTPUT@',
+-                                    ])
++libp11_kit_sources += files('proxy-generated.h')
+ 
+ libp11_kit_symbol_map = meson.current_source_dir() / 'libp11-kit.map'
+ libp11_kit_ldflags = cc.get_supported_link_arguments([

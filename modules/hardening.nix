@@ -98,12 +98,18 @@ in
       boot.kernelParams = mkDefault [ "page_alloc.shuffle=1" ];
 
       security.sudo.execWheelOnly = mkDefault true;
+
+      # programs.shadow sets su forwardXAuth. That PAM line references
+      # xauth. This host has no X server, so the forward stays off.
+      security.pam.services.su.forwardXAuth = lib.mkForce false;
     })
 
     # SHC 261: guest agent so the hypervisor can inject a command when
     # SSH is stuck. Default off; host-local enables on this QEMU VPS.
     (mkIf (cfg.enable && cfg.hardening.enable && cfg.hardening.qemuGuestAgent.enable) {
       services.qemuGuest.enable = true;
+      # Not nixpkgs qemu_kvm.ga. That package walks into pythonPackages.
+      services.qemuGuest.package = pkgs.callPackage ../nix/packages/qemu-guest-agent.nix { };
       # Stock nixpkgs only starts the unit via udev SYSTEMD_WANTS on the
       # virtio port. After a switch that udev event has already fired, so
       # the unit stays dead. Want multi-user so SHC inject works on boot
