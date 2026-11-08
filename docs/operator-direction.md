@@ -485,6 +485,16 @@ fix one root and rerun while other roots from the same transcript remain.
 
 Dual-pin [../AGENTS.md](../AGENTS.md) and [COMPACTION-PIN.md](COMPACTION-PIN.md).
 
+Operator 2026-11-07, later the same day, always remember. Handwritten C
+is forbidden in this repo. That includes a `.c` or `.h` file, and C
+embedded in Nix, bash, a patch, or any other file that emits a C
+program at build time. The operator cannot audit that code. Removing
+Python is to shrink the attack surface. Handwritten C is the same
+class of unauditable code. Upstream projects that are written in C may
+remain as dependencies. Do not replace removed C with new C. Remove
+every `.c` and `.h` file we added. The earlier sentence that an
+existing C project is a fallback does not allow handwritten C.
+
 ## Related updates
 
 Living docs updated to match this direction (same turn as this file and the

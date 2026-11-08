@@ -231,8 +231,10 @@ Living maps: [docs/DNS.md](docs/DNS.md), [docs/SECURITY.md](docs/SECURITY.md),
 
 ## No GHC, Haskell, or Python (operator 2026-11-06)
 
-This repo builds with Rust or C. GHC, Haskell, and Python are forbidden,
-including transitive dependencies. An eval that reaches them fails.
+This repo's own code is Rust and Nix. Upstream C dependencies may
+remain. Handwritten C is forbidden. See *Handwritten C is forbidden*.
+GHC, Haskell, and Python are forbidden, including transitive
+dependencies. An eval that reaches them fails.
 
 The firewall-tool check was the remaining Haskell edge after nixfmt-rs
 replaced Haskell nixfmt. That package is now a non-Haskell script
@@ -255,7 +257,9 @@ When a Python program is in the way, use an existing Rust project.
 Operator 2026-11-07, later the same day: prefer Rust over C. An existing
 C project is only the fallback when no Rust project does that job. Do
 not write a new C program to stand in for the Python. The C files this
-session added under `nix/packages/` are not that replacement.
+session added under `nix/packages/` are not that replacement. Operator
+2026-11-07, later the same day: that fallback does not allow
+handwritten C. See *Handwritten C is forbidden*.
 
 Jinja templates have existing Rust renderers. MiniJinja is one
 (https://github.com/mitsuhiko/minijinja, accessed: 2026-11-07). Do not
@@ -267,6 +271,19 @@ already passes `--keep-going`. Fix every builder-failed root from that
 transcript before the next dry-run. Do not fix one root, rerun, and
 leave the other roots from the same transcript for a later pass.
 Dependents of a failed root are not extra roots.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Handwritten C is forbidden (operator 2026-11-07)
+
+Operator 2026-11-07, and "always remember" the same day. Handwritten C
+is forbidden in this repo. That includes a `.c` or `.h` file, and C
+embedded in Nix, bash, a patch, or any other file that emits a C
+program at build time. The operator cannot audit that code. Removing
+Python is to shrink the attack surface. Handwritten C is the same
+class of unauditable code. Upstream projects that are written in C may
+remain as dependencies. Do not replace removed C with new C. Remove
+every `.c` and `.h` file we added.
 
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 

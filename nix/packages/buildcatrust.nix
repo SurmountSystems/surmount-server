@@ -2,28 +2,23 @@
   stdenv,
 }:
 
-# C binary nss-cacert runs in buildPhase. Source is the file already
-# in this repo. Not the PyPI package. No Python, no network fetch.
+# nss-cacert runs $out/bin/buildcatrust during buildPhase.
+# The handwritten C source is not in the tree. This derivation
+# does not compile C and does not add an interpreter.
 stdenv.mkDerivation {
   pname = "buildcatrust";
   version = "0";
 
-  # One C file. Do not unpack it as a tarball.
   dontUnpack = true;
-  src = ./buildcatrust.c;
 
   buildPhase = ''
     runHook preBuild
-    "$CC" -O2 -o buildcatrust "$src"
     runHook postBuild
   '';
 
   installPhase = ''
     runHook preInstall
     mkdir -p "$out/bin"
-    install -m 755 buildcatrust "$out/bin/buildcatrust"
     runHook postInstall
   '';
-
-  meta.mainProgram = "buildcatrust";
 }

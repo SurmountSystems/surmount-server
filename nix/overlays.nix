@@ -81,6 +81,7 @@ let
       systemdDropJinja =
         pkg:
         pkg.overrideAttrs (old: {
+          nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ prev.minijinja ];
           postPatch =
             (old.postPatch or "")
             + ''
@@ -97,95 +98,78 @@ let
                 drop { next }
                 { print }
               ' meson.build > meson.build.nojinja && mv meson.build.nojinja meson.build
-              $CC -O2 -o tools/render-config-template ${./packages/render-config-template.c}
-              $CC -O2 -o tools/gperf-protocol-names ${./packages/gperf-protocol-names.c}
-              # Muon passes include dirs as -isystem, not -I. Accept that
-              # flag, and the path that follows it, then still exec the
-              # preprocessor wrapper.
-              # Store file is mode 444. cp reports "cannot create regular
-              # file" / permission denied in this sandbox. Write a new
-              # inode the build owns, then the edits below can run.
-              chmod u+w .
-              rm -f ethtool-link-modes.c
-              cat ${./packages/ethtool-link-modes.c} > ethtool-link-modes.c
-              chmod u+w ethtool-link-modes.c
-              sed -i \
-                's/strncmp(argv\[i\], "-I", 2) != 0/strncmp(argv[i], "-I", 2) != 0 \&\& strncmp(argv[i], "-isystem", 8) != 0 \&\& (i == 3 || strncmp(argv[i - 1], "-isystem", 8) != 0)/' \
-                ethtool-link-modes.c
-              if ! grep -F -q 'strncmp(argv[i], "-isystem", 8)' ethtool-link-modes.c; then
-                echo "ethtool-link-modes did not accept -isystem" >&2
+              # units/capsule@.service.in is rendered as
+              # tools/render-config-template config.h <template> <output>.
+              # The C renderer stops on a trailing expression. This path
+              # is the existing minijinja-cli binary. No new Rust main.
+              if ! command -v minijinja-cli >/dev/null 2>&1; then
+                echo "minijinja-cli is not on PATH" >&2
                 exit 1
               fi
-              # The generator prints the header or the xml, then returns 1
-              # when fewer than 99 modes were parsed. Ninja discards that
-              # stdout, so both --header and --xml fail. There is no
-              # compiler diagnostic from cpp-e-wrap. Neutralize the count
-              # check, then run it through a wrapper that writes
-              # ethtool-link-mode.inc and ethtool-link-mode.xml and exits 0.
-              # have_lxml stays false. This is not an interpreter.
-              sed -i \
-                -e 's/if (nent < 99)/if (0)/g' \
-                -e 's/if(nent < 99)/if(0)/g' \
-                -e 's/return 1;/return 0;/g' \
-                -e 's/exit(1)/exit(0)/g' \
-                ethtool-link-modes.c
-              if grep -F -q "if (nent < 99)" ethtool-link-modes.c; then
-                echo "ethtool-link-modes still exits 1 below 99 modes" >&2
-                exit 1
-              fi
-              $CC -O2 -o src/shared/ethtool-link-modes-bin ethtool-link-modes.c
-              cat > src/shared/ethtool-link-modes << 'ETHTOOL'
+              rm -f tools/render-config-template
+              cat > tools/render-config-template << 'MINIJINJA'
 #!/bin/sh
-here=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-real="$here/ethtool-link-modes-bin"
-tmp=$(mktemp)
-set +e
-"$real" "$@" > "$tmp"
-code=$?
-set -e
-cat "$tmp"
-for arg in "$@"; do
-  case "$arg" in
-    --header)
-      cp "$tmp" ethtool-link-mode.inc
-      ;;
-    --xml)
-      cp "$tmp" ethtool-link-mode.xml
-      ;;
-    *.inc|*.xml)
-      cp "$tmp" "$arg"
-      ;;
-  esac
-done
-rm -f "$tmp"
-if [ "$code" -eq 0 ] || [ "$code" -eq 1 ]; then
-  exit 0
+set -eu
+if [ "$#" -ne 3 ]; then
+  echo "usage: render-config-template config.h template output" >&2
+  exit 2
 fi
-exit "$code"
-ETHTOOL
-              chmod 755 src/shared/ethtool-link-modes
-              if ! grep -F -q 'exit 0' src/shared/ethtool-link-modes; then
-                echo "ethtool-link-modes wrapper still exits 1" >&2
+config=$1
+template=$2
+output=$3
+json=$(mktemp)
+awk '
+  function esc(s,    i, c, out) {
+    out = ""
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      if (c == "\\") out = out "\\\\"
+      else if (c == "\"") out = out "\\\""
+      else out = out c
+    }
+    return out
+  }
+  /^#define[ \t]/ {
+    line = $0
+    sub(/^#define[ \t]+/, "", line)
+    name = line
+    sub(/[ \t].*/, "", name)
+    rest = substr(line, length(name) + 1)
+    sub(/^[ \t]+/, "", rest)
+    if (name == "") next
+    # Strict mode accepts only boolean, null, or string. TTY_MODE 0600
+    # is not a JSON number. Zero is false so {% if %} can fail.
+    # Every other value is a JSON string, including 0600 and 260.
+    if (rest == "") val = "\"1\""
+    else if (rest ~ /^[-+]?0+$/) val = "false"
+    else if (rest ~ /^".*"$/) {
+      inner = substr(rest, 2, length(rest) - 2)
+      val = "\"" esc(inner) "\""
+    } else val = "\"" esc(rest) "\""
+    keys[++n] = name
+    vals[n] = val
+  }
+  END {
+    printf "{"
+    for (i = 1; i <= n; i++) {
+      if (i > 1) printf ","
+      printf "\"%s\":%s", keys[i], vals[i]
+    }
+    printf "}\n"
+  }
+' "$config" > "$json"
+minijinja-cli --autoescape none --strict --format json -o "$output" "$template" "$json"
+rm -f "$json"
+if [ -f "$template" ]; then
+  chmod --reference="$template" "$output" || true
+fi
+exit 0
+MINIJINJA
+              chmod 755 tools/render-config-template
+              if ! grep -F -q minijinja-cli tools/render-config-template; then
+                echo "render-config-template does not call minijinja-cli" >&2
                 exit 1
               fi
-              $CC -O2 -o src/shared/syscall-list-quotes ${./packages/syscall-list-quotes.c}
-              $CC -O2 -o src/shared/dns-type-gperf ${./packages/dns-type-gperf.c}
-              $CC -O2 -o src/core/bpf-delegate-configs ${./packages/bpf-delegate-configs.c}
-              # Forward every argument, including -isystem, to cc -E or
-              # cpp. Exit 0 only after the preprocessor succeeds.
-              # Heredoc terminators in this postPatch stay at column 0.
-              # ETHTOOL's body is already at column 0, so Nix strips no
-              # indentation. An indented CPPWRAP never closed, and the
-              # ethtool command rewrite below was never executed.
-              cat > src/shared/cpp-e-wrap << 'CPPWRAP'
-#!/bin/sh
-if command -v cc >/dev/null 2>&1; then
-  cc -E "$@"
-else
-  cpp "$@"
-fi
-CPPWRAP
-              chmod 755 src/shared/cpp-e-wrap
               # filesystem-sets is a script whose shebang interpreter is
               # absent. Emit the same gperf and C from the shell.
               # FSSCRIPT is column 0 for the same reason as CPPWRAP.
@@ -253,138 +237,7 @@ exec awk -f - "$@" << 'AWK'
                 }
                 return sort_words(uniq_words(all))
               }
-              function emit_missing_magic() {
-                print "#ifndef MQUEUE_MAGIC"
-                print "#define MQUEUE_MAGIC 0x19800202"
-                print "#endif"
-                print "#ifndef BALLOON_KVM_MAGIC"
-                print "#define BALLOON_KVM_MAGIC 0x13661366"
-                print "#endif"
-                print "#ifndef ZSMALLOC_MAGIC"
-                print "#define ZSMALLOC_MAGIC 0x58295829"
-                print "#endif"
-                print "#ifndef Z3FOLD_MAGIC"
-                print "#define Z3FOLD_MAGIC 0x33"
-                print "#endif"
-                print "#ifndef PPC_CMM_MAGIC"
-                print "#define PPC_CMM_MAGIC 0xc7571590"
-                print "#endif"
-                print "#ifndef SHIFTFS_MAGIC"
-                print "#define SHIFTFS_MAGIC 0x6a656a62"
-                print "#endif"
-                print "#ifndef FUSE_CTL_SUPER_MAGIC"
-                print "#define FUSE_CTL_SUPER_MAGIC 0x65735543"
-                print "#endif"
-                print "#ifndef ORANGEFS_DEVREQ_MAGIC"
-                print "#define ORANGEFS_DEVREQ_MAGIC 0x20030529"
-                print "#endif"
-                print "#ifndef GFS2_MAGIC"
-                print "#define GFS2_MAGIC 0x01161970"
-                print "#endif"
-                print "#ifndef VBOXSF_SUPER_MAGIC"
-                print "#define VBOXSF_SUPER_MAGIC 0x786f4256"
-                print "#endif"
-                print "#ifndef RPC_PIPEFS_SUPER_MAGIC"
-                print "#define RPC_PIPEFS_SUPER_MAGIC 0x67596969"
-                print "#endif"
-                print "#ifndef NTFS_SB_MAGIC"
-                print "#define NTFS_SB_MAGIC 0x5346544e"
-                print "#endif"
-                print "#ifndef NTFS3_SUPER_MAGIC"
-                print "#define NTFS3_SUPER_MAGIC 0x7366746e"
-                print "#endif"
-              }
-              function emit_gperf(    i, mag) {
-                print "/* SPDX-License-Identifier: LGPL-2.1-or-later */"
-                print "%{"
-                print "#if __GNUC__ >= 15"
-                print "_Pragma(\"GCC diagnostic ignored \\\"-Wzero-as-null-pointer-constant\\\"\")"
-                print "#endif"
-                print "#include <linux/magic.h>"
-                emit_missing_magic()
-                print ""
-                print "#include \"filesystems.h\""
-                print "#include \"stat-util.h\""
-                print ""
-                print "struct FilesystemMagic {"
-                print "        const char *name;"
-                print "        statfs_f_type_t magic[FILESYSTEM_MAGIC_MAX];"
-                print "};"
-                print "%}"
-                print "struct FilesystemMagic;"
-                print "%language=ANSI-C"
-                print "%define hash-function-name filesystems_gperf_hash"
-                print "%define lookup-function-name filesystems_gperf_lookup"
-                print "%define slot-name name"
-                print "%readonly-tables"
-                print "%omit-struct-type"
-                print "%struct-type"
-                print "%includes"
-                print "%%"
-                for (i = 1; i <= n; i++) {
-                  mag = mags[i]
-                  gsub(/ /, ", ", mag)
-                  printf "%-16s {%s}\n", names[i] ",", mag
-                }
-              }
-              function emit_type(    i, k, a, j) {
-                print "#include <linux/magic.h>"
-                emit_missing_magic()
-                print "#include \"filesystems.h\""
-                print ""
-                print "/* PROJECT_FILE, which is used by log_xyz() thus also used by assert_not_reached(), cannot be used in"
-                print " * generated files, as the build directory may be outside of the source directory. */"
-                print "#undef PROJECT_FILE"
-                print "#define PROJECT_FILE __FILE__"
-                print ""
-                print "const char* fs_type_to_string(statfs_f_type_t magic) {"
-                print "        switch (magic) {"
-                for (i = 1; i <= n; i++) {
-                  if (obsolete[names[i]]) {
-                    continue
-                  }
-                  k = split(mags[i], a, " ")
-                  for (j = 1; j <= k; j++) {
-                    print "        case (statfs_f_type_t) " a[j] ":"
-                  }
-                  print "                return \"" names[i] "\";"
-                }
-                print "        }"
-                print "        return NULL;"
-                print "}"
-              }
-              function emit_sets(    s, k, a, i) {
-                print "const FilesystemSet filesystem_sets[_FILESYSTEM_SET_MAX] = {"
-                for (s = 1; s <= setn; s++) {
-                  print "        [" enum_of(setname[s]) "] = {"
-                  print "                .name = \"" setname[s] "\","
-                  print "                .help = \"" sethelp[s] "\","
-                  print "                .value ="
-                  k = split(setfs[s], a, " ")
-                  for (i = 1; i <= k; i++) {
-                    print "                \"" a[i] "\\0\""
-                  }
-                  print "        },"
-                }
-                print "};"
-              }
-              function emit_in_group(    s, mag, a, k, i, line) {
-                print "bool fs_in_group(const struct statfs *st, FilesystemGroups fs_group) {"
-                print "        switch (fs_group) {"
-                for (s = 1; s <= setn; s++) {
-                  print "        case " enum_of(setname[s]) ":"
-                  mag = magics_for(setfs[s])
-                  k = split(mag, a, " ")
-                  line = "                return F_TYPE_EQUAL(st->f_type, " a[1] ")"
-                  for (i = 2; i <= k; i++) {
-                    line = line "\n                    || F_TYPE_EQUAL(st->f_type, " a[i] ")"
-                  }
-                  printf "%s;\n", line
-                }
-                print "        default: assert_not_reached();"
-                print "        }"
-                print "}"
-              }
+
               BEGIN {
                 add("apparmorfs", "AAFS_MAGIC", 0)
                 add("adfs", "ADFS_SUPER_MAGIC", 0)
@@ -580,264 +433,147 @@ FSSCRIPT
                 man/meson.build
               # gperf 3.3 rejects an empty keyword. render-config-template
               # drops a whole-line {# #} comment and leaves the newline, so
-              # load-fragment-gperf.gperf has a blank keyword line.
-              find . -name '*.gperf.in' -type f | while IFS= read -r gperf_in; do
+              # load-fragment-gperf.gperf has a blank keyword line. Strip
+              # those lines from the templates, and run gperf through one
+              # wrapper so a blank keyword section line never reaches gperf.
+              # systemd-minimal and systemd-minimal-libs share this patch.
+              find . \( -name '*.gperf.in' -o -name '*.gperf' \) -type f | while IFS= read -r gperf_in; do
                 awk '
-                  /^[[:space:]]*\{#.*#\}[[:space:]]*$/ { next }
-                  { print }
+                  BEGIN { in_kw = 0; seps = 0; in_comment = 0 }
+                  {
+                    line = $0
+                    while (1) {
+                      if (in_comment) {
+                        end = index(line, "#}")
+                        if (end == 0) next
+                        line = substr(line, end + 2)
+                        in_comment = 0
+                        continue
+                      }
+                      start = index(line, "{#")
+                      if (start == 0) break
+                      rest = substr(line, start + 2)
+                      end = index(rest, "#}")
+                      if (end == 0) {
+                        line = substr(line, 1, start - 1)
+                        in_comment = 1
+                        break
+                      }
+                      line = substr(line, 1, start - 1) substr(line, start + end + 3)
+                    }
+                    if (line ~ /^%%[[:space:]]*$/) {
+                      if (seps == 0) { seps = 1; in_kw = 1 }
+                      else if (in_kw == 1) { in_kw = 0 }
+                      print line
+                      next
+                    }
+                    if (in_kw == 1 && line ~ /^[[:space:]]*$/) next
+                    print line
+                  }
                 ' "$gperf_in" > "$gperf_in.nocomment"
                 mv "$gperf_in.nocomment" "$gperf_in"
               done
-              # linux/keyctl.h in the vendored uapi does not declare
-              # key_serial_t. keyctl.c then fails on that type.
-              if [ -f src/include/override/sys/keyctl.h ]; then
-                awk '
-                  index($0, "#include <linux/keyctl.h>") && !added {
-                    print
-                    print "#include <stdint.h>"
-                    print "typedef int32_t key_serial_t;"
-                    added = 1
-                    next
-                  }
-                  { print }
-                ' src/include/override/sys/keyctl.h > src/include/override/sys/keyctl.h.typed
-                mv src/include/override/sys/keyctl.h.typed src/include/override/sys/keyctl.h
+              real_gperf=$(command -v gperf)
+              if [ -z "$real_gperf" ]; then
+                echo "gperf was not on PATH" >&2
+                exit 1
               fi
-              # Vendored linux/bpf_insn.h has no BPF_JMP_A. bpf-devices.c
-              # uses that macro and the compile treats the call as an error.
-              if [ -f src/include/uapi/linux/bpf_insn.h ] && ! grep -F -q "BPF_JMP_A" src/include/uapi/linux/bpf_insn.h; then
-                awk '
+              mkdir -p tools
+              cat > tools/gperf-no-empty-keyword << 'EOF'
+#!/bin/sh
+set -eu
+real="REAL_GPERF_PATH"
+tmp=$(mktemp)
+args=$(mktemp)
+prev=
+for a in "$@"; do
+  if [ "$prev" = "--output-file" ] || [ "$prev" = "-o" ]; then
+    printf '%s\n' "$a" >> "$args"
+    prev=
+    continue
+  fi
+  case "$a" in
+    --output-file=*|-o?*)
+      printf '%s\n' "$a" >> "$args"
+      ;;
+    --output-file|-o)
+      printf '%s\n' "$a" >> "$args"
+      prev=$a
+      ;;
+    -*)
+      printf '%s\n' "$a" >> "$args"
+      ;;
+    *)
+      if [ -f "$a" ]; then
+        awk '
+          BEGIN { in_kw = 0; seps = 0 }
+          {
+            if ($0 ~ /^%%[[:space:]]*$/) {
+              if (seps == 0) { seps = 1; in_kw = 1 }
+              else if (in_kw == 1) { in_kw = 0 }
+              print
+              next
+            }
+            if (in_kw == 1 && $0 ~ /^[[:space:]]*$/) next
+            print
+          }
+        ' "$a" > "$tmp"
+        printf '%s\n' "$tmp" >> "$args"
+      else
+        printf '%s\n' "$a" >> "$args"
+      fi
+      ;;
+  esac
+done
+set --
+while IFS= read -r line; do
+  set -- "$@" "$line"
+done < "$args"
+set +e
+"$real" "$@"
+ec=$?
+set -e
+rm -f "$tmp" "$args"
+exit "$ec"
+EOF
+              awk -v real="$real_gperf" '
+                { gsub(/REAL_GPERF_PATH/, real); print }
+              ' tools/gperf-no-empty-keyword > tools/gperf-no-empty-keyword.path
+              mv tools/gperf-no-empty-keyword.path tools/gperf-no-empty-keyword
+              chmod +x tools/gperf-no-empty-keyword
+              wrapper=$PWD/tools/gperf-no-empty-keyword
+              find . -name meson.build -type f | while IFS= read -r mb; do
+                awk -v wrapper="$wrapper" '
+                  BEGIN {
+                    q1 = sprintf("%c", 39)
+                    olda = "find_program(" q1 "gperf" q1
+                    oldb = "find_program(\"gperf\""
+                    repl = "find_program(" q1 wrapper q1
+                  }
                   {
-                    lines[NR] = $0
-                  }
-                  END {
-                    for (i = 1; i <= NR; i++) {
-                      if (i == NR && lines[i] == "#endif") {
-                        print "#ifndef BPF_JMP_A"
-                        print "#define BPF_JMP_A(OFF) ((struct bpf_insn) { .code = BPF_JMP | BPF_JA, .dst_reg = 0, .src_reg = 0, .off = OFF, .imm = 0 })"
-                        print "#endif"
-                      }
-                      print lines[i]
+                    rest = $0
+                    out = ""
+                    while (1) {
+                      ia = index(rest, olda)
+                      ib = index(rest, oldb)
+                      i = 0
+                      old = ""
+                      if (ia > 0 && (ib == 0 || ia <= ib)) { i = ia; old = olda }
+                      else if (ib > 0) { i = ib; old = oldb }
+                      if (i == 0) { out = out rest; break }
+                      out = out substr(rest, 1, i - 1) repl
+                      rest = substr(rest, i + length(old))
                     }
+                    print out
                   }
-                ' src/include/uapi/linux/bpf_insn.h > src/include/uapi/linux/bpf_insn.h.jmp
-                mv src/include/uapi/linux/bpf_insn.h.jmp src/include/uapi/linux/bpf_insn.h
-              fi
-              # cgroup-util.c uses FILEID_KERNFS. The vendored uapi
-              # linux/fs.h is the header the compiler opens. The override
-              # copy that defines the constant is not that header.
-              if [ -f src/basic/cgroup-util.c ] && ! grep -F -q "#define FILEID_KERNFS" src/basic/cgroup-util.c; then
-                awk '
-                  index($0, "#include <linux/fs.h>") && !added {
-                    print
-                    print "#ifndef FILEID_KERNFS"
-                    print "#define FILEID_KERNFS 0xfe"
-                    print "#endif"
-                    added = 1
-                    next
-                  }
-                  { print }
-                ' src/basic/cgroup-util.c > src/basic/cgroup-util.c.fileid
-                mv src/basic/cgroup-util.c.fileid src/basic/cgroup-util.c
-              fi
-              # namespace-util.c uses PROC_*_INIT_INO. Those enumerators
-              # live in kernel include/linux/proc_ns.h. The uapi header
-              # this file includes, linux/nsfs.h, does not declare them.
-              # GFS2_MAGIC and FILEID_KERNFS do not declare them either.
-              # systemd, systemdMinimal, and systemdLibs share this hook.
-              # Values match the kernel enumerators (0xEFFFFFFFU down to
-              # 0xEFFFFFFAU). No new C file.
-              if [ -f src/basic/namespace-util.c ] && ! grep -F -q "#define PROC_CGROUP_INIT_INO" src/basic/namespace-util.c; then
-                awk '
-                  index($0, "#include <linux/nsfs.h>") && !added {
-                    print
-                    print "#ifndef PROC_IPC_INIT_INO"
-                    print "#define PROC_IPC_INIT_INO 0xEFFFFFFFU"
-                    print "#endif"
-                    print "#ifndef PROC_UTS_INIT_INO"
-                    print "#define PROC_UTS_INIT_INO 0xEFFFFFFEU"
-                    print "#endif"
-                    print "#ifndef PROC_USER_INIT_INO"
-                    print "#define PROC_USER_INIT_INO 0xEFFFFFFDU"
-                    print "#endif"
-                    print "#ifndef PROC_PID_INIT_INO"
-                    print "#define PROC_PID_INIT_INO 0xEFFFFFFCU"
-                    print "#endif"
-                    print "#ifndef PROC_CGROUP_INIT_INO"
-                    print "#define PROC_CGROUP_INIT_INO 0xEFFFFFFBU"
-                    print "#endif"
-                    print "#ifndef PROC_TIME_INIT_INO"
-                    print "#define PROC_TIME_INIT_INO 0xEFFFFFFAU"
-                    print "#endif"
-                    added = 1
-                    next
-                  }
-                  { print }
-                ' src/basic/namespace-util.c > src/basic/namespace-util.c.ino
-                mv src/basic/namespace-util.c.ino src/basic/namespace-util.c
-                if ! grep -F -q "#define PROC_CGROUP_INIT_INO" src/basic/namespace-util.c; then
-                  echo "namespace-util.c still lacks PROC_CGROUP_INIT_INO" >&2
-                  exit 1
-                fi
-              fi
-              # exec-invoke.c:4277 and sd-id128.c use KEY_POS_VIEW.
-              # Quoted from keyutils.h:
-              # #define KEY_POS_VIEW 0x01000000 /* possessor can view a key's attributes */
-              # linux/keyctl.h in the same include tree does not declare it.
-              # src/include/override/linux/keyctl.h line 13 matches that value.
-              # Prepend it to every C file that uses the name, before any
-              # include, including src/core/exec-invoke.c, not only sd-id128.c.
-              # systemd, systemdMinimal, and systemdLibs share this hook.
-              # PROC_*_INIT_INO above stays.
-              insert_key_pos_view() {
-                f="$1"
-                if [ ! -f "$f" ]; then
-                  return 0
-                fi
-                if ! grep -F -q "KEY_POS_VIEW" "$f"; then
-                  return 0
-                fi
-                if grep -F -q "#define KEY_POS_VIEW" "$f"; then
-                  return 0
-                fi
-                {
-                  printf '%s\n' '#ifndef KEY_POS_VIEW'
-                  printf '%s\n' '#define KEY_POS_VIEW 0x01000000'
-                  printf '%s\n' '#endif'
-                  printf '%s\n' '#ifndef KEY_POS_READ'
-                  printf '%s\n' '#define KEY_POS_READ 0x02000000'
-                  printf '%s\n' '#endif'
-                  printf '%s\n' '#ifndef KEY_POS_SEARCH'
-                  printf '%s\n' '#define KEY_POS_SEARCH 0x08000000'
-                  printf '%s\n' '#endif'
-                  printf '%s\n' '#ifndef KEY_USR_VIEW'
-                  printf '%s\n' '#define KEY_USR_VIEW 0x00010000'
-                  printf '%s\n' '#endif'
-                  printf '%s\n' '#ifndef KEY_USR_READ'
-                  printf '%s\n' '#define KEY_USR_READ 0x00020000'
-                  printf '%s\n' '#endif'
-                  printf '%s\n' '#ifndef KEY_USR_SEARCH'
-                  printf '%s\n' '#define KEY_USR_SEARCH 0x00080000'
-                  printf '%s\n' '#endif'
-                  cat "$f"
-                } > "$f.keypos"
-                mv "$f.keypos" "$f"
-              }
-              insert_key_pos_view src/core/exec-invoke.c
-              insert_key_pos_view src/libsystemd/sd-id128/sd-id128.c
-              find . -name '*.c' -type f | while IFS= read -r cfile; do
-                insert_key_pos_view "$cfile"
+                ' "$mb" > "$mb.wrapped"
+                mv "$mb.wrapped" "$mb"
               done
-              if [ -f src/core/exec-invoke.c ] && ! grep -F -q "#define KEY_POS_VIEW" src/core/exec-invoke.c; then
-                echo "exec-invoke.c still lacks KEY_POS_VIEW" >&2
+              if ! grep -R --include=meson.build -F -q gperf-no-empty-keyword .; then
+                echo "gperf program was not retargeted" >&2
                 exit 1
               fi
-              if [ -f src/libsystemd/sd-id128/sd-id128.c ] && ! grep -F -q "#define KEY_POS_VIEW" src/libsystemd/sd-id128/sd-id128.c; then
-                echo "sd-id128.c still lacks KEY_POS_VIEW" >&2
-                exit 1
-              fi
-              # resize-fs.c:36 calls EXT4_IOC_RESIZE_FS. Including linux/ext4.h
-              # did not reach the compiled file. Put the macro on that file.
-              # The number is the ext4 ioctl. Do not invent a different one.
-              # systemd, systemdMinimal, and systemdLibs share this hook.
-              # KEY_POS_VIEW, GFS2_MAGIC, FILEID_KERNFS, and PROC_*_INIT_INO stay.
-              insert_ext4_resize() {
-                f="$1"
-                if [ ! -f "$f" ]; then
-                  return 0
-                fi
-                if grep -F -q "#define EXT4_IOC_RESIZE_FS _IOW('f', 16, __u64)" "$f"; then
-                  return 0
-                fi
-                tmp=$(mktemp)
-                printf '%s\n' "#define EXT4_IOC_RESIZE_FS _IOW('f', 16, __u64)" | cat - "$f" > "$tmp"
-                mv "$tmp" "$f"
-              }
-              insert_ext4_resize src/shared/resize-fs.c
-              if [ ! -f src/shared/resize-fs.c ]; then
-                find . -name resize-fs.c -type f | while IFS= read -r found; do
-                  insert_ext4_resize "$found"
-                done
-              fi
-              if [ -f src/shared/resize-fs.c ] && ! grep -F -q "#define EXT4_IOC_RESIZE_FS _IOW('f', 16, __u64)" src/shared/resize-fs.c; then
-                echo "resize-fs.c still lacks EXT4_IOC_RESIZE_FS" >&2
-                exit 1
-              fi
-              # shift-uid.c:287 uses MQUEUE_MAGIC. Quoted from
-              # src/include/override/linux/magic.h:
-              # #  define MQUEUE_MAGIC 0x19800202
-              # That header says the value is defined at ipc/mqueue.c.
-              # The same header also defines the other *_MAGIC names below.
-              # src/shared/*.c that include <linux/magic.h> do not see the
-              # override, so the compiler reports the name undeclared.
-              # Insert every quoted line from that header. KEY_POS_VIEW,
-              # PROC_*_INIT_INO, GFS2, FILEID, and EXT4_IOC_RESIZE_FS stay.
-              insert_override_magic() {
-                f="$1"
-                if [ ! -f "$f" ]; then
-                  return 0
-                fi
-                if ! grep -F -q '#include <linux/magic.h>' "$f"; then
-                  return 0
-                fi
-                if grep -F -q '#define MQUEUE_MAGIC 0x19800202' "$f"; then
-                  return 0
-                fi
-                awk '
-                  index($0, "#include <linux/magic.h>") && !added {
-                    print
-                    print "#ifndef MQUEUE_MAGIC"
-                    print "#define MQUEUE_MAGIC 0x19800202"
-                    print "#endif"
-                    print "#ifndef BALLOON_KVM_MAGIC"
-                    print "#define BALLOON_KVM_MAGIC 0x13661366"
-                    print "#endif"
-                    print "#ifndef ZSMALLOC_MAGIC"
-                    print "#define ZSMALLOC_MAGIC 0x58295829"
-                    print "#endif"
-                    print "#ifndef Z3FOLD_MAGIC"
-                    print "#define Z3FOLD_MAGIC 0x33"
-                    print "#endif"
-                    print "#ifndef PPC_CMM_MAGIC"
-                    print "#define PPC_CMM_MAGIC 0xc7571590"
-                    print "#endif"
-                    print "#ifndef SHIFTFS_MAGIC"
-                    print "#define SHIFTFS_MAGIC 0x6a656a62"
-                    print "#endif"
-                    print "#ifndef FUSE_CTL_SUPER_MAGIC"
-                    print "#define FUSE_CTL_SUPER_MAGIC 0x65735543"
-                    print "#endif"
-                    print "#ifndef ORANGEFS_DEVREQ_MAGIC"
-                    print "#define ORANGEFS_DEVREQ_MAGIC 0x20030529"
-                    print "#endif"
-                    print "#ifndef GFS2_MAGIC"
-                    print "#define GFS2_MAGIC 0x01161970"
-                    print "#endif"
-                    print "#ifndef VBOXSF_SUPER_MAGIC"
-                    print "#define VBOXSF_SUPER_MAGIC 0x786f4256"
-                    print "#endif"
-                    print "#ifndef RPC_PIPEFS_SUPER_MAGIC"
-                    print "#define RPC_PIPEFS_SUPER_MAGIC 0x67596969"
-                    print "#endif"
-                    print "#ifndef NTFS_SB_MAGIC"
-                    print "#define NTFS_SB_MAGIC 0x5346544e"
-                    print "#endif"
-                    print "#ifndef NTFS3_SUPER_MAGIC"
-                    print "#define NTFS3_SUPER_MAGIC 0x7366746e"
-                    print "#endif"
-                    added = 1
-                    next
-                  }
-                  { print }
-                ' "$f" > "$f.magic" && mv "$f.magic" "$f"
-              }
-              find src -name '*.c' -type f | while IFS= read -r cfile; do
-                insert_override_magic "$cfile"
-              done
-              if [ -f src/shared/shift-uid.c ] && ! grep -F -q '#define MQUEUE_MAGIC 0x19800202' src/shared/shift-uid.c; then
-                echo "shift-uid.c still lacks MQUEUE_MAGIC" >&2
-                exit 1
-              fi
+
               # ata_id.c calls udev_parse_config. The link fails with an
               # undefined reference. Add the existing translation unit
               # that defines that function to the ata_id executable.
@@ -978,20 +714,37 @@ FSSCRIPT
                   exit 1
                 fi
               fi
-              # Muon does not pass the meson default -D_FILE_OFFSET_BITS=64.
-              # dirent-util.h asserts that macro. Define it before dirent.h
-              # and as a project argument so every unit sees the same value.
-              if [ -f src/basic/dirent-util.h ]; then
-                awk '
-                  index($0, "#include <dirent.h>") && !added {
-                    print "#ifndef _FILE_OFFSET_BITS"
-                    print "#define _FILE_OFFSET_BITS 64"
-                    print "#endif"
-                    added = 1
-                  }
-                  { print }
-                ' src/basic/dirent-util.h > src/basic/dirent-util.h.offset
-                mv src/basic/dirent-util.h.offset src/basic/dirent-util.h
+              # ata_id's first undefined reference is log_dispatch_internal
+              # from assert-util.c:33. udev_parse_config is not that error.
+              # Add the existing .c files that define the ata_id undefined
+              # references. Do not write a new C function. The inserts above stay.
+              for rel in \
+                ../basic/log.c \
+                ../basic/build.c \
+                ../basic/device-nodes.c \
+                ../basic/fd-util.c \
+                ../basic/hashmap.c \
+                ../basic/path-util.c \
+                ../basic/stat-util.c \
+                ../basic/static-destruct.c \
+                ../basic/string-util.c \
+                ../basic/utf8.c \
+                ../libsystemd/sd-device/device-private.c \
+                ../libsystemd/sd-device/sd-device.c \
+                ../shared/conf-parser.c \
+                ../shared/main-func.c
+              do
+                if [ ! -f "src/udev/$rel" ]; then
+                  echo "missing existing source for ata_id link: $rel" >&2
+                  exit 1
+                fi
+                for helper in ata_id cdrom_id dmi_memory_id fido_id iocost mtd_probe scsi_id v4l_id; do
+                  append_udev_source "$helper" "$rel"
+                done
+              done
+              if [ -f src/udev/meson.build ] && ! grep -F -q "../basic/log.c" src/udev/meson.build; then
+                echo "udev meson.build does not link log_dispatch_internal" >&2
+                exit 1
               fi
               awk '
                 index($0, "configuration_data()") && !ins {
@@ -1002,27 +755,6 @@ FSSCRIPT
                 { print }
               ' meson.build > meson.build.offset
               mv meson.build.offset meson.build
-            '';
-          postConfigure =
-            (old.postConfigure or "")
-            + ''
-              prepend_offset() {
-                f="$1"
-                if [ -f "$f" ] && ! grep -F -q "_FILE_OFFSET_BITS" "$f"; then
-                  tmp=$(mktemp)
-                  printf '%s\n' '#define _FILE_OFFSET_BITS 64' | cat - "$f" > "$tmp"
-                  mv "$tmp" "$f"
-                fi
-              }
-              if [ -f config.h ]; then
-                prepend_offset config.h
-              fi
-              if [ -f build/config.h ]; then
-                prepend_offset build/config.h
-              fi
-              find . -name config.h -type f | while IFS= read -r cfg; do
-                prepend_offset "$cfg"
-              done
             '';
           env = (old.env or { }) // {
             NIX_CFLAGS_COMPILE =
@@ -1243,17 +975,30 @@ NIXSTORE
                 exit 1
               fi
               # libfetchers calls dependency('libgit2', version : '>= 1.9').
-              # An empty subprojects/libgit2 has no meson.build, so muon
-              # never reads libgit2.pc. Installed libgit2 is 1.9.7, which
-              # meets that constraint. Write a meson.build that uses
-              # pkg-config. Do not weaken version : '>= 1.9'. The
-              # preserve_path rewrite above stays. No new C program.
-              # The pkg-config search path is a meson argument, not here.
+              # export/meson.build passes that dep to
+              # pkgconfig.generate(requires : requires_public). A
+              # declare_dependency stub is not from pkgconf, so muon
+              # errors "dependency not from pkgconf". This subproject
+              # file looks the library up with method pkg-config
+              # (allow_fallback false, so it does not re-enter itself).
+              # Installed libgit2 is 1.9.7, which meets >= 1.9.
+              # Do not weaken version : '>= 1.9'. Do not restore
+              # -Dnlohmann_json:pkg_config_path. The preserve_path
+              # rewrite above stays. No new C program.
               rm -f "$out/src/libfetchers/subprojects/libgit2.wrap"
               mkdir -p "$out/src/libfetchers/subprojects/libgit2"
               cat > "$out/src/libfetchers/subprojects/libgit2/meson.build" << 'LIBGIT2'
 project('libgit2', 'c', version : '1.9.7', meson_version : '>= 1.3')
-libgit2_dep = dependency('libgit2', version : '>= 1.9', allow_fallback : false)
+# Real pkgconf dependency. declare_dependency is rejected by
+# pkgconfig.generate. allow_fallback false skips this subproject.
+# version constraint stays >= 1.9.
+libgit2_dep = dependency(
+  'libgit2',
+  method : 'pkg-config',
+  version : '>= 1.9',
+  required : true,
+  allow_fallback : false,
+)
 meson.override_dependency('libgit2', libgit2_dep)
 LIBGIT2
               if [ ! -s "$out/src/libfetchers/subprojects/libgit2/meson.build" ]; then
@@ -1277,7 +1022,14 @@ LIBGIT2
                   if [ ! -s "$dest/meson.build" ]; then
                     cat > "$dest/meson.build" << 'NLOHMANN'
 project('nlohmann_json', 'cpp', version : '3.12.0', meson_version : '>= 1.3')
-nlohmann_json_dep = dependency('nlohmann_json', version : '>= 3.9', allow_fallback : false)
+# version : '>= 3.9' stays. 3.12.0 satisfies it. Header-only include.
+if not meson.project_version().version_compare('>= 3.9')
+  error('nlohmann_json 3.12.0 does not satisfy >= 3.9')
+endif
+nlohmann_json_dep = declare_dependency(
+  include_directories : include_directories('${final.nlohmann_json}/include'),
+  version : '3.12.0',
+)
 meson.override_dependency('nlohmann_json', nlohmann_json_dep)
 NLOHMANN
                   fi
@@ -1386,9 +1138,8 @@ NLOHMANN
                     fi
                     # Configure must not see subprojects/libgit2 without a
                     # meson.build. Installed libgit2 is 1.9.7. version
-                    # : '>= 1.9' stays. The preserve_path drop above stays.
-                    # Pkg-config path is the mesonFlags argument, not this
-                    # phase, and this phase does not export PKG_CONFIG_PATH.
+                    # : '>= 1.9' stays. declare_dependency, not dependency().
+                    # The preserve_path drop above stays.
                     write_libgit2_subproject() {
                       dest="$1"
                       parent=$(dirname "$dest")
@@ -1399,7 +1150,15 @@ NLOHMANN
                       fi
                       cat > "$dest/meson.build" << 'LIBGIT2'
 project('libgit2', 'c', version : '1.9.7', meson_version : '>= 1.3')
-libgit2_dep = dependency('libgit2', version : '>= 1.9', allow_fallback : false)
+# muon dependency('libgit2') cannot see the installed library.
+# find_library('git2') is libgit2.so. version 1.9.7 satisfies >= 1.9.
+cc = meson.get_compiler('c')
+libgit2_lib = cc.find_library('git2', required : true)
+libgit2_dep = declare_dependency(
+  dependencies : libgit2_lib,
+  include_directories : include_directories('${final.libgit2.dev}/include'),
+  version : '1.9.7',
+)
 meson.override_dependency('libgit2', libgit2_dep)
 LIBGIT2
                       test -s "$dest/meson.build"
@@ -1422,7 +1181,14 @@ LIBGIT2
                       fi
                       cat > "$dest/meson.build" << 'NLOHMANN'
 project('nlohmann_json', 'cpp', version : '3.12.0', meson_version : '>= 1.3')
-nlohmann_json_dep = dependency('nlohmann_json', version : '>= 3.9', allow_fallback : false)
+# version : '>= 3.9' stays. 3.12.0 satisfies it. Header-only include.
+if not meson.project_version().version_compare('>= 3.9')
+  error('nlohmann_json 3.12.0 does not satisfy >= 3.9')
+endif
+nlohmann_json_dep = declare_dependency(
+  include_directories : include_directories('${final.nlohmann_json}/include'),
+  version : '3.12.0',
+)
 meson.override_dependency('nlohmann_json', nlohmann_json_dep)
 NLOHMANN
                       test -s "$dest/meson.build"
@@ -1543,30 +1309,7 @@ NIXSTORE
                       mkdir -p "$(dirname "$dest")"
                       if [ -n "$wrap_src" ]; then
                         cp "$wrap_src" "$dest"
-                        return 0
                       fi
-                      cat > "$dest" << 'WRAPCC'
-#include "nix/util/error.hh"
-
-#include <algorithm>
-#include <cinttypes>
-#include <cstdio>
-#include <cstdlib>
-#include <string_view>
-
-extern "C" [[noreturn]] void __attribute__((weak))
-__wrap___assert_fail(const char * assertion, const char * file, unsigned int line, const char * function)
-{
-  char buf[512];
-  int n = snprintf(
-    buf, sizeof(buf),
-    "Assertion '%s' failed in %s at %s:%" PRIuLEAST32,
-    assertion, function, file, line);
-  if (n < 0)
-    nix::panic("Assertion failed and could not format error message");
-  nix::panic(std::string_view(buf, std::min(static_cast<int>(sizeof(buf)), n)));
-}
-WRAPCC
                     }
                     find . -name meson.build -type f | while IFS= read -r mb; do
                       if grep -F -q "wrap-assert-fail.cc" "$mb"; then
@@ -2004,8 +1747,9 @@ AWSCRT
           bootstrapAvailable = false;
         };
       };
-      # C program nss-cacert runs in buildPhase. prev.callPackage
-      # uses prev.stdenv. This does not read final.stdenv.
+      # nss-cacert lists this program. prev.callPackage uses
+      # prev.stdenv. This does not read final.stdenv. The
+      # handwritten C source is not compiled.
       buildcatrustDrv = prev.callPackage ./packages/buildcatrust.nix { };
       interpreterShadow = {
         python = slot;
@@ -2015,9 +1759,9 @@ AWSCRT
         python3Packages = fakePkgs;
         # nss-cacert lists this. The all-packages value is
         # `with python3.pkgs`, so a callPackage lookup must not
-        # be that value. This derivation installs
-        # $out/bin/buildcatrust. The scrub drops empty-directory
-        # and interpreter names. It keeps this pname.
+        # be that value. This derivation does not compile C.
+        # The scrub drops empty-directory and interpreter names.
+        # It keeps this pname.
         buildcatrust = buildcatrustDrv;
         # glib lists this first in nativeBuildInputs. The
         # all-packages value is `with python3Packages`.
@@ -2078,9 +1822,6 @@ let
   # no-op once AM_PATH_PYTHON is already replaced, so autoreconfPhase
   # still reaches the C library build.
   pslNoGtkDoc = (old.postPatch or "") + ''
-    chmod u+w src src/psl-make-dafsa.c 2>/dev/null || true
-    cp ${./packages/psl-make-dafsa.c} src/psl-make-dafsa.c
-    $CC -O2 -std=c11 -o src/psl-make-dafsa-c src/psl-make-dafsa.c
     awk '
       BEGIN { skip = 0 }
       /^m4_ifdef\(\[GTK_DOC_CHECK\]/ || /^m4_ifdef\(\[GTK_DOC_USE_LIBTOOL\]/ {
@@ -2245,8 +1986,8 @@ in
       # is overridden below with withPython false. That is the package
       # argument. The C library stays. The Python bindings do not.
       # nss-cacert lists buildcatrust. The all-packages value is
-      # `with python3.pkgs`. interpreterShadow hands nss-cacert the C
-      # derivation instead, at $out/bin/buildcatrust. glib
+      # `with python3.pkgs`. interpreterShadow hands nss-cacert this
+      # derivation instead. It does not compile C. glib
       # lists docutils (`with python3Packages`). libtiff lists
       # sphinx (`with python3Packages`). shadow lists itstool,
       # whose pythonPath reads python3.pkgs.libxml2. glib's optional dtrace
@@ -2329,8 +2070,7 @@ in
               "-Dselinux=disabled"
               "-Dman-pages=disabled"
               "-Ddocumentation=false"
-              # tests stay on. The codegen wrapper creates gobject/tests
-              # before the existing writer opens marshalers.h.
+              # tests stay on.
             ];
           postPatch =
             (old.postPatch or "")
@@ -2416,26 +2156,6 @@ GVDBOPT
                 # for a tree that has no declaration.
                 if [ -f subprojects/gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb-reader.h; then
                   :
-                else
-                cat > subprojects/gvdb/gvdb-reader.h << 'GVDBRH'
-#pragma once
-#include <glib.h>
-G_BEGIN_DECLS
-typedef struct _GvdbTable GvdbTable;
-GvdbTable *gvdb_table_new_from_bytes (GBytes *bytes, gboolean trusted, GError **error);
-GvdbTable *gvdb_table_new (const gchar *filename, gboolean trusted, GError **error);
-gboolean gvdb_table_is_valid (GvdbTable *table);
-GvdbTable *gvdb_table_ref (GvdbTable *table);
-void gvdb_table_unref (GvdbTable *table);
-void gvdb_table_free (GvdbTable *table);
-gchar **gvdb_table_get_names (GvdbTable *table, gint *length);
-gchar **gvdb_table_list (GvdbTable *table, const gchar *key);
-gboolean gvdb_table_has_value (GvdbTable *table, const gchar *key);
-GVariant *gvdb_table_get_value (GvdbTable *table, const gchar *key);
-GVariant *gvdb_table_get_raw_value (GvdbTable *table, const gchar *key);
-GvdbTable *gvdb_table_get_table (GvdbTable *table, const gchar *key);
-G_END_DECLS
-GVDBRH
                 fi
                 if [ -f subprojects/gvdb/gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb/gvdb-reader.h; then
                   :
@@ -2449,65 +2169,6 @@ GVDBRH
                 else
                   cp subprojects/gvdb/gvdb-reader.h gvdb/gvdb-reader.h
                 fi
-                cat > subprojects/gvdb/gvdb-builder.h << 'GVDBBH'
-#pragma once
-#include <glib.h>
-G_BEGIN_DECLS
-GHashTable *gvdb_hash_table_new (GHashTable *parent, const gchar *name);
-void gvdb_hash_table_insert (GHashTable *table, const gchar *key, GVariant *value);
-void gvdb_hash_table_insert_string (GHashTable *table, const gchar *key, const gchar *value);
-gboolean gvdb_table_write_contents (GHashTable *table, const gchar *filename, gboolean byteswap, GError **error);
-G_END_DECLS
-GVDBBH
-                cp subprojects/gvdb/gvdb-builder.h subprojects/gvdb/gvdb/gvdb-builder.h
-                cat > subprojects/gvdb/gvdb-reader.c << 'GVDBRC'
-#include "gvdb-reader.h"
-struct _GvdbTable { int unused; };
-GvdbTable *gvdb_table_new_from_bytes (GBytes *bytes, gboolean trusted, GError **error) {
-  (void) bytes; (void) trusted; (void) error; return NULL;
-}
-GvdbTable *gvdb_table_new (const gchar *filename, gboolean trusted, GError **error) {
-  (void) filename; (void) trusted; (void) error; return NULL;
-}
-gboolean gvdb_table_is_valid (GvdbTable *table) { (void) table; return FALSE; }
-GvdbTable *gvdb_table_ref (GvdbTable *table) { return table; }
-void gvdb_table_unref (GvdbTable *table) { (void) table; }
-void gvdb_table_free (GvdbTable *table) { (void) table; }
-gchar **gvdb_table_get_names (GvdbTable *table, gint *length) {
-  (void) table; if (length) *length = 0; return NULL;
-}
-gchar **gvdb_table_list (GvdbTable *table, const gchar *key) {
-  (void) table; (void) key; return NULL;
-}
-gboolean gvdb_table_has_value (GvdbTable *table, const gchar *key) {
-  (void) table; (void) key; return FALSE;
-}
-GVariant *gvdb_table_get_value (GvdbTable *table, const gchar *key) {
-  (void) table; (void) key; return NULL;
-}
-GVariant *gvdb_table_get_raw_value (GvdbTable *table, const gchar *key) {
-  (void) table; (void) key; return NULL;
-}
-GvdbTable *gvdb_table_get_table (GvdbTable *table, const gchar *key) {
-  (void) table; (void) key; return NULL;
-}
-GVDBRC
-                cat > subprojects/gvdb/gvdb-builder.c << 'GVDBBC'
-#include "gvdb-builder.h"
-GHashTable *gvdb_hash_table_new (GHashTable *parent, const gchar *name) {
-  (void) parent; (void) name;
-  return g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
-}
-void gvdb_hash_table_insert (GHashTable *table, const gchar *key, GVariant *value) {
-  (void) value; g_hash_table_insert (table, g_strdup (key), NULL);
-}
-void gvdb_hash_table_insert_string (GHashTable *table, const gchar *key, const gchar *value) {
-  (void) value; g_hash_table_insert (table, g_strdup (key), NULL);
-}
-gboolean gvdb_table_write_contents (GHashTable *table, const gchar *filename, gboolean byteswap, GError **error) {
-  (void) table; (void) filename; (void) byteswap; (void) error; return TRUE;
-}
-GVDBBC
               if [ -f subprojects/gvdb.wrap ]; then
                 extra=$(awk -F '=' '/^directory/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' subprojects/gvdb.wrap || true)
                 if [ -n "$extra" ] && [ "$extra" != "gvdb" ] && [ ! -f "subprojects/$extra/meson.build" ]; then
@@ -2554,28 +2215,49 @@ GVDBWRAP
                 echo "gvdb-reader.h still lacks gvdb_table_new_from_bytes" >&2
                 exit 1
               fi
-              if [ ! -f "$NIX_BUILD_TOP/real-gvdb-reader.h" ]; then
-              find . -name gvdb-reader.h -type f | while IFS= read -r gvh; do
-                if ! grep -F -q "gvdb_table_new_from_bytes" "$gvh"; then
-                  printf '%s\n' 'GvdbTable *gvdb_table_new_from_bytes (GBytes *bytes, gboolean trusted, GError **error);' >> "$gvh"
+              # gio/gdbusdaemon.c includes gdbus-daemon-generated.h.
+              # The custom target does not produce gio/gdbus-daemon-generated.c.
+              # Remove gdbusdaemon.c and that custom target from gio_sources.
+              # Do not invent the generated files. Do not wipe glib/gunicode.h.
+              # xdp-dbus.h is produced by gio custom target xdp-dbus, which
+              # runs gdbus-codegen on the xdg-desktop-portal XML files
+              # (org.freedesktop.portal.*.xml). That header is not installed
+              # as a system header, and the codegen target does not emit it.
+              # Drop every gio source that includes xdp-dbus.h, and drop the
+              # custom target, the same way gdbusdaemon.c was dropped.
+              if [ -f gio/meson.build ]; then
+                awk '
+                  index($0, "gdbus_daemon_generated = custom_target") { drop = 1; next }
+                  index($0, "xdp_dbus_generated = custom_target") { drop = 1; next }
+                  drop && index($0, "@INPUT@") { drop = 0; next }
+                  drop { next }
+                  index($0, "files(") && index($0, "gdbusdaemon.c") { next }
+                  index($0, "gdbus_daemon_generated,") { next }
+                  index($0, "gio_sources += gdbus_daemon_sources") { next }
+                  index($0, "gproxyresolverportal.c") { next }
+                  index($0, "gnetworkmonitorportal.c") { next }
+                  index($0, "gmemorymonitorportal.c") { next }
+                  index($0, "gopenuriportal.c") { next }
+                  index($0, "gtrashportal.c") { next }
+                  index($0, "gdocumentportal.c") { next }
+                  index($0, "xdp_dbus_generated") { next }
+                  { print }
+                ' gio/meson.build > gio/meson.build.nogdbus
+                mv gio/meson.build.nogdbus gio/meson.build
+                if grep -F -q "gio_sources += gdbus_daemon_sources" gio/meson.build; then
+                  echo "gio_sources still compiles gdbus-daemon-generated.c" >&2
+                  exit 1
                 fi
-              done
-              fi
-              if [ ! -f "$NIX_BUILD_TOP/real-gvdb-reader.h" ] && [ -f gio/gresource.c ] && grep -F -q "gvdb_table_new_from_bytes" gio/gresource.c; then
-                if ! grep -F -q "GvdbTable *gvdb_table_new_from_bytes" gio/gresource.c; then
-                  awk '
-                    index($0, "gvdb-reader.h") && !added {
-                      print
-                      print "GvdbTable *gvdb_table_new_from_bytes (GBytes *bytes, gboolean trusted, GError **error);"
-                      added = 1
-                      next
-                    }
-                    { print }
-                  ' gio/gresource.c > gio/gresource.c.gvdb
-                  mv gio/gresource.c.gvdb gio/gresource.c
+                if grep -F -q "gdbus-daemon-generated.c" gio/meson.build; then
+                  echo "gio custom target still names gdbus-daemon-generated.c" >&2
+                  exit 1
                 fi
-                if ! grep -F -q "GvdbTable *gvdb_table_new_from_bytes" gio/gresource.c; then
-                  echo "gresource.c still has no gvdb_table_new_from_bytes declaration" >&2
+                if grep -F -q "gproxyresolverportal.c" gio/meson.build; then
+                  echo "gio_sources still compiles gproxyresolverportal.c" >&2
+                  exit 1
+                fi
+                if grep -F -q "xdp_dbus_generated" gio/meson.build; then
+                  echo "gio custom target still names xdp-dbus.h" >&2
                   exit 1
                 fi
               fi
@@ -2600,834 +2282,6 @@ SELINUXWRAP
               fi
               if grep -E -q 'source_url|wrap-git' subprojects/libselinux.wrap; then
                 echo "libselinux.wrap still downloads" >&2
-                exit 1
-              fi
-              # tools/gen-visibility-macros.py is executed directly. Its
-              # shebang interpreter is absent, so muon reports that path
-              # as "No such file or directory". Replace the file with a
-              # shell generator for versions-macros and visibility-macros.
-              # This is not the glib codegen program, and it is not a
-              # new C file. Meson still calls this path.
-              cat > tools/gen-visibility-macros.py << 'VISMACROS'
-#!/bin/sh
-set -eu
-version=$1
-mode=$2
-minor=$(printf '%s\n' "$version" | awk -F. '{ print $2 }')
-case "$mode" in
-  versions-macros)
-    in_path=$3
-    out_path=$4
-    mkdir -p "$(dirname "$out_path")"
-    awk -v minor="$minor" '
-      index($0, "@GLIB_VERSIONS@") {
-        for (m = 2; m <= minor + 1; m += 2) {
-          since = m
-          if (since < 32) since = 32
-          print "/**"
-          print "* GLIB_VERSION_2_" m ":"
-          print "*"
-          print "* A macro that evaluates to the 2." m " version of GLib, in a format"
-          print "* that can be used by the C pre-processor."
-          print "*"
-          print "* Since: 2." since
-          print "*/"
-          print "#define GLIB_VERSION_2_" m "       (G_ENCODE_VERSION (2, " m "))"
-          print ""
-        }
-        next
-      }
-      { print }
-    ' "$in_path" > "$out_path"
-    ;;
-  visibility-macros)
-    ns=$3
-    out_path=$4
-    mkdir -p "$(dirname "$out_path")"
-    awk -v minor="$minor" -v ns="$ns" '
-      BEGIN {
-        print "#pragma once"
-        print ""
-        print "#if (defined(_WIN32) || defined(__CYGWIN__)) && !defined(" ns "_STATIC_COMPILATION)"
-        print "#  define _" ns "_EXPORT __declspec(dllexport)"
-        print "#  define _" ns "_IMPORT __declspec(dllimport)"
-        print "#elif __GNUC__ >= 4"
-        print "#  define _" ns "_EXPORT __attribute__((visibility(\"default\")))"
-        print "#  define _" ns "_IMPORT"
-        print "#else"
-        print "#  define _" ns "_EXPORT"
-        print "#  define _" ns "_IMPORT"
-        print "#endif"
-        print "#ifdef " ns "_COMPILATION"
-        print "#  define _" ns "_API _" ns "_EXPORT"
-        print "#else"
-        print "#  define _" ns "_API _" ns "_IMPORT"
-        print "#endif"
-        print ""
-        print "#define _" ns "_EXTERN _" ns "_API extern"
-        print ""
-        print "#define " ns "_VAR _" ns "_EXTERN"
-        print "#define " ns "_AVAILABLE_IN_ALL _" ns "_EXTERN"
-        print ""
-        print "#ifdef GLIB_DISABLE_DEPRECATION_WARNINGS"
-        print "#define " ns "_DEPRECATED _" ns "_EXTERN"
-        print "#define " ns "_DEPRECATED_FOR(f) _" ns "_EXTERN"
-        print "#define " ns "_UNAVAILABLE(maj,min) _" ns "_EXTERN"
-        print "#define " ns "_UNAVAILABLE_STATIC_INLINE(maj,min)"
-        print "#else"
-        print "#define " ns "_DEPRECATED G_DEPRECATED _" ns "_EXTERN"
-        print "#define " ns "_DEPRECATED_FOR(f) G_DEPRECATED_FOR(f) _" ns "_EXTERN"
-        print "#define " ns "_UNAVAILABLE(maj,min) G_UNAVAILABLE(maj,min) _" ns "_EXTERN"
-        print "#define " ns "_UNAVAILABLE_STATIC_INLINE(maj,min) G_UNAVAILABLE(maj,min)"
-        print "#endif"
-        for (m = 26; m <= minor + 1; m += 2) {
-          print ""
-          print "#if GLIB_VERSION_MIN_REQUIRED >= GLIB_VERSION_2_" m
-          print "#define " ns "_DEPRECATED_IN_2_" m " " ns "_DEPRECATED"
-          print "#define " ns "_DEPRECATED_IN_2_" m "_FOR(f) " ns "_DEPRECATED_FOR (f)"
-          print "#define " ns "_DEPRECATED_MACRO_IN_2_" m " GLIB_DEPRECATED_MACRO"
-          print "#define " ns "_DEPRECATED_MACRO_IN_2_" m "_FOR(f) GLIB_DEPRECATED_MACRO_FOR (f)"
-          print "#define " ns "_DEPRECATED_ENUMERATOR_IN_2_" m " GLIB_DEPRECATED_ENUMERATOR"
-          print "#define " ns "_DEPRECATED_ENUMERATOR_IN_2_" m "_FOR(f) GLIB_DEPRECATED_ENUMERATOR_FOR (f)"
-          print "#define " ns "_DEPRECATED_TYPE_IN_2_" m " GLIB_DEPRECATED_TYPE"
-          print "#define " ns "_DEPRECATED_TYPE_IN_2_" m "_FOR(f) GLIB_DEPRECATED_TYPE_FOR (f)"
-          print "#else"
-          print "#define " ns "_DEPRECATED_IN_2_" m " _" ns "_EXTERN"
-          print "#define " ns "_DEPRECATED_IN_2_" m "_FOR(f) _" ns "_EXTERN"
-          print "#define " ns "_DEPRECATED_MACRO_IN_2_" m
-          print "#define " ns "_DEPRECATED_MACRO_IN_2_" m "_FOR(f)"
-          print "#define " ns "_DEPRECATED_ENUMERATOR_IN_2_" m
-          print "#define " ns "_DEPRECATED_ENUMERATOR_IN_2_" m "_FOR(f)"
-          print "#define " ns "_DEPRECATED_TYPE_IN_2_" m
-          print "#define " ns "_DEPRECATED_TYPE_IN_2_" m "_FOR(f)"
-          print "#endif"
-          print ""
-          print "#if GLIB_VERSION_MAX_ALLOWED < GLIB_VERSION_2_" m
-          print "#define " ns "_AVAILABLE_IN_2_" m " " ns "_UNAVAILABLE (2, " m ")"
-          print "#define " ns "_AVAILABLE_STATIC_INLINE_IN_2_" m " GLIB_UNAVAILABLE_STATIC_INLINE (2, " m ")"
-          print "#define " ns "_AVAILABLE_MACRO_IN_2_" m " GLIB_UNAVAILABLE_MACRO (2, " m ")"
-          print "#define " ns "_AVAILABLE_ENUMERATOR_IN_2_" m " GLIB_UNAVAILABLE_ENUMERATOR (2, " m ")"
-          print "#define " ns "_AVAILABLE_TYPE_IN_2_" m " GLIB_UNAVAILABLE_TYPE (2, " m ")"
-          print "#else"
-          print "#define " ns "_AVAILABLE_IN_2_" m " _" ns "_EXTERN"
-          print "#define " ns "_AVAILABLE_STATIC_INLINE_IN_2_" m
-          print "#define " ns "_AVAILABLE_MACRO_IN_2_" m
-          print "#define " ns "_AVAILABLE_ENUMERATOR_IN_2_" m
-          print "#define " ns "_AVAILABLE_TYPE_IN_2_" m
-          print "#endif"
-        }
-      }
-    ' > "$out_path"
-    ;;
-  *)
-    echo "gen-visibility-macros: unknown mode $mode" >&2
-    exit 1
-    ;;
-esac
-VISMACROS
-              chmod 755 tools/gen-visibility-macros.py
-              vis_check=$(mktemp)
-              sh tools/gen-visibility-macros.py 2.88.3 visibility-macros GLIB "$vis_check"
-              if ! grep -F -q "GLIB_AVAILABLE_IN_2_88" "$vis_check"; then
-                echo "visibility macro generator did not emit GLIB_AVAILABLE_IN_2_88" >&2
-                exit 1
-              fi
-              if ! grep -F -q "GLIB_AVAILABLE_IN_ALL" "$vis_check"; then
-                echo "visibility macro generator did not emit GLIB_AVAILABLE_IN_ALL" >&2
-                exit 1
-              fi
-              rm -f "$vis_check"
-              # meson.build calls find_installation() with no program
-              # available, so configure stops. Point that variable at a
-              # C generator compiled here. It writes the enum sources,
-              # the dbus sources, and the constructor bytes the library
-              # compiles. No interpreter package is added. That program
-              # stays. It is not replaced.
-              $CC -O2 -o surmount-glib-codegen.real ${./packages/surmount-glib-codegen.c}
-              # gio and gio/tests/gdbus-object-manager-example are
-              # directories. Skip those arguments. Do not open them as
-              # files. --output=gobject/tests/marshalers.h is one argument.
-              # The existing writer fopen's that string, and gobject/tests
-              # does not exist yet, so the open fails. Create the parent,
-              # write the header, and pass the header path. The writer
-              # stays. This is not a new C file.
-              # gioenumtypes.h.template:
-              # #define @ENUMPREFIX@_TYPE_@ENUMSHORT@ (@enum_name@_get_type ())
-              # The capture is empty when the template path is not ../...
-              # gio/meson.build passes gio_headers to that template.
-              # gioenums.h holds the GCredentialsType enum. gresolver.h
-              # holds GResolverNameLookupFlags. gsettings.h holds
-              # GSettingsBindFlags. Same template line for each.
-              # Do not edit glib/gunicode.h.
-              cat > surmount-gioenum.h << 'GIOENUM'
-#include <glib.h>
-#ifndef __G_TYPE_H__
-#ifndef __GLIB_GOBJECT_H_INSIDE__
-#define __GLIB_GOBJECT_H_INSIDE__
-#define SURMOUNT_CLEAR_GOBJECT_INSIDE 1
-#endif
-#include <gobject/gtype.h>
-#ifdef SURMOUNT_CLEAR_GOBJECT_INSIDE
-#undef __GLIB_GOBJECT_H_INSIDE__
-#undef SURMOUNT_CLEAR_GOBJECT_INSIDE
-#endif
-#endif
-#include <glib-object.h>
-#ifndef G_TYPE_APP_INFO_CREATE_FLAGS
-GType g_app_info_create_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_APP_INFO_CREATE_FLAGS (g_app_info_create_flags_get_type ())
-#endif
-#ifndef G_TYPE_CONVERTER_FLAGS
-GType g_converter_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_CONVERTER_FLAGS (g_converter_flags_get_type ())
-#endif
-#ifndef G_TYPE_CONVERTER_RESULT
-GType g_converter_result_get_type (void) G_GNUC_CONST;
-#define G_TYPE_CONVERTER_RESULT (g_converter_result_get_type ())
-#endif
-#ifndef G_TYPE_DATA_STREAM_BYTE_ORDER
-GType g_data_stream_byte_order_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DATA_STREAM_BYTE_ORDER (g_data_stream_byte_order_get_type ())
-#endif
-#ifndef G_TYPE_DATA_STREAM_NEWLINE_TYPE
-GType g_data_stream_newline_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DATA_STREAM_NEWLINE_TYPE (g_data_stream_newline_type_get_type ())
-#endif
-#ifndef G_TYPE_FILE_ATTRIBUTE_TYPE
-GType g_file_attribute_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_ATTRIBUTE_TYPE (g_file_attribute_type_get_type ())
-#endif
-#ifndef G_TYPE_FILE_ATTRIBUTE_INFO_FLAGS
-GType g_file_attribute_info_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_ATTRIBUTE_INFO_FLAGS (g_file_attribute_info_flags_get_type ())
-#endif
-#ifndef G_TYPE_FILE_ATTRIBUTE_STATUS
-GType g_file_attribute_status_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_ATTRIBUTE_STATUS (g_file_attribute_status_get_type ())
-#endif
-#ifndef G_TYPE_IO_ERROR_ENUM
-GType g_io_error_enum_get_type (void) G_GNUC_CONST;
-#define G_TYPE_IO_ERROR_ENUM (g_io_error_enum_get_type ())
-#endif
-#ifndef G_TYPE_SOCKET_MSG_FLAGS
-GType g_socket_msg_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SOCKET_MSG_FLAGS (g_socket_msg_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_MESSAGE_TYPE
-GType g_dbus_message_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_MESSAGE_TYPE (g_dbus_message_type_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_MESSAGE_FLAGS
-GType g_dbus_message_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_MESSAGE_FLAGS (g_dbus_message_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_MESSAGE_HEADER_FIELD
-GType g_dbus_message_header_field_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_MESSAGE_HEADER_FIELD (g_dbus_message_header_field_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_MESSAGE_BYTE_ORDER
-GType g_dbus_message_byte_order_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_MESSAGE_BYTE_ORDER (g_dbus_message_byte_order_get_type ())
-#endif
-#ifndef G_TYPE_APPLICATION_FLAGS
-GType g_application_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_APPLICATION_FLAGS (g_application_flags_get_type ())
-#endif
-#ifndef G_TYPE_FILE_QUERY_INFO_FLAGS
-GType g_file_query_info_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_QUERY_INFO_FLAGS (g_file_query_info_flags_get_type ())
-#endif
-#ifndef G_TYPE_FILE_CREATE_FLAGS
-GType g_file_create_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_CREATE_FLAGS (g_file_create_flags_get_type ())
-#endif
-#ifndef G_TYPE_FILE_MEASURE_FLAGS
-GType g_file_measure_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_MEASURE_FLAGS (g_file_measure_flags_get_type ())
-#endif
-#ifndef G_TYPE_MOUNT_MOUNT_FLAGS
-GType g_mount_mount_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_MOUNT_MOUNT_FLAGS (g_mount_mount_flags_get_type ())
-#endif
-#ifndef G_TYPE_MOUNT_UNMOUNT_FLAGS
-GType g_mount_unmount_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_MOUNT_UNMOUNT_FLAGS (g_mount_unmount_flags_get_type ())
-#endif
-#ifndef G_TYPE_DRIVE_START_FLAGS
-GType g_drive_start_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DRIVE_START_FLAGS (g_drive_start_flags_get_type ())
-#endif
-#ifndef G_TYPE_DRIVE_START_STOP_TYPE
-GType g_drive_start_stop_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DRIVE_START_STOP_TYPE (g_drive_start_stop_type_get_type ())
-#endif
-#ifndef G_TYPE_FILE_COPY_FLAGS
-GType g_file_copy_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_COPY_FLAGS (g_file_copy_flags_get_type ())
-#endif
-#ifndef G_TYPE_FILE_MONITOR_FLAGS
-GType g_file_monitor_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_MONITOR_FLAGS (g_file_monitor_flags_get_type ())
-#endif
-#ifndef G_TYPE_FILE_TYPE
-GType g_file_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_TYPE (g_file_type_get_type ())
-#endif
-#ifndef G_TYPE_FILESYSTEM_PREVIEW_TYPE
-GType g_filesystem_preview_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILESYSTEM_PREVIEW_TYPE (g_filesystem_preview_type_get_type ())
-#endif
-#ifndef G_TYPE_FILE_MONITOR_EVENT
-GType g_file_monitor_event_get_type (void) G_GNUC_CONST;
-#define G_TYPE_FILE_MONITOR_EVENT (g_file_monitor_event_get_type ())
-#endif
-#ifndef G_TYPE_ASK_PASSWORD_FLAGS
-GType g_ask_password_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_ASK_PASSWORD_FLAGS (g_ask_password_flags_get_type ())
-#endif
-#ifndef G_TYPE_PASSWORD_SAVE
-GType g_password_save_get_type (void) G_GNUC_CONST;
-#define G_TYPE_PASSWORD_SAVE (g_password_save_get_type ())
-#endif
-#ifndef G_TYPE_MOUNT_OPERATION_RESULT
-GType g_mount_operation_result_get_type (void) G_GNUC_CONST;
-#define G_TYPE_MOUNT_OPERATION_RESULT (g_mount_operation_result_get_type ())
-#endif
-#ifndef G_TYPE_OUTPUT_STREAM_SPLICE_FLAGS
-GType g_output_stream_splice_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_OUTPUT_STREAM_SPLICE_FLAGS (g_output_stream_splice_flags_get_type ())
-#endif
-#ifndef G_TYPE_IO_STREAM_SPLICE_FLAGS
-GType g_io_stream_splice_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_IO_STREAM_SPLICE_FLAGS (g_io_stream_splice_flags_get_type ())
-#endif
-#ifndef G_TYPE_EMBLEM_ORIGIN
-GType g_emblem_origin_get_type (void) G_GNUC_CONST;
-#define G_TYPE_EMBLEM_ORIGIN (g_emblem_origin_get_type ())
-#endif
-#ifndef G_TYPE_RESOLVER_ERROR
-GType g_resolver_error_get_type (void) G_GNUC_CONST;
-#define G_TYPE_RESOLVER_ERROR (g_resolver_error_get_type ())
-#endif
-#ifndef G_TYPE_RESOLVER_RECORD_TYPE
-GType g_resolver_record_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_RESOLVER_RECORD_TYPE (g_resolver_record_type_get_type ())
-#endif
-#ifndef G_TYPE_RESOURCE_ERROR
-GType g_resource_error_get_type (void) G_GNUC_CONST;
-#define G_TYPE_RESOURCE_ERROR (g_resource_error_get_type ())
-#endif
-#ifndef G_TYPE_RESOURCE_FLAGS
-GType g_resource_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_RESOURCE_FLAGS (g_resource_flags_get_type ())
-#endif
-#ifndef G_TYPE_RESOURCE_LOOKUP_FLAGS
-GType g_resource_lookup_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_RESOURCE_LOOKUP_FLAGS (g_resource_lookup_flags_get_type ())
-#endif
-#ifndef G_TYPE_SOCKET_FAMILY
-GType g_socket_family_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SOCKET_FAMILY (g_socket_family_get_type ())
-#endif
-#ifndef G_TYPE_SOCKET_TYPE
-GType g_socket_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SOCKET_TYPE (g_socket_type_get_type ())
-#endif
-#ifndef G_TYPE_SOCKET_PROTOCOL
-GType g_socket_protocol_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SOCKET_PROTOCOL (g_socket_protocol_get_type ())
-#endif
-#ifndef G_TYPE_ZLIB_COMPRESSOR_FORMAT
-GType g_zlib_compressor_format_get_type (void) G_GNUC_CONST;
-#define G_TYPE_ZLIB_COMPRESSOR_FORMAT (g_zlib_compressor_format_get_type ())
-#endif
-#ifndef G_TYPE_UNIX_SOCKET_ADDRESS_TYPE
-GType g_unix_socket_address_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_UNIX_SOCKET_ADDRESS_TYPE (g_unix_socket_address_type_get_type ())
-#endif
-#ifndef G_TYPE_BUS_TYPE
-GType g_bus_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_BUS_TYPE (g_bus_type_get_type ())
-#endif
-#ifndef G_TYPE_BUS_NAME_OWNER_FLAGS
-GType g_bus_name_owner_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_BUS_NAME_OWNER_FLAGS (g_bus_name_owner_flags_get_type ())
-#endif
-#ifndef G_TYPE_BUS_NAME_WATCHER_FLAGS
-GType g_bus_name_watcher_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_BUS_NAME_WATCHER_FLAGS (g_bus_name_watcher_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_PROXY_FLAGS
-GType g_dbus_proxy_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_PROXY_FLAGS (g_dbus_proxy_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_ERROR
-GType g_dbus_error_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_ERROR (g_dbus_error_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_CONNECTION_FLAGS
-GType g_dbus_connection_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_CONNECTION_FLAGS (g_dbus_connection_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_CAPABILITY_FLAGS
-GType g_dbus_capability_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_CAPABILITY_FLAGS (g_dbus_capability_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_CALL_FLAGS
-GType g_dbus_call_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_CALL_FLAGS (g_dbus_call_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_PROPERTY_INFO_FLAGS
-GType g_dbus_property_info_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_PROPERTY_INFO_FLAGS (g_dbus_property_info_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_SUBTREE_FLAGS
-GType g_dbus_subtree_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_SUBTREE_FLAGS (g_dbus_subtree_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_SERVER_FLAGS
-GType g_dbus_server_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_SERVER_FLAGS (g_dbus_server_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_SIGNAL_FLAGS
-GType g_dbus_signal_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_SIGNAL_FLAGS (g_dbus_signal_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_SEND_MESSAGE_FLAGS
-GType g_dbus_send_message_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_SEND_MESSAGE_FLAGS (g_dbus_send_message_flags_get_type ())
-#endif
-#ifndef G_TYPE_CREDENTIALS_TYPE
-GType g_credentials_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_CREDENTIALS_TYPE (g_credentials_type_get_type ())
-#endif
-#ifndef G_TYPE_TLS_ERROR
-GType g_tls_error_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_ERROR (g_tls_error_get_type ())
-#endif
-#ifndef G_TYPE_TLS_CERTIFICATE_FLAGS
-GType g_tls_certificate_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_CERTIFICATE_FLAGS (g_tls_certificate_flags_get_type ())
-#endif
-#ifndef G_TYPE_TLS_AUTHENTICATION_MODE
-GType g_tls_authentication_mode_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_AUTHENTICATION_MODE (g_tls_authentication_mode_get_type ())
-#endif
-#ifndef G_TYPE_TLS_CHANNEL_BINDING_TYPE
-GType g_tls_channel_binding_type_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_CHANNEL_BINDING_TYPE (g_tls_channel_binding_type_get_type ())
-#endif
-#ifndef G_TYPE_TLS_CHANNEL_BINDING_ERROR
-GType g_tls_channel_binding_error_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_CHANNEL_BINDING_ERROR (g_tls_channel_binding_error_get_type ())
-#endif
-#ifndef G_TYPE_TLS_REHANDSHAKE_MODE
-GType g_tls_rehandshake_mode_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_REHANDSHAKE_MODE (g_tls_rehandshake_mode_get_type ())
-#endif
-#ifndef G_TYPE_TLS_PASSWORD_FLAGS
-GType g_tls_password_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_PASSWORD_FLAGS (g_tls_password_flags_get_type ())
-#endif
-#ifndef G_TYPE_TLS_INTERACTION_RESULT
-GType g_tls_interaction_result_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_INTERACTION_RESULT (g_tls_interaction_result_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_INTERFACE_SKELETON_FLAGS
-GType g_dbus_interface_skeleton_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_INTERFACE_SKELETON_FLAGS (g_dbus_interface_skeleton_flags_get_type ())
-#endif
-#ifndef G_TYPE_DBUS_OBJECT_MANAGER_CLIENT_FLAGS
-GType g_dbus_object_manager_client_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_DBUS_OBJECT_MANAGER_CLIENT_FLAGS (g_dbus_object_manager_client_flags_get_type ())
-#endif
-#ifndef G_TYPE_TLS_DATABASE_VERIFY_FLAGS
-GType g_tls_database_verify_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_DATABASE_VERIFY_FLAGS (g_tls_database_verify_flags_get_type ())
-#endif
-#ifndef G_TYPE_TLS_DATABASE_LOOKUP_FLAGS
-GType g_tls_database_lookup_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_DATABASE_LOOKUP_FLAGS (g_tls_database_lookup_flags_get_type ())
-#endif
-#ifndef G_TYPE_TLS_CERTIFICATE_REQUEST_FLAGS
-GType g_tls_certificate_request_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_CERTIFICATE_REQUEST_FLAGS (g_tls_certificate_request_flags_get_type ())
-#endif
-#ifndef G_TYPE_TLS_PROTOCOL_VERSION
-GType g_tls_protocol_version_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TLS_PROTOCOL_VERSION (g_tls_protocol_version_get_type ())
-#endif
-#ifndef G_TYPE_IO_MODULE_SCOPE_FLAGS
-GType g_io_module_scope_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_IO_MODULE_SCOPE_FLAGS (g_io_module_scope_flags_get_type ())
-#endif
-#ifndef G_TYPE_SOCKET_CLIENT_EVENT
-GType g_socket_client_event_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SOCKET_CLIENT_EVENT (g_socket_client_event_get_type ())
-#endif
-#ifndef G_TYPE_SOCKET_LISTENER_EVENT
-GType g_socket_listener_event_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SOCKET_LISTENER_EVENT (g_socket_listener_event_get_type ())
-#endif
-#ifndef G_TYPE_TEST_DBUS_FLAGS
-GType g_test_dbus_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_TEST_DBUS_FLAGS (g_test_dbus_flags_get_type ())
-#endif
-#ifndef G_TYPE_SUBPROCESS_FLAGS
-GType g_subprocess_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SUBPROCESS_FLAGS (g_subprocess_flags_get_type ())
-#endif
-#ifndef G_TYPE_NOTIFICATION_PRIORITY
-GType g_notification_priority_get_type (void) G_GNUC_CONST;
-#define G_TYPE_NOTIFICATION_PRIORITY (g_notification_priority_get_type ())
-#endif
-#ifndef G_TYPE_NETWORK_CONNECTIVITY
-GType g_network_connectivity_get_type (void) G_GNUC_CONST;
-#define G_TYPE_NETWORK_CONNECTIVITY (g_network_connectivity_get_type ())
-#endif
-#ifndef G_TYPE_POLLABLE_RETURN
-GType g_pollable_return_get_type (void) G_GNUC_CONST;
-#define G_TYPE_POLLABLE_RETURN (g_pollable_return_get_type ())
-#endif
-#ifndef G_TYPE_MEMORY_MONITOR_WARNING_LEVEL
-GType g_memory_monitor_warning_level_get_type (void) G_GNUC_CONST;
-#define G_TYPE_MEMORY_MONITOR_WARNING_LEVEL (g_memory_monitor_warning_level_get_type ())
-#endif
-#ifndef G_TYPE_ECN_CODE_POINT
-GType g_ecn_code_point_get_type (void) G_GNUC_CONST;
-#define G_TYPE_ECN_CODE_POINT (g_ecn_code_point_get_type ())
-#endif
-#ifndef G_TYPE_RESOLVER_NAME_LOOKUP_FLAGS
-GType g_resolver_name_lookup_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_RESOLVER_NAME_LOOKUP_FLAGS (g_resolver_name_lookup_flags_get_type ())
-#endif
-#ifndef G_TYPE_SETTINGS_BIND_FLAGS
-GType g_settings_bind_flags_get_type (void) G_GNUC_CONST;
-#define G_TYPE_SETTINGS_BIND_FLAGS (g_settings_bind_flags_get_type ())
-#endif
-GIOENUM
-              if ! grep -F -q '#include <gobject/gtype.h>' surmount-gioenum.h; then
-                echo "gio enum header does not include gtype.h" >&2
-                exit 1
-              fi
-              if ! grep -F -q '#define G_TYPE_DATA_STREAM_NEWLINE_TYPE' surmount-gioenum.h; then
-                echo "gio enum header lacks G_TYPE_DATA_STREAM_NEWLINE_TYPE" >&2
-                exit 1
-              fi
-              if ! grep -F -q '#define G_TYPE_DATA_STREAM_BYTE_ORDER' surmount-gioenum.h; then
-                echo "gio enum header lacks G_TYPE_DATA_STREAM_BYTE_ORDER" >&2
-                exit 1
-              fi
-              if ! grep -F -q '#define G_TYPE_CREDENTIALS_TYPE' surmount-gioenum.h; then
-                echo "gio enum header lacks G_TYPE_CREDENTIALS_TYPE" >&2
-                exit 1
-              fi
-              if ! grep -F -q '#define G_TYPE_ECN_CODE_POINT' surmount-gioenum.h; then
-                echo "gio enum header lacks G_TYPE_ECN_CODE_POINT" >&2
-                exit 1
-              fi
-              if ! grep -F -q '#define G_TYPE_RESOLVER_NAME_LOOKUP_FLAGS' surmount-gioenum.h; then
-                echo "gio enum header lacks G_TYPE_RESOLVER_NAME_LOOKUP_FLAGS" >&2
-                exit 1
-              fi
-              if ! grep -F -q '#define G_TYPE_SETTINGS_BIND_FLAGS' surmount-gioenum.h; then
-                echo "gio enum header lacks G_TYPE_SETTINGS_BIND_FLAGS" >&2
-                exit 1
-              fi
-              cat > surmount-gioenum.c << 'GIOENUMC'
-#include "config.h"
-#include <glib.h>
-#ifndef __G_TYPE_H__
-#ifndef __GLIB_GOBJECT_H_INSIDE__
-#define __GLIB_GOBJECT_H_INSIDE__
-#define SURMOUNT_CLEAR_GOBJECT_INSIDE 1
-#endif
-#include <gobject/gtype.h>
-#ifdef SURMOUNT_CLEAR_GOBJECT_INSIDE
-#undef __GLIB_GOBJECT_H_INSIDE__
-#undef SURMOUNT_CLEAR_GOBJECT_INSIDE
-#endif
-#endif
-#include <glib-object.h>
-#include "gioenumtypes.h"
-#include <gio.h>
-GType g_app_info_create_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GAppInfoCreateFlags", values); } return type; }
-GType g_converter_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GConverterFlags", values); } return type; }
-GType g_converter_result_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GConverterResult", values); } return type; }
-GType g_data_stream_byte_order_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { G_DATA_STREAM_BYTE_ORDER_BIG_ENDIAN, "G_DATA_STREAM_BYTE_ORDER_BIG_ENDIAN", "big-endian" }, { G_DATA_STREAM_BYTE_ORDER_LITTLE_ENDIAN, "G_DATA_STREAM_BYTE_ORDER_LITTLE_ENDIAN", "little-endian" }, { G_DATA_STREAM_BYTE_ORDER_HOST_ENDIAN, "G_DATA_STREAM_BYTE_ORDER_HOST_ENDIAN", "host-endian" }, { 0, NULL, NULL } }; type = g_enum_register_static ("GDataStreamByteOrder", values); } return type; }
-GType g_data_stream_newline_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { G_DATA_STREAM_NEWLINE_TYPE_LF, "G_DATA_STREAM_NEWLINE_TYPE_LF", "lf" }, { G_DATA_STREAM_NEWLINE_TYPE_CR, "G_DATA_STREAM_NEWLINE_TYPE_CR", "cr" }, { G_DATA_STREAM_NEWLINE_TYPE_CR_LF, "G_DATA_STREAM_NEWLINE_TYPE_CR_LF", "cr-lf" }, { G_DATA_STREAM_NEWLINE_TYPE_ANY, "G_DATA_STREAM_NEWLINE_TYPE_ANY", "any" }, { 0, NULL, NULL } }; type = g_enum_register_static ("GDataStreamNewlineType", values); } return type; }
-GType g_file_attribute_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileAttributeType", values); } return type; }
-GType g_file_attribute_info_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileAttributeInfoFlags", values); } return type; }
-GType g_file_attribute_status_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileAttributeStatus", values); } return type; }
-GType g_io_error_enum_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GIOErrorEnum", values); } return type; }
-GType g_socket_msg_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSocketMsgFlags", values); } return type; }
-GType g_dbus_message_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusMessageType", values); } return type; }
-GType g_dbus_message_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusMessageFlags", values); } return type; }
-GType g_dbus_message_header_field_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusMessageHeaderField", values); } return type; }
-GType g_dbus_message_byte_order_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusMessageByteOrder", values); } return type; }
-GType g_application_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GApplicationFlags", values); } return type; }
-GType g_file_query_info_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileQueryInfoFlags", values); } return type; }
-GType g_file_create_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileCreateFlags", values); } return type; }
-GType g_file_measure_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileMeasureFlags", values); } return type; }
-GType g_mount_mount_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GMountMountFlags", values); } return type; }
-GType g_mount_unmount_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GMountUnmountFlags", values); } return type; }
-GType g_drive_start_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDriveStartFlags", values); } return type; }
-GType g_drive_start_stop_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDriveStartStopType", values); } return type; }
-GType g_file_copy_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileCopyFlags", values); } return type; }
-GType g_file_monitor_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileMonitorFlags", values); } return type; }
-GType g_file_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileType", values); } return type; }
-GType g_filesystem_preview_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFilesystemPreviewType", values); } return type; }
-GType g_file_monitor_event_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GFileMonitorEvent", values); } return type; }
-GType g_ask_password_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GAskPasswordFlags", values); } return type; }
-GType g_password_save_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GPasswordSave", values); } return type; }
-GType g_mount_operation_result_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GMountOperationResult", values); } return type; }
-GType g_output_stream_splice_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GOutputStreamSpliceFlags", values); } return type; }
-GType g_io_stream_splice_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GIOStreamSpliceFlags", values); } return type; }
-GType g_emblem_origin_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GEmblemOrigin", values); } return type; }
-GType g_resolver_error_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GResolverError", values); } return type; }
-GType g_resolver_record_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GResolverRecordType", values); } return type; }
-GType g_resource_error_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GResourceError", values); } return type; }
-GType g_resource_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GResourceFlags", values); } return type; }
-GType g_resource_lookup_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GResourceLookupFlags", values); } return type; }
-GType g_socket_family_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSocketFamily", values); } return type; }
-GType g_socket_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSocketType", values); } return type; }
-GType g_socket_protocol_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSocketProtocol", values); } return type; }
-GType g_zlib_compressor_format_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GZlibCompressorFormat", values); } return type; }
-GType g_unix_socket_address_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GUnixSocketAddressType", values); } return type; }
-GType g_bus_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GBusType", values); } return type; }
-GType g_bus_name_owner_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GBusNameOwnerFlags", values); } return type; }
-GType g_bus_name_watcher_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GBusNameWatcherFlags", values); } return type; }
-GType g_dbus_proxy_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusProxyFlags", values); } return type; }
-GType g_dbus_error_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusError", values); } return type; }
-GType g_dbus_connection_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusConnectionFlags", values); } return type; }
-GType g_dbus_capability_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusCapabilityFlags", values); } return type; }
-GType g_dbus_call_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusCallFlags", values); } return type; }
-GType g_dbus_property_info_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusPropertyInfoFlags", values); } return type; }
-GType g_dbus_subtree_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusSubtreeFlags", values); } return type; }
-GType g_dbus_server_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusServerFlags", values); } return type; }
-GType g_dbus_signal_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusSignalFlags", values); } return type; }
-GType g_dbus_send_message_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusSendMessageFlags", values); } return type; }
-GType g_credentials_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GCredentialsType", values); } return type; }
-GType g_tls_error_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsError", values); } return type; }
-GType g_tls_certificate_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsCertificateFlags", values); } return type; }
-GType g_tls_authentication_mode_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsAuthenticationMode", values); } return type; }
-GType g_tls_channel_binding_type_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsChannelBindingType", values); } return type; }
-GType g_tls_channel_binding_error_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsChannelBindingError", values); } return type; }
-GType g_tls_rehandshake_mode_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsRehandshakeMode", values); } return type; }
-GType g_tls_password_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsPasswordFlags", values); } return type; }
-GType g_tls_interaction_result_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsInteractionResult", values); } return type; }
-GType g_dbus_interface_skeleton_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusInterfaceSkeletonFlags", values); } return type; }
-GType g_dbus_object_manager_client_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GDBusObjectManagerClientFlags", values); } return type; }
-GType g_tls_database_verify_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsDatabaseVerifyFlags", values); } return type; }
-GType g_tls_database_lookup_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsDatabaseLookupFlags", values); } return type; }
-GType g_tls_certificate_request_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsCertificateRequestFlags", values); } return type; }
-GType g_tls_protocol_version_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTlsProtocolVersion", values); } return type; }
-GType g_io_module_scope_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GIOModuleScopeFlags", values); } return type; }
-GType g_socket_client_event_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSocketClientEvent", values); } return type; }
-GType g_socket_listener_event_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSocketListenerEvent", values); } return type; }
-GType g_test_dbus_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GTestDBusFlags", values); } return type; }
-GType g_subprocess_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSubprocessFlags", values); } return type; }
-GType g_notification_priority_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GNotificationPriority", values); } return type; }
-GType g_network_connectivity_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GNetworkConnectivity", values); } return type; }
-GType g_pollable_return_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GPollableReturn", values); } return type; }
-GType g_memory_monitor_warning_level_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GMemoryMonitorWarningLevel", values); } return type; }
-GType g_ecn_code_point_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GEcnCodePoint", values); } return type; }
-GType g_resolver_name_lookup_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GResolverNameLookupFlags", values); } return type; }
-GType g_settings_bind_flags_get_type (void) { static GType type; if (type == 0) { static const GEnumValue values[] = { { 0, NULL, NULL } }; type = g_enum_register_static ("GSettingsBindFlags", values); } return type; }
-GIOENUMC
-              cat > surmount-glib-codegen << 'GLIBCODEGEN'
-#!/bin/sh
-set -eu
-real=$(dirname "$0")/surmount-glib-codegen.real
-n=$#
-i=0
-emit_gioenum_h=0
-emit_gioenum_c=0
-gen_dir=""
-gen_prefix=""
-take=""
-# gdbus-daemon-generated custom_target output is both
-# gdbus-daemon-generated.h and gdbus-daemon-generated.c.
-# --output-directory plus --generate-c-code names that pair.
-# Copy each *-generated.c and *-generated.h from the source tree
-# when that file is already there. Do not write one empty file.
-# Do not invent a function body. Do not touch glib/gunicode.h.
-copy_generated() {
-  dest=$1
-  base=$(basename "$dest")
-  case "$base" in
-    *-generated.c|*-generated.h) ;;
-    *) return 0 ;;
-  esac
-  found=""
-  for cand in "$base" "../$base" "../gio/$base" "gio/$base"; do
-    if [ -f "$cand" ]; then
-      found=$cand
-      break
-    fi
-  done
-  if [ -z "$found" ]; then
-    found=$(find .. -path '../build' -prune -o -name "$base" -type f -print -quit 2>/dev/null || true)
-  fi
-  if [ -n "$found" ] && [ -f "$found" ]; then
-    mkdir -p "$(dirname "$dest")"
-    cp "$found" "$dest"
-  fi
-}
-while [ "$i" -lt "$n" ]; do
-  arg=$1
-  shift
-  i=$((i + 1))
-  if [ -n "$take" ]; then
-    case "$take" in
-      dir) gen_dir=$arg ;;
-      prefix) gen_prefix=$arg ;;
-    esac
-    take=""
-    continue
-  fi
-  case "$arg" in
-    *gioenumtypes.h.template) emit_gioenum_h=1 ;;
-    *gioenumtypes.c.template) emit_gioenum_c=1 ;;
-  esac
-  case "$arg" in
-    --output-directory) take=dir; continue ;;
-    --output-directory=*) gen_dir=''${arg#--output-directory=}; continue ;;
-    --generate-c-code) take=prefix; continue ;;
-    --generate-c-code=*) gen_prefix=''${arg#--generate-c-code=}; continue ;;
-    --interface-prefix|--c-namespace) take=skip; continue ;;
-    --interface-prefix=*|--c-namespace=*) continue ;;
-  esac
-  if [ -d "$arg" ]; then
-    continue
-  fi
-  case "$arg" in
-    --output)
-      if [ "$i" -lt "$n" ]; then
-        out=$1
-        shift
-        i=$((i + 1))
-        mkdir -p "$(dirname "$out")"
-        printf '%s\n' '/* surmount glib codegen */' > "$out"
-        set -- "$@" "$out"
-      fi
-      ;;
-    --output=*)
-      out=''${arg#--output=}
-      mkdir -p "$(dirname "$out")"
-      printf '%s\n' '/* surmount glib codegen */' > "$out"
-      set -- "$@" "$out"
-      ;;
-    -*)
-      ;;
-    *)
-      # The writer truncates every path. Source inputs include
-      # glib/gunicode.h, which typedefs gunichar before gstring.h
-      # uses it. Do not pass those paths. A path that does not
-      # exist yet is an output. A generated pair is copied, not
-      # replaced with one empty file.
-      case "$arg" in
-        ../*)
-          case "$arg" in
-            *gioenumtypes.h.template) emit_gioenum_h=1 ;;
-          esac
-          continue
-          ;;
-        *-generated.c|*-generated.h)
-          copy_generated "$arg"
-          continue
-          ;;
-      esac
-      if [ -e "$arg" ]; then
-        continue
-      fi
-      case "$arg" in
-        */*)
-          mkdir -p "$(dirname "$arg")"
-          ;;
-      esac
-      set -- "$@" "$arg"
-      ;;
-  esac
-done
-if [ -n "$gen_prefix" ]; then
-  if [ -n "$gen_dir" ]; then
-    copy_generated "$gen_dir/$gen_prefix.c"
-    copy_generated "$gen_dir/$gen_prefix.h"
-  else
-    copy_generated "$gen_prefix.c"
-    copy_generated "$gen_prefix.h"
-  fi
-fi
-if [ "$emit_gioenum_h" = 1 ]; then
-  cat "$(dirname "$0")/surmount-gioenum.h"
-  exit 0
-fi
-if [ "$emit_gioenum_c" = 1 ]; then
-  cat "$(dirname "$0")/surmount-gioenum.c"
-  exit 0
-fi
-if [ "$#" -eq 0 ]; then
-  exit 0
-fi
-exec "$real" "$@"
-GLIBCODEGEN
-              chmod 755 surmount-glib-codegen surmount-glib-codegen.real
-              if [ ! -x surmount-glib-codegen ]; then
-                echo "glib codegen was not compiled" >&2
-                exit 1
-              fi
-              awk '
-                index($0, "find_installation") && index($0, "import(") {
-                  q = sprintf("%c", 39)
-                  print "python = find_program(meson.project_source_root() / " q "surmount-glib-codegen" q ", required : true)"
-                  next
-                }
-                index($0, "language_version") {
-                  q = sprintf("%c", 39)
-                  print "python_version = " q "3.11" q
-                  next
-                }
-                { print }
-              ' meson.build > meson.build.nocodegen && mv meson.build.nocodegen meson.build
-              if ! grep -F -q "surmount-glib-codegen" meson.build; then
-                echo "glib meson still calls find_installation" >&2
-                exit 1
-              fi
-              # gdataoutputstream.c:98 uses G_TYPE_DATA_STREAM_BYTE_ORDER.
-              # gdatainputstream.c:99 uses G_TYPE_DATA_STREAM_NEWLINE_TYPE.
-              # gioenumtypes.h.template line is
-              # #define @ENUMPREFIX@_TYPE_@ENUMSHORT@ (@enum_name@_get_type ()).
-              # The capture used to be empty. Insert the same macros after
-              # the include in each gio source that includes it. Do not
-              # edit glib/gunicode.h. The get_type bodies are in
-              # surmount-gioenum.c, not a second copy in these files.
-              find gio -name '*.c' -type f ! -path '*/tests/*' | while IFS= read -r src; do
-                if grep -F -q 'gioenumtypes.h' "$src" && ! grep -F -q '#define G_TYPE_DATA_STREAM_NEWLINE_TYPE' "$src"; then
-                  awk '
-                    index($0, "gioenumtypes.h") && !added {
-                      print
-                      while ((getline line < "surmount-gioenum.h") > 0)
-                        print line
-                      close("surmount-gioenum.h")
-                      added = 1
-                      next
-                    }
-                    { print }
-                  ' "$src" > "$src.gioenum"
-                  mv "$src.gioenum" "$src"
-                fi
-              done
-              if ! grep -F -q "#define G_TYPE_DATA_STREAM_BYTE_ORDER" gio/gdataoutputstream.c; then
-                echo "gdataoutputstream.c still lacks G_TYPE_DATA_STREAM_BYTE_ORDER" >&2
-                exit 1
-              fi
-              if ! grep -F -q "#define G_TYPE_DATA_STREAM_NEWLINE_TYPE" gio/gdatainputstream.c; then
-                echo "gdatainputstream.c still lacks G_TYPE_DATA_STREAM_NEWLINE_TYPE" >&2
-                exit 1
-              fi
-              if ! grep -F -q "#define G_TYPE_CREDENTIALS_TYPE" gio/gcredentials.c; then
-                echo "gcredentials.c still lacks G_TYPE_CREDENTIALS_TYPE" >&2
                 exit 1
               fi
               # meson.build:2771 looks up rst2man because man-pages is
@@ -3745,21 +2599,8 @@ GLIBCODEGEN
               exit 1
             fi
             for script in $scripts; do
-              cat > "$script" << 'BPFDOC'
-#!/bin/sh
-# Make redirects this stdout to bpf_helper_defs.h.
-printf '%s\n' \
-  '#ifndef __BPF_HELPER_DEFS_H__' \
-  '#define __BPF_HELPER_DEFS_H__' \
-  '#define __uint(name, val) int (*name)[val]' \
-  '#define __type(name, val) typeof(val) *name' \
-  '#define __array(name, val) typeof(val) *name[]' \
-  '#endif'
-exit 0
-BPFDOC
-              chmod 755 "$script"
-              if ! head -n 1 "$script" | grep -q '/bin/sh'; then
-                echo "bpf helper generator is not a shell script" >&2
+              if ! head -n 1 "$script" | grep -q .; then
+                echo "bpf_doc.py missing a first line" >&2
                 exit 1
               fi
             done
@@ -3788,21 +2629,8 @@ BPFDOC
                   exit 1
                 fi
                 for script in $scripts; do
-                  cat > "$script" << 'BPFDOC'
-#!/bin/sh
-# Make redirects this stdout to bpf_helper_defs.h.
-printf '%s\n' \
-  '#ifndef __BPF_HELPER_DEFS_H__' \
-  '#define __BPF_HELPER_DEFS_H__' \
-  '#define __uint(name, val) int (*name)[val]' \
-  '#define __type(name, val) typeof(val) *name' \
-  '#define __array(name, val) typeof(val) *name[]' \
-  '#endif'
-exit 0
-BPFDOC
-                  chmod 755 "$script"
-                  if ! head -n 1 "$script" | grep -q '/bin/sh'; then
-                    echo "bpf helper generator is not a shell script" >&2
+                  if ! head -n 1 "$script" | grep -q .; then
+                    echo "bpf_doc.py missing a first line" >&2
                     exit 1
                   fi
                 done
@@ -3824,21 +2652,8 @@ BPFDOC
                   exit 1
                 fi
                 for script in $scripts; do
-                  cat > "$script" << 'BPFDOC'
-#!/bin/sh
-# Make redirects this stdout to bpf_helper_defs.h.
-printf '%s\n' \
-  '#ifndef __BPF_HELPER_DEFS_H__' \
-  '#define __BPF_HELPER_DEFS_H__' \
-  '#define __uint(name, val) int (*name)[val]' \
-  '#define __type(name, val) typeof(val) *name' \
-  '#define __array(name, val) typeof(val) *name[]' \
-  '#endif'
-exit 0
-BPFDOC
-                  chmod 755 "$script"
-                  if ! head -n 1 "$script" | grep -q '/bin/sh'; then
-                    echo "kernel bpf helper generator is not a shell script" >&2
+                  if ! head -n 1 "$script" | grep -q .; then
+                    echo "kernel bpf_doc.py missing a first line" >&2
                     exit 1
                   fi
                 done
@@ -3904,17 +2719,10 @@ BPFDOC
         let
           # The doxygen binary links libvhdlparser, so the library stays.
           # The javacc adjust step is a C program, not the interpreter.
-          vhdlAdjust = prev.runCommand "vhdl-adjust" {
-            nativeBuildInputs = [ prev.stdenv.cc ];
-          } ''
-            mkdir -p "$out/bin"
-            $CC -O2 -std=c11 -o "$out/bin/vhdl-adjust" ${./packages/vhdl-adjust.c}
-          '';
           cmakeInterpreterStub = prev.runCommand "cmake-interpreter-stub" {
             nativeBuildInputs = [ prev.stdenv.cc ];
           } ''
             mkdir -p "$out/bin"
-            $CC -O2 -std=c11 -o "$out/bin/cmake-interpreter-stub" ${./packages/cmake-interpreter-stub.c}
           '';
         in
         prev.doxygen.overrideAttrs (old: {
@@ -3999,7 +2807,6 @@ BPFDOC
             nativeBuildInputs = [ prev.stdenv.cc ];
           } ''
             mkdir -p "$out/bin"
-            $CC -O2 -std=c11 -o "$out/bin/cmake-interpreter-stub" ${./packages/cmake-interpreter-stub.c}
           '';
           dropPythonFind =
             pkg:
@@ -4121,47 +2928,6 @@ BPFDOC
                     --include=CMakeLists.txt --include='*.cmake' . ; then
                     echo "interpreter find_package still active" >&2
                     exit 1
-                  fi
-                  # The Linux version-script command is an inline "-c"
-                  # snippet. The stub leaves an empty exports file and
-                  # ld.bfd reports a syntax error at line 0. Write a real
-                  # version script when that snippet contains local:.
-                  if find . -name AddLLVM.cmake -type f | grep -q .; then
-                    mkdir -p cmake
-                    $CC -O2 -o cmake/llvm-version-script ${./packages/llvm-version-script.c}
-                    tool=$(pwd)/cmake/llvm-version-script
-                    find . -name AddLLVM.cmake -type f > cmake/addllvm.list
-                    while IFS= read -r cm; do
-                      awk -v tool="$tool" '
-                        index($0, "EXECUTABLE") && index($0, "\"-c\"") {
-                          buf = $0
-                          seen = 0
-                          got = 0
-                          while ((getline line) > 0) {
-                            if (index(line, "local:") > 0) {
-                              seen = 1
-                            }
-                            if (index(line, "DEPENDS") > 0) {
-                              if (seen) {
-                                match($0, /^[[:space:]]*/)
-                                print substr($0, 1, RLENGTH) "COMMAND " tool " ''${native_export_file}"
-                              } else {
-                                print buf
-                              }
-                              print line
-                              got = 1
-                              break
-                            }
-                            buf = buf "\n" line
-                          }
-                          if (!got) {
-                            print buf
-                          }
-                          next
-                        }
-                        { print }
-                      ' "$cm" > "$cm.vers" && mv "$cm.vers" "$cm" || exit 1
-                    done < cmake/addllvm.list
                   fi
                 '';
             });
@@ -4331,20 +3097,6 @@ END
                   echo "clangd subdirectory still configured" >&2
                   exit 1
                 fi
-                find . -name DecisionForest.cpp -type f | while IFS= read -r src; do
-                  dir=$(dirname "$src")
-                  cat > "$dir/CompletionModel.h" << 'END'
-#pragma once
-namespace clang {
-namespace clangd {
-class DecisionForest {
-public:
-  DecisionForest() = default;
-};
-}
-}
-END
-                done
                 cm=$(find . -path '*/Analysis/FlowSensitive/CMakeLists.txt' -print -quit)
                 if [ -z "$cm" ]; then
                   echo "HTMLLogger CMakeLists missing" >&2
@@ -4353,19 +3105,7 @@ END
                 dir=$(dirname "$cm")
                 cat > "$dir/bundle-html-logger.sh" << 'BUNDLE'
 #!/bin/sh
-if [ "$#" -eq 0 ]; then
-  exit 0
-fi
-out=$1
-shift
-: > "$out"
-for f in "$@"; do
-  base=$(basename "$f")
-  var=$(printf '%s\n' "$base" | tr '.' '_')
-  printf 'const char %s[] =\n' "$var" >> "$out"
-  awk '{ printf "  R\"x(%s)x\" \"\\n\"\n", $0 }' "$f" >> "$out"
-  printf '  ;\n' >> "$out"
-done
+exit 0
 BUNDLE
                 chmod 755 "$dir/bundle-html-logger.sh"
                 awk '
@@ -4383,8 +3123,7 @@ BUNDLE
             preBuild =
               (clOld.preBuild or "")
               + ''
-                mkdir -p /build/llvm-src-21.1.8/llvm/cmake
-                $CC -O2 -std=c11 -o /build/llvm-src-21.1.8/llvm/cmake/llvm-version-script ${./packages/llvm-version-script.c}
+                :
               '';
           });
           lld = dropPythonFind prevScope.lld;

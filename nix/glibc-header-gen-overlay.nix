@@ -3,8 +3,8 @@
 # as a critical program (configure: critic_missing="$critic_missing python"
 # after "checking for python3" / "checking for python").
 # scripts/gen-as-const.py and locale/gen-translit.py stay in the
-# upstream tarball. The library recipe calls nix/packages/glibc-header-gen.c
-# instead. glibcLocales does not run those recipes and does not run
+# upstream tarball. This overlay does not compile a program for them.
+# glibcLocales does not run those recipes and does not run
 # configure, ./configure, or the glibc configure script. Its build phase
 # runs the C program localedef from the already-built glibc bin output.
 # localedef --prefix writes locale-archive under $out plus the absolute
@@ -47,11 +47,6 @@ let
   withoutPythonInterpreter = old: {
     nativeBuildInputs = dropPythonNamed (old.nativeBuildInputs or [ ]);
     postPatch = (old.postPatch or "") + ''
-      cp ${./packages/glibc-header-gen.c} glibc-header-gen.c
-      sed -i 's|$(PYTHON) $< --cc=|$(GLIBC_HEADER_GEN) as-const --cc=|' Makerules
-      sed -i 's|$(PYTHON) gen-translit.py |$(GLIBC_HEADER_GEN) translit |' locale/Makefile
-      grep -F -q '$(GLIBC_HEADER_GEN) as-const' Makerules
-      grep -F -q '$(GLIBC_HEADER_GEN) translit' locale/Makefile
       # Unpacked source root: stdenv already cd'd here. The build runs
       # configure, not autoconf. Only the python critical-program
       # assignment is a no-op. make, gawk, and bison stay required.
@@ -69,10 +64,6 @@ let
       grep -F -q 'critic_missing="$critic_missing make"' configure
       grep -F -q 'critic_missing="$critic_missing gawk"' configure
       grep -F -q 'critic_missing="$critic_missing bison"' configure
-    '';
-    postConfigure = (old.postConfigure or "") + ''
-      "$CC" -O2 -o glibc-header-gen ../glibc-header-gen.c
-      export GLIBC_HEADER_GEN="$(pwd)/glibc-header-gen"
     '';
   };
   # Do not run glibc configure. localedef is the C binary from the

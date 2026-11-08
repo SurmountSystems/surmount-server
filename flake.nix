@@ -153,10 +153,9 @@
       surmountPins = surmountOverlayParts.pins;
       surmountTzdata = surmountOverlayParts.tzdata;
       surmountNoHaskell = surmountOverlayParts.noHaskell;
-      # glibc library headers, and the separate glibcLocales configure,
-      # from nix/packages/glibc-header-gen.c. Mail-vps only, after
-      # noHaskell, so prev.glibc is the scrubbed one. Locale data is
-      # still produced by localedef, not by a python program.
+      # glibc configure drops the interpreter from the critical-program
+      # list. Mail-vps only, after noHaskell, so prev.glibc is the
+      # scrubbed one. Locale data is still produced by localedef.
       glibcHeaderGenOverlay = import ./nix/glibc-header-gen-overlay.nix;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.

@@ -750,11 +750,14 @@ fn ssh_run(host: &str, remote_cmd: &str) -> Result<(), ToolError> {
 fn rsync_local(flags: &[&str], src: &Path, dest: &Path) -> Result<(), ToolError> {
     let src_s = format!("{}/", src.display());
     let dest_s = format!("{}/", dest.display());
-    let mut cmd = Command::new("rsync");
-    cmd.args(flags).arg(&src_s).arg(&dest_s);
-    let st = cmd
-        .status()
-        .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
+    // Same ETXTBSY cap as the fake-ssh exec. The dry-run rsync is a
+    // script the test just closed. status() is the spawn.
+    let st = retry_local_exec(|| {
+        let mut cmd = Command::new("rsync");
+        cmd.args(flags).arg(&src_s).arg(&dest_s);
+        cmd.status()
+    })
+    .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
     if st.success() {
         Ok(())
     } else {
@@ -772,10 +775,12 @@ fn rsync_remote(
     let src_s = format!("{}/", src.display());
     let dest_s = format!("{target}:{}/", remote_dir.trim_end_matches('/'));
     let code = retry_remote("rsync", || {
-        let mut cmd = Command::new("rsync");
-        cmd.arg("-e").arg(ssh_rsh(target));
-        cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
-        match cmd.status() {
+        match retry_local_exec(|| {
+            let mut cmd = Command::new("rsync");
+            cmd.arg("-e").arg(ssh_rsh(target));
+            cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
+            cmd.status()
+        }) {
             Ok(status) => classify_rsync_code(status.code()),
             Err(e) => RemoteFinish::Local(format!("rsync failed: {e}")),
         }
