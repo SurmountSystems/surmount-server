@@ -15,13 +15,15 @@
   lib,
   pkgs,
   options,
-  # mail-vps passes the flake as specialArgs.self. Module eval without
-  # that argument leaves the web root unset.
-  self ? null,
+  # mail-vps passes the flake as specialArgs.self. Module eval omits
+  # that attribute, so the web root stays unset. Do not declare a self
+  # parameter: nixpkgs applyModuleArgs looks the name up even with ? null.
+  specialArgs,
   ...
 }:
 let
   cfg = config.surmount;
+  flakeSelf = specialArgs.self or null;
   inherit (lib) mkIf optional;
   hostPaths = import ./lib/host-paths.nix { inherit lib; };
   localCleartext = import ./lib/local-cleartext.nix { inherit lib; };
@@ -575,10 +577,10 @@ let
   sploraWebPkg =
     if pkgs ? splora-web then
       pkgs.splora-web
-    else if self == null then
+    else if flakeSelf == null then
       null
     else
-      (self.packages.${pkgs.stdenv.hostPlatform.system} or { }).splora-web or null;
+      (flakeSelf.packages.${pkgs.stdenv.hostPlatform.system} or { }).splora-web or null;
   sploraWebRoot = if sploraWebPkg == null then "" else "${sploraWebPkg}";
 
   # Oneshot script the timer execs. builtins.readFile of this path is the

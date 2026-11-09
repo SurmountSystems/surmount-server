@@ -2,9 +2,9 @@
   stdenv,
 }:
 
-# nss-cacert runs $out/bin/buildcatrust during buildPhase.
-# The handwritten C source is not in the tree. This derivation
-# does not compile C and does not add an interpreter.
+# cacert's overlay buildPhase installs a published CA bundle and
+# does not run this program. This derivation does not compile C
+# and does not add an interpreter. The bin directory stays empty.
 stdenv.mkDerivation {
   pname = "buildcatrust";
   version = "0";

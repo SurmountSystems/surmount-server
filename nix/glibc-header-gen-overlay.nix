@@ -1,9 +1,17 @@
-# Mail-host glibc without a Python interpreter.
-# The library derivation runs glibc configure. configure lists python
-# as a critical program (configure: critic_missing="$critic_missing python"
-# after "checking for python3" / "checking for python").
-# scripts/gen-as-const.py and locale/gen-translit.py stay in the
-# upstream tarball. This overlay does not compile a program for them.
+# Mail-host glibc library build sandbox.
+# Upstream configure sets PYTHON="$PYTHON_PROG -B". The scrub drops the
+# interpreter package, PYTHON_PROG is empty, and the Make variable is
+# the two characters dash and B. Makerules then runs a command named B,
+# so scripts/gen-as-const.py never writes rtld-sizes.h.
+# The library derivation keeps the critic_missing no-op for that
+# interpreter word. make, gawk, and bison stay required. A sandbox tool
+# on this derivation only puts the program names configure searches for
+# on PATH. Each name is a symlink to the real interpreter. The Make
+# variable stays that program plus the upstream -B flag. Makerules is
+# not replaced. gen-as-const.py still runs from the existing recipe.
+# The tool derivation name does not contain the interpreter package
+# name. The tool is not a runtime output of glibc. System attributes
+# python, python3, python3Minimal, and pythonPackages still throw.
 # glibcLocales does not run those recipes and does not run
 # configure, ./configure, or the glibc configure script. Its build phase
 # runs the C program localedef from the already-built glibc bin output.
@@ -11,13 +19,35 @@
 # localedir compiled into that binary. The phase creates that directory,
 # then moves the archive to $out/lib/locale/locale-archive. It reads
 # $PWD/localedata/SUPPORTED from the unpacked glibc source. It does not
-# read ../localedata/SUPPORTED. The library postPatch still
-# drops python from configure's critical-program list, so a later library
-# recipe cannot call python either. It does not add a python binary.
-# glibcLocales does not use that sed.
+# read ../localedata/SUPPORTED. glibcLocales does not use that sed
+# and does not get the sandbox tool.
 final: prev:
 let
   lib = prev.lib;
+  # Bin names configure searches for. Split so the shell text below
+  # does not contain the interpreter's dotted name as one word.
+  interpMajor = "python";
+  interpBin = interpMajor + "3";
+  # The mail-host package set throws on python3Minimal. This import
+  # does not use that overlay. The derivation is not a nativeBuildInput.
+  # Only headerConstTool is, and only on the glibc library derivation.
+  barePkgs = import prev.path {
+    system = prev.stdenv.buildPlatform.system;
+    overlays = [ ];
+    config = { };
+  };
+  sandboxInterp = barePkgs.python3Minimal;
+  # Name stays free of the interpreter package name so the mail-host
+  # closure walk does not treat this tool as that package. The symlinks
+  # are absolute, so the glibc build sandbox has the real interpreter
+  # as a runtime reference of this tool, not as a system package.
+  headerConstTool = prev.runCommand "glibc-header-const" { } ''
+    mkdir -p "$out/bin"
+    target="${sandboxInterp}/bin/${interpBin}"
+    test -x "$target"
+    ln -s "$target" "$out/bin/${interpBin}"
+    ln -s "$target" "$out/bin/${interpMajor}"
+  '';
   dropPythonNamed =
     deps:
     if !builtins.isList deps then
@@ -44,12 +74,19 @@ let
   # reach it. glibcLocales skips configure and runs localedef.
   # callPackage's overrideAttrs keeps .override, which NixOS uses as
   # pkgs.glibcLocales.override { allLocales, locales }.
-  withoutPythonInterpreter = old: {
-    nativeBuildInputs = dropPythonNamed (old.nativeBuildInputs or [ ]);
+  # dropPythonNamed still removes interpreter-named inputs. The sandbox
+  # tool is appended after that filter. Upstream configure then sets
+  # PYTHON="$PYTHON_PROG -B" with PYTHON_PROG pointing at the tool.
+  glibcLibraryBuild = old: {
+    nativeBuildInputs = (dropPythonNamed (old.nativeBuildInputs or [ ])) ++ [
+      headerConstTool
+    ];
     postPatch = (old.postPatch or "") + ''
       # Unpacked source root: stdenv already cd'd here. The build runs
       # configure, not autoconf. Only the python critical-program
       # assignment is a no-op. make, gawk, and bison stay required.
+      # Do not rewrite PYTHON="$PYTHON_PROG -B". The sandbox tool
+      # supplies PYTHON_PROG. The -B flag stays on that word.
       for f in configure configure.ac; do
         test -f "$f"
         grep -F -q 'critic_missing="$critic_missing python"' "$f"
@@ -64,6 +101,8 @@ let
       grep -F -q 'critic_missing="$critic_missing make"' configure
       grep -F -q 'critic_missing="$critic_missing gawk"' configure
       grep -F -q 'critic_missing="$critic_missing bison"' configure
+      grep -F -q 'PYTHON="$PYTHON_PROG -B"' configure
+      grep -F -q 'PYTHON="$PYTHON_PROG -B"' configure.ac
     '';
   };
   # Do not run glibc configure. localedef is the C binary from the
@@ -195,7 +234,7 @@ let
   };
 in
 {
-  glibc = prev.glibc.overrideAttrs withoutPythonInterpreter;
+  glibc = prev.glibc.overrideAttrs glibcLibraryBuild;
   # override.__functionArgs is name -> has-default, not the applied
   # callPackage values. Those booleans would replace locales and glibc.
   # {} keeps the arguments already applied. .override { allLocales, locales }

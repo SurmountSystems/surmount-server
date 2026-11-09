@@ -25,9 +25,15 @@ let
   # Same glibc header generator as nixosConfigurations.mail-vps.
   # Also covers glibcLocales configure. The locale archive stays localedef.
   glibcHeaderGenOverlay = import ../nix/glibc-header-gen-overlay.nix;
-  # Mail-host Nix pin (nix-cli, not nix-everything). t73 applies it so the
-  # closure walk matches nixosConfigurations.mail-vps.
+  # Mail-host Nix pin (nix-cli, not nix-everything). The base list
+  # applies it so systemdLibs does not look up an interpreter for
+  # jinja. t73's mkAfter is a different nixosSystem and is not an
+  # input of that derivation.
   pinsOverlay = (import ../nix/overlays.nix).pins;
+  # Same tzdata preCheck as nixosConfigurations.mail-vps.
+  # evalSurmount's base overlay list applies it. The closure walk
+  # appends the same overlay. doCheck stays on.
+  tzdataOverlay = (import ../nix/overlays.nix).tzdata;
 
   # Cheap stand-ins so eval does not pull Stalwart binary FOD or real arti.
   # arti = stock client-shaped fake (no surmountOnionServiceCapable).
@@ -125,10 +131,21 @@ let
         (
           { ... }:
           {
+            # This list is the package set that realizes tzdata and
+            # systemdLibs. An earlier contract builds pkgs.nix from
+            # this set. That build's tzdata is the final stdenv's
+            # pkgs.tzdata. The same set builds systemd-minimal-libs.
+            # pins drops the meson find_installation that asks for a
+            # jinja module. t73's mkAfter is a different nixosSystem,
+            # so it is not an input of that derivation. Those overlays
+            # have to be on this list. pins stays after noHaskell so
+            # the scrubbed systemdLibs is what the hook wraps.
             nixpkgs.overlays = [
               fakeOverlay
               noHaskellOverlay
               glibcHeaderGenOverlay
+              tzdataOverlay
+              pinsOverlay
             ];
             nixpkgs.config.allowUnfree = false;
             system.stateVersion = "26.05";
@@ -4259,7 +4276,12 @@ let
             networking.firewall.enable = true;
             # nix-cli, not nix-everything (that package pulls the HTML
             # manual and a Python pip dependency). Same pin as mail-vps.
-            nixpkgs.overlays = lib.mkAfter [ pinsOverlay ];
+            # This walk does not inherit the mail-vps overlay list.
+            # pinsOverlay is already on the base list. Do not append it
+            # again: the systemd postPatch is not meant to run twice.
+            # tzdataOverlay is already on the base list. Append the same
+            # overlay here so this walk still names it. doCheck stays on.
+            nixpkgs.overlays = lib.mkAfter [ tzdataOverlay ];
           }
         ];
       };

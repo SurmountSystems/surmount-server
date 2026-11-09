@@ -287,6 +287,30 @@ every `.c` and `.h` file we added.
 
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
+## No Python script and no C program inside Nix (operator 2026-11-08)
+
+Operator 2026-11-08, always remember. Do not inline a Python script in a
+Nix file. Do not inline a C program in a Nix file. A build-phase string
+must not carry a Python program body or a C program body. Renaming a
+`.py` file, hiding that text in `printf` or `cat`, or stuffing the same
+text into a patch is the same violation. Handwritten C already forbids
+a C program embedded in Nix. This section adds the Python script, and
+it restates that a shortcut which pastes either language into
+`nix/overlays.nix` is not the fix. Use an existing Rust tool, or change
+the build so the missing program is not invoked. Do not add a package
+whose name contains python.
+
+A Nix file we own must not carry a Meson program body. That includes
+meson.build text, a muon rewrite, a dependency() method sentence, an
+install_headers rewrite, or a PKG_CONFIG_PATH prepend whose purpose is
+to patch a Meson lookup. Hiding that text by rename, printf, cat, or a
+patch is the same forbid. Upstream packages may still be built by their
+own upstream build system. Our Nix files do not contain that program
+text. Operator 2026-11-08 stopped the Meson-in-Nix and C-in-Nix
+patching line.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Edge and security (operator direction 2026-07-30)
 
 - **No nginx** as product edge. In-tree nginx is **transitional-to-delete**.

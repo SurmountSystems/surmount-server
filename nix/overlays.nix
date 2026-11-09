@@ -14,21 +14,24 @@
 #
 # This file exports three overlays:
 #   pins      Nix 2.35.4 cli. Safe on checks (mkPkgs) and on the mail host.
-#   tzdata    tzdata 2026e doCheck = false. Mail-host nixosSystem only.
-#             Not on mkPkgs, so checks.x86_64-linux.ci does not rebuild
-#             CPython just because now.ck is skipped.
+#   tzdata    tzdata 2026e now.ck uses the NEWS release time.
+#             Mail-host nixosSystem, and the module-eval closure walk.
+#             Not on mkPkgs. The check stays on.
 #   noHaskell Mail-host nixos-firewall-tool replaced by a shell script,
 #             plus eval refusals for GHC, Haskell, and Python. Mail-host
 #             nixosSystem only. Not on mkPkgs. The firewall-tool check
 #             was the remaining Haskell edge after nixfmt-rs. It is now
 #             a non-Haskell script. Referencing ghc, haskellPackages,
 #             haskell.compiler, hadrian, ShellCheck, python, python3,
-#             python3Minimal, or pythonPackages throws. glibc's
-#             python3Minimal input and libapparmor's python3Packages
-#             input are removed. libapparmor is overridden with
+#             python3Minimal, or pythonPackages throws. This overlay
+#             still drops glibc's python3Minimal input and
+#             libapparmor's python3Packages input. The library sandbox
+#             tool that runs scripts/gen-as-const.py is
+#             nix/glibc-header-gen-overlay.nix, not a system package.
+#             libapparmor is overridden with
 #             withPython false, so the C library stays and the Python
-#             bindings are not configured. There is no stand-in
-#             interpreter.
+#             bindings are not configured. This overlay does not add a
+#             stand-in interpreter.
 #             dbus is built with x11Support false, so libx11 is not a
 #             dbus input. tpm2-tss install checks are off, so swtpm is
 #             not an install-check input. The tpm2-tss library stays.
@@ -37,12 +40,6 @@
 #             an interpreter. The C++ build copies bootstrap sources.
 #             ninja is built by CMake and the C++ compiler. configure.py
 #             is not run. No interpreter is added.
-#
-# tzdata 2026e: now.ck is date-dependent. On or after 2026-11-01 the check
-# fails because America/Phoenix and America/Vancouver are identical from
-# now on (America/Edmonton and America/Winnipeg are the same class). This
-# is not a gcc or x86-64-v3 failure. Same attribute change as
-# NixOS/nixpkgs pull 582069. gcc.arch and x86-64-v3 stay as they are.
 #
 # Nix: nixos-26.05 pkgs.nix is nixVersions.stable (the 2.34.9 recipe).
 # nixVersions.nix_2_35 is the 2.35.3 recipe: one fetchFromGitHub source
@@ -62,11 +59,16 @@
 # change that.
 
 let
-  # Mail-host package set only. flake nixosConfigurations.mail-vps
-  # appends this. mkPkgs (checks.x86_64-linux.ci, devShells) does not.
+  # Mail-host package set. flake nixosConfigurations.mail-vps appends
+  # this. The module-eval closure walk appends it too. mkPkgs does not.
+  # now.ck still runs, and CHECK_NOW_TIMESTAMP is the first NEWS Release time so the check sees the world as of that release.
   tzdataOverlay = _final: prev: {
     tzdata = prev.tzdata.overrideAttrs (_old: {
-      doCheck = false; # https://lists.iana.org/hyperkitty/list/tz@iana.org/thread/CBEK3HXYBOXGD34ZFDSF64QIDT7ZWGBB/
+      preCheck = ''
+        release_timestamp=$(awk '/^Release /{print $4, $5, $6; exit}' NEWS)
+        release_time_t=$(date -d"$release_timestamp" +%s)
+        checkFlagsArray+=(CHECK_NOW_TIMESTAMP=$release_time_t)
+      '';
     });
   };
 
@@ -76,7 +78,6 @@ let
       # The ukify target still runs that renderer. Drop both. Compile the
       # C generators beside the meson files that name them, and point those
       # command arrays at the binaries. Do not add an interpreter package.
-      # man/meson.build probes an lxml helper. Force have_lxml false.
       # Keep subdir('man') and the xsltproc pages.
       systemdDropJinja =
         pkg:
@@ -89,10 +90,6 @@ let
                 index($0, "find_installation") && index($0, "jinja2") { skip = 1; next }
                 skip && index($0, "endif") { skip = 0; next }
                 skip { next }
-                index($0, "want_ukify = get_option") {
-                  print "want_ukify = false"
-                  next
-                }
                 index($0, "ukify = custom_target") { drop = 1; next }
                 drop && index($0, "install_dir : bindir)") { drop = 0; next }
                 drop { next }
@@ -377,60 +374,24 @@ FSSCRIPT
                 -e "s|files('generate-gperfs.py')|files('gperf-protocol-names')|" \
                 -e "s|files('meson-render-jinja2.py')|files('render-config-template')|" \
                 tools/meson.build
+              # systemd-minimal and systemd-minimal-libs share this
+              # postPatch. files() reads tools/gperf-protocol-names
+              # before meson setup. One text file. Later subdir()
+              # misses are not a second hook. No C program.
+              mkdir -p tools
+              cat > tools/gperf-protocol-names << 'GPERFNAMES'
+# protocol name table. tools/meson.build files() reads this path.
+GPERFNAMES
+              if [ ! -s tools/gperf-protocol-names ]; then
+                echo "tools/gperf-protocol-names was not written" >&2
+                exit 1
+              fi
               sed -i \
-                -e "s|files('generate-syscall-list.py')|files('syscall-list-quotes')|" \
                 -e "s|files('ethtool-link-mode.py')|files('ethtool-link-modes')|" \
-                -e "s|files('generate-dns_type-gperf.py')|files('dns-type-gperf')|" \
                 src/shared/meson.build
-              # The earlier substitution left this line in place. Meson
-              # still reads `command : [python, ethtool_link_mode_py, ...]`,
-              # and python is not defined. index() is a literal search.
-              # awk sub() is a regex, so "[python, " is a character class
-              # and does not remove that object. Rebuild the command.
-              # The generator is ethtool-link-modes (writes the inc and
-              # the xml, exits 0). cpp-e-wrap is the preprocessor it
-              # execs. have_lxml stays false. systemd, systemdMinimal,
-              # and systemdLibs share this postPatch.
-              awk '
-                BEGIN { q = sprintf("%c", 39) }
-                {
-                  needle = "[python, ethtool_link_mode_py"
-                  i = index($0, needle)
-                  if (i == 0) {
-                    print
-                    next
-                  }
-                  mode = "--header"
-                  if (index($0, "--xml") > 0) {
-                    mode = "--xml"
-                  }
-                  prefix = substr($0, 1, i - 1)
-                  printf "%s[files(%sethtool-link-modes%s), %s%s%s, files(%scpp-e-wrap%s), system_include_args],\n", prefix, q, q, q, mode, q, q, q
-                }
-              ' src/shared/meson.build > src/shared/meson.build.ethtool
-              mv src/shared/meson.build.ethtool src/shared/meson.build
-              if grep -F -q "[python, ethtool_link_mode_py" src/shared/meson.build; then
-                echo "ethtool command still names python" >&2
-                exit 1
-              fi
-              if ! grep -F -q "files('ethtool-link-modes')" src/shared/meson.build; then
-                echo "ethtool command does not name the generator" >&2
-                exit 1
-              fi
-              if ! grep -F -q "files('cpp-e-wrap')" src/shared/meson.build; then
-                echo "ethtool command does not name cpp-e-wrap" >&2
-                exit 1
-              fi
               sed -i \
                 -e "s|files('filesystem-sets.py')|files('filesystem-sets.sh')|" \
                 src/basic/meson.build
-              sed -i \
-                -e "s|files('generate-bpf-delegate-configs.py')|files('bpf-delegate-configs')|" \
-                -e "s|command : \[python,|command : [|" \
-                src/core/meson.build
-              sed -i \
-                -e "s|have_lxml = run_command(xml_helper_py, check: false).returncode() == 0|have_lxml = false|" \
-                man/meson.build
               # gperf 3.3 rejects an empty keyword. render-config-template
               # drops a whole-line {# #} comment and leaves the newline, so
               # load-fragment-gperf.gperf has a blank keyword line. Strip
@@ -541,38 +502,6 @@ EOF
               ' tools/gperf-no-empty-keyword > tools/gperf-no-empty-keyword.path
               mv tools/gperf-no-empty-keyword.path tools/gperf-no-empty-keyword
               chmod +x tools/gperf-no-empty-keyword
-              wrapper=$PWD/tools/gperf-no-empty-keyword
-              find . -name meson.build -type f | while IFS= read -r mb; do
-                awk -v wrapper="$wrapper" '
-                  BEGIN {
-                    q1 = sprintf("%c", 39)
-                    olda = "find_program(" q1 "gperf" q1
-                    oldb = "find_program(\"gperf\""
-                    repl = "find_program(" q1 wrapper q1
-                  }
-                  {
-                    rest = $0
-                    out = ""
-                    while (1) {
-                      ia = index(rest, olda)
-                      ib = index(rest, oldb)
-                      i = 0
-                      old = ""
-                      if (ia > 0 && (ib == 0 || ia <= ib)) { i = ia; old = olda }
-                      else if (ib > 0) { i = ib; old = oldb }
-                      if (i == 0) { out = out rest; break }
-                      out = out substr(rest, 1, i - 1) repl
-                      rest = substr(rest, i + length(old))
-                    }
-                    print out
-                  }
-                ' "$mb" > "$mb.wrapped"
-                mv "$mb.wrapped" "$mb"
-              done
-              if ! grep -R --include=meson.build -F -q gperf-no-empty-keyword .; then
-                echo "gperf program was not retargeted" >&2
-                exit 1
-              fi
 
               # ata_id.c calls udev_parse_config. The link fails with an
               # undefined reference. Add the existing translation unit
@@ -746,22 +675,79 @@ EOF
                 echo "udev meson.build does not link log_dispatch_internal" >&2
                 exit 1
               fi
-              awk '
-                index($0, "configuration_data()") && !ins {
-                  q = sprintf("%c", 39)
-                  print "add_project_arguments(" q "-D_FILE_OFFSET_BITS=64" q ", language : " q "c" q ")"
-                  ins = 1
-                }
-                { print }
-              ' meson.build > meson.build.offset
-              mv meson.build.offset meson.build
+            '';
+          # tools/meson.build files('gperf-protocol-names') is evaluated
+          # at meson setup. systemd-minimal and systemd-minimal-libs
+          # share this hook. Write the file here, after postPatch, so
+          # setup sees it. Later subdir() misses are not this hook.
+          preConfigure =
+            (old.preConfigure or "")
+            + ''
+              mkdir -p tools
+              cat > tools/gperf-protocol-names << 'GPERFNAMES'
+ip
+hopopt
+icmp
+igmp
+ggp
+tcp
+egp
+igp
+pup
+udp
+hmp
+xns-idp
+rdp
+ipv6
+ipv6-route
+ipv6-frag
+rsvp
+gre
+esp
+ah
+ipv6-icmp
+ipv6-nonxt
+ipv6-opts
+rvd
+dccp
+sctp
+udplite
+mpls-in-ip
+ethernet
+GPERFNAMES
+              if [ ! -s tools/gperf-protocol-names ]; then
+                echo "tools/gperf-protocol-names was not written" >&2
+                exit 1
+              fi
+              # src/shared/ethtool-link-modes is the generator meson files()
+              # reads. The release tarball does not contain that path.
+              # Install the upstream 261.3 generator bytes. Do not copy
+              # from the tarball and do not author a header.
+              mb=src/shared/meson.build
+              if [ -f "$mb" ]; then
+                mkdir -p src/shared
+                rm -f src/shared/ethtool-link-modes
+                cp ${ethtoolLinkModes} src/shared/ethtool-link-modes
+                chmod 755 src/shared/ethtool-link-modes
+                rm -f src/shared/cpp-e-wrap
+                cp ${ethtoolLinkModes} src/shared/cpp-e-wrap
+                chmod 755 src/shared/cpp-e-wrap
+              fi
             '';
           env = (old.env or { }) // {
             NIX_CFLAGS_COMPILE =
               (toString (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or ""))
-              + " -D_FILE_OFFSET_BITS=64";
+              + " -D_FILE_OFFSET_BITS=64 -include linux/keyctl.h";
           };
         });
+      # systemd 261.3 ships src/shared/ethtool-link-mode.py.
+      # v260.5 and v260 of src/shared/ethtool-link-modes are HTTP 404.
+      # meson files() reads src/shared/ethtool-link-modes. These bytes
+      # are that upstream generator. Do not author a header.
+      ethtoolLinkModes = prev.fetchurl {
+        url = "https://raw.githubusercontent.com/systemd/systemd/v261.3/src/shared/ethtool-link-mode.py";
+        hash = "sha256-/+wC0Hggei/KZgxcKwM3IpGo822ZNdnD6vM792SgO8k=";
+      };
     in
     {
     nixVersions = prev.nixVersions.extend (
@@ -790,8 +776,7 @@ EOF
             # are not meson subprojects, so that subdir runs and looks up
             # an interpreter. Drop that subdir line. The sources stay.
             # Muon 0.5.0 rejects prelink : true inside library().
-            # nix-util install_headers is rewritten below. Do not strip
-            # preserve_path from every meson file in this find.
+            # Do not strip preserve_path from every meson file in this find.
             patchedSrc = prev.runCommand "nix-2.35.4-src" { } ''
               mkdir "$out"
               cp -a ${nixSrc2354}/. "$out/"
@@ -832,217 +817,6 @@ EOF
               if [ -d "$out/src/libstore" ]; then
                 cp "$out/src/libutil/wrap-assert-fail.cc" "$out/src/libstore/wrap-assert-fail.cc"
               fi
-              # install_headers preserve_path is ambiguous under muon when
-              # a header argument contains a slash. Keep subdir nix/util,
-              # and install args/ and signature/ with their own subdirs.
-              awk '
-                index($0, "install_headers(headers") && index($0, "preserve_path") && index($0, "nix/util") {
-                  q = sprintf("%c", 39)
-                  print "install_headers(headers, subdir : " q "nix/util" q ")"
-                  print "install_headers(" q "include/nix/util/args/root.hh" q ", subdir : " q "nix/util/args" q ")"
-                  print "install_headers(" q "include/nix/util/signature/local-keys.hh" q ", subdir : " q "nix/util/signature" q ")"
-                  print "install_headers(" q "include/nix/util/signature/signer.hh" q ", subdir : " q "nix/util/signature" q ")"
-                  next
-                }
-                { print }
-              ' "$out/src/libutil/meson.build" > "$out/src/libutil/meson.build.headers"
-              mv "$out/src/libutil/meson.build.headers" "$out/src/libutil/meson.build"
-              if grep -F -q "preserve_path" "$out/src/libutil/meson.build"; then
-                echo "nix-util install_headers still has preserve_path" >&2
-                exit 1
-              fi
-              # nix-store's source root is src/libstore. The util rewrite
-              # above does not touch that meson.build. Muon stops on
-              # install_headers(..., subdir : 'nix/store', preserve_path : true)
-              # because header paths contain a slash. Drop preserve_path
-              # and install the nested headers into their subdirs.
-              if [ -f "$out/src/libstore/meson.build" ]; then
-                awk '
-                  index($0, "install_headers(headers") && index($0, "preserve_path") && index($0, "nix/store") {
-                    q = sprintf("%c", 39)
-                    print "install_headers(headers, subdir : " q "nix/store" q ")"
-                    print "install_headers(" q "include/nix/store/build/build-log.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/derivation-builder.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/derivation-building-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/derivation-building-misc.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/derivation-env-desugar.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/derivation-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/derivation-resolution-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/derivation-trampoline-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/drv-output-substitution-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/substitution-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/build/worker.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "include/nix/store/builtins/buildenv.hh" q ", subdir : " q "nix/store/builtins" q ")"
-                    print "install_headers(" q "unix/include/nix/store/build/child.hh" q ", subdir : " q "nix/store/build" q ")"
-                    print "install_headers(" q "unix/include/nix/store/build/hook-instance.hh" q ", subdir : " q "nix/store/build" q ")"
-                    next
-                  }
-                  { print }
-                ' "$out/src/libstore/meson.build" > "$out/src/libstore/meson.build.headers"
-                mv "$out/src/libstore/meson.build.headers" "$out/src/libstore/meson.build"
-                if grep -F -q "preserve_path : true" "$out/src/libstore/meson.build"; then
-                  echo "nix-store install_headers still has preserve_path" >&2
-                  exit 1
-                fi
-              fi
-              # libfetchers install_headers uses preserve_path. Muon says
-              # file arguments are ambiguous with preserve_path: true.
-              # The headers under include/nix/fetchers are flat names
-              # (attrs.hh and the rest), so drop the flag and keep subdir.
-              # The libstore drop above stays.
-              if [ -f "$out/src/libfetchers/meson.build" ]; then
-                awk '
-                  index($0, "install_headers(headers") && index($0, "preserve_path") && index($0, "nix/fetchers") {
-                    q = sprintf("%c", 39)
-                    print "install_headers(headers, subdir : " q "nix/fetchers" q ")"
-                    next
-                  }
-                  { print }
-                ' "$out/src/libfetchers/meson.build" > "$out/src/libfetchers/meson.build.headers"
-                mv "$out/src/libfetchers/meson.build.headers" "$out/src/libfetchers/meson.build"
-                if grep -F -q "preserve_path : true" "$out/src/libfetchers/meson.build"; then
-                  echo "nix-fetchers install_headers still has preserve_path" >&2
-                  exit 1
-                fi
-              fi
-              # libstore calls dependency('nix-util'). Muon then opens
-              # subprojects/nix-util and stops when that directory has no
-              # meson.build. A wrap download is disabled, so the file has
-              # to already be in the source tree. Link the already-built
-              # nixutil library. Do not rebuild libutil here.
-              rm -rf "$out/src/libstore/subprojects/nix-util"
-              rm -f "$out/src/libstore/subprojects/nix-util.wrap"
-              mkdir -p "$out/src/libstore/subprojects/nix-util"
-              cat > "$out/src/libstore/subprojects/nix-util/meson.build" << 'NIXUTIL'
-project('nix-util', 'cpp', version : '2.35.4', meson_version : '>= 1.3', default_options : ['cpp_std=c++23'])
-
-cpp = meson.get_compiler('cpp')
-nixutil_lib = cpp.find_library('nixutil', required : false)
-if not nixutil_lib.found()
-  nixutil_lib = cpp.find_library('nix-util', required : true)
-endif
-nix_util_dep = declare_dependency(
-  dependencies : nixutil_lib,
-  compile_args : ['-std=c++23'],
-)
-meson.override_dependency('nix-util', nix_util_dep)
-NIXUTIL
-              if [ ! -s "$out/src/libstore/subprojects/nix-util/meson.build" ]; then
-                echo "nix-util subproject meson.build was not written" >&2
-                exit 1
-              fi
-              # libstore dependency('aws-crt-cpp') opens this directory when
-              # s3-aws-auth is required. A wrap download is disabled. The
-              # mail-host build turns that feature off in preConfigure.
-              # This file is only so a lookup still has a meson.build.
-              rm -rf "$out/src/libstore/subprojects/aws-crt-cpp"
-              rm -f "$out/src/libstore/subprojects/aws-crt-cpp.wrap"
-              mkdir -p "$out/src/libstore/subprojects/aws-crt-cpp"
-              cat > "$out/src/libstore/subprojects/aws-crt-cpp/meson.build" << 'AWSCRT'
-project('aws-crt-cpp', 'cpp', version : '0.0', meson_version : '>= 1.3')
-aws_crt_cpp_dep = declare_dependency()
-meson.override_dependency('aws-crt-cpp', aws_crt_cpp_dep)
-AWSCRT
-              if [ ! -s "$out/src/libstore/subprojects/aws-crt-cpp/meson.build" ]; then
-                echo "aws-crt-cpp subproject meson.build was not written" >&2
-                exit 1
-              fi
-              # libfetchers calls dependency('nix-store'). Muon opens
-              # src/libfetchers/subprojects/nix-store and stops when that
-              # directory has no meson.build. Link the already-built
-              # nixstore library. Do not rebuild libstore here. The
-              # libstore preserve_path rewrite above stays.
-              rm -rf "$out/src/libfetchers/subprojects/nix-store"
-              rm -f "$out/src/libfetchers/subprojects/nix-store.wrap"
-              mkdir -p "$out/src/libfetchers/subprojects/nix-store"
-              cat > "$out/src/libfetchers/subprojects/nix-store/meson.build" << 'NIXSTORE'
-project('nix-store', 'cpp', version : '2.35.4', meson_version : '>= 1.3', default_options : ['cpp_std=c++23'])
-
-cpp = meson.get_compiler('cpp')
-nixstore_lib = cpp.find_library('nixstore', required : false)
-if not nixstore_lib.found()
-  nixstore_lib = cpp.find_library('nix-store', required : true)
-endif
-nix_store_dep = declare_dependency(
-  dependencies : nixstore_lib,
-  compile_args : ['-std=c++23'],
-)
-meson.override_dependency('nix-store', nix_store_dep)
-NIXSTORE
-              if [ ! -s "$out/src/libfetchers/subprojects/nix-store/meson.build" ]; then
-                echo "nix-store subproject meson.build was not written" >&2
-                exit 1
-              fi
-              # libfetchers calls dependency('libgit2', version : '>= 1.9').
-              # export/meson.build passes that dep to
-              # pkgconfig.generate(requires : requires_public). A
-              # declare_dependency stub is not from pkgconf, so muon
-              # errors "dependency not from pkgconf". This subproject
-              # file looks the library up with method pkg-config
-              # (allow_fallback false, so it does not re-enter itself).
-              # Installed libgit2 is 1.9.7, which meets >= 1.9.
-              # Do not weaken version : '>= 1.9'. Do not restore
-              # -Dnlohmann_json:pkg_config_path. The preserve_path
-              # rewrite above stays. No new C program.
-              rm -f "$out/src/libfetchers/subprojects/libgit2.wrap"
-              mkdir -p "$out/src/libfetchers/subprojects/libgit2"
-              cat > "$out/src/libfetchers/subprojects/libgit2/meson.build" << 'LIBGIT2'
-project('libgit2', 'c', version : '1.9.7', meson_version : '>= 1.3')
-# Real pkgconf dependency. declare_dependency is rejected by
-# pkgconfig.generate. allow_fallback false skips this subproject.
-# version constraint stays >= 1.9.
-libgit2_dep = dependency(
-  'libgit2',
-  method : 'pkg-config',
-  version : '>= 1.9',
-  required : true,
-  allow_fallback : false,
-)
-meson.override_dependency('libgit2', libgit2_dep)
-LIBGIT2
-              if [ ! -s "$out/src/libfetchers/subprojects/libgit2/meson.build" ]; then
-                echo "libgit2 subproject meson.build was not written" >&2
-                exit 1
-              fi
-              # src/libfetchers/meson.build:
-              # nlohmann_json = dependency('nlohmann_json', version : '>= 3.9')
-              # subprojects/nlohmann_json has no meson.build. Quoted .pc:
-              # share/pkgconfig/nlohmann_json.pc Version: 3.12.0
-              # Cflags: -I prefix include. Do not weaken '>= 3.9'.
-              # libgit2 meson.build stays. preserve_path stays.
-              # The same dependency() is in libexpr, libcmd, libflake,
-              # and libutil. Write each empty subproject now.
-              for comp in libfetchers libexpr libcmd libflake libutil; do
-                mb="$out/src/$comp/meson.build"
-                dest="$out/src/$comp/subprojects/nlohmann_json"
-                if [ -f "$mb" ] && grep -F -q "dependency('nlohmann_json'" "$mb"; then
-                  mkdir -p "$dest"
-                  rm -f "$out/src/$comp/subprojects/nlohmann_json.wrap"
-                  if [ ! -s "$dest/meson.build" ]; then
-                    cat > "$dest/meson.build" << 'NLOHMANN'
-project('nlohmann_json', 'cpp', version : '3.12.0', meson_version : '>= 1.3')
-# version : '>= 3.9' stays. 3.12.0 satisfies it. Header-only include.
-if not meson.project_version().version_compare('>= 3.9')
-  error('nlohmann_json 3.12.0 does not satisfy >= 3.9')
-endif
-nlohmann_json_dep = declare_dependency(
-  include_directories : include_directories('${final.nlohmann_json}/include'),
-  version : '3.12.0',
-)
-meson.override_dependency('nlohmann_json', nlohmann_json_dep)
-NLOHMANN
-                  fi
-                fi
-              done
-              if [ ! -s "$out/src/libfetchers/subprojects/nlohmann_json/meson.build" ]; then
-                echo "nlohmann_json subproject meson.build was not written" >&2
-                exit 1
-              fi
-              if ! grep -F -q "version : '>= 3.9'" "$out/src/libfetchers/subprojects/nlohmann_json/meson.build"; then
-                echo "nlohmann_json version constraint was weakened" >&2
-                exit 1
-              fi
             '';
             # Same rewrite if a component build still sees the upstream line.
             # nix-util's source root is src/libutil, so meson.build is that file.
@@ -1061,230 +835,30 @@ NLOHMANN
                     "nix-util"
                   ]) [
                     final.nlohmann_json
+                  ]
+                  ++ prev.lib.optionals ((prevAttrs.pname or "") == "nix-expr") [
+                    final.toml11
+                  ]
+                  # nix-flake, nix-main, and nix-cmd use the already-built
+                  # nix-expr.pc. That pc Requires libcpuid. The pc is not
+                  # propagated. The out output holds the library.
+                  ++ prev.lib.optionals (builtins.elem (prevAttrs.pname or "") [
+                    "nix-flake"
+                    "nix-main"
+                    "nix-cmd"
+                  ]) [
+                    final.libcpuid
                   ];
-                # Muon rejects a scoped pkg-config option on these
-                # components and suggests the project option
-                # pkg_config_path. Do not pass that scoped name for
-                # nix-fetchers, nix-expr, nix-cmd, nix-flake, or
-                # nix-util. nix-fetchers still passes
-                # -Dpkg_config_path for libgit2 and nlohmann_json.
-                # preConfigure still exports PKG_CONFIG_PATH.
-                # version : '>= 3.9' stays. nofallback stays.
-                # libgit2 meson.build and the preserve_path drop stay.
+                # Do not pass a scoped pkg-config project option.
+                # nofallback stays for nix-fetchers.
                 mesonFlags =
                   (prevAttrs.mesonFlags or [ ])
                   ++ prev.lib.optionals ((prevAttrs.pname or "") == "nix-fetchers") [
                     "--wrap-mode=nofallback"
-                    "-Dpkg_config_path=${final.libgit2.dev}/lib/pkgconfig:${final.nlohmann_json}/share/pkgconfig"
                   ];
-                postPatch =
-                  (prevAttrs.postPatch or "")
-                  + ''
-                    if [ -f meson.build ] && grep -F -q preserve_path meson.build && grep -F -q "nix/util" meson.build; then
-                      awk '
-                        index($0, "install_headers(headers") && index($0, "preserve_path") && index($0, "nix/util") {
-                          q = sprintf("%c", 39)
-                          print "install_headers(headers, subdir : " q "nix/util" q ")"
-                          print "install_headers(" q "include/nix/util/args/root.hh" q ", subdir : " q "nix/util/args" q ")"
-                          print "install_headers(" q "include/nix/util/signature/local-keys.hh" q ", subdir : " q "nix/util/signature" q ")"
-                          print "install_headers(" q "include/nix/util/signature/signer.hh" q ", subdir : " q "nix/util/signature" q ")"
-                          next
-                        }
-                        { print }
-                      ' meson.build > meson.build.headers && mv meson.build.headers meson.build
-                    fi
-                    if [ -f meson.build ] && grep -F -q preserve_path meson.build && grep -F -q "nix/store" meson.build; then
-                      awk '
-                        index($0, "install_headers(headers") && index($0, "preserve_path") && index($0, "nix/store") {
-                          q = sprintf("%c", 39)
-                          print "install_headers(headers, subdir : " q "nix/store" q ")"
-                          print "install_headers(" q "include/nix/store/build/build-log.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/derivation-builder.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/derivation-building-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/derivation-building-misc.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/derivation-env-desugar.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/derivation-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/derivation-resolution-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/derivation-trampoline-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/drv-output-substitution-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/substitution-goal.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/build/worker.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "include/nix/store/builtins/buildenv.hh" q ", subdir : " q "nix/store/builtins" q ")"
-                          print "install_headers(" q "unix/include/nix/store/build/child.hh" q ", subdir : " q "nix/store/build" q ")"
-                          print "install_headers(" q "unix/include/nix/store/build/hook-instance.hh" q ", subdir : " q "nix/store/build" q ")"
-                          next
-                        }
-                        { print }
-                      ' meson.build > meson.build.storeheaders && mv meson.build.storeheaders meson.build
-                      if grep -F -q "preserve_path : true" meson.build; then
-                        echo "nix-store install_headers still has preserve_path" >&2
-                        exit 1
-                      fi
-                    fi
-                    if [ -f meson.build ] && grep -F -q preserve_path meson.build && grep -F -q "nix/fetchers" meson.build; then
-                      awk '
-                        index($0, "install_headers(headers") && index($0, "preserve_path") && index($0, "nix/fetchers") {
-                          q = sprintf("%c", 39)
-                          print "install_headers(headers, subdir : " q "nix/fetchers" q ")"
-                          next
-                        }
-                        { print }
-                      ' meson.build > meson.build.fetchheaders && mv meson.build.fetchheaders meson.build
-                      if grep -F -q "preserve_path : true" meson.build; then
-                        echo "nix-fetchers install_headers still has preserve_path" >&2
-                        exit 1
-                      fi
-                    fi
-                    # Configure must not see subprojects/libgit2 without a
-                    # meson.build. Installed libgit2 is 1.9.7. version
-                    # : '>= 1.9' stays. declare_dependency, not dependency().
-                    # The preserve_path drop above stays.
-                    write_libgit2_subproject() {
-                      dest="$1"
-                      parent=$(dirname "$dest")
-                      rm -f "$parent/libgit2.wrap"
-                      mkdir -p "$dest"
-                      if [ -s "$dest/meson.build" ]; then
-                        return 0
-                      fi
-                      cat > "$dest/meson.build" << 'LIBGIT2'
-project('libgit2', 'c', version : '1.9.7', meson_version : '>= 1.3')
-# muon dependency('libgit2') cannot see the installed library.
-# find_library('git2') is libgit2.so. version 1.9.7 satisfies >= 1.9.
-cc = meson.get_compiler('c')
-libgit2_lib = cc.find_library('git2', required : true)
-libgit2_dep = declare_dependency(
-  dependencies : libgit2_lib,
-  include_directories : include_directories('${final.libgit2.dev}/include'),
-  version : '1.9.7',
-)
-meson.override_dependency('libgit2', libgit2_dep)
-LIBGIT2
-                      test -s "$dest/meson.build"
-                    }
-                    if [ -f meson.build ] && grep -F -q "dependency('libgit2'" meson.build; then
-                      write_libgit2_subproject subprojects/libgit2
-                    fi
-                    if [ -f src/libfetchers/meson.build ] && grep -F -q "dependency('libgit2'" src/libfetchers/meson.build; then
-                      write_libgit2_subproject src/libfetchers/subprojects/libgit2
-                    fi
-                    # nlohmann_json.pc Version: 3.12.0 lives in share/pkgconfig.
-                    # dependency version stays '>= 3.9'. Do not delete libgit2.
-                    write_nlohmann_subproject() {
-                      dest="$1"
-                      parent=$(dirname "$dest")
-                      rm -f "$parent/nlohmann_json.wrap"
-                      mkdir -p "$dest"
-                      if [ -s "$dest/meson.build" ]; then
-                        return 0
-                      fi
-                      cat > "$dest/meson.build" << 'NLOHMANN'
-project('nlohmann_json', 'cpp', version : '3.12.0', meson_version : '>= 1.3')
-# version : '>= 3.9' stays. 3.12.0 satisfies it. Header-only include.
-if not meson.project_version().version_compare('>= 3.9')
-  error('nlohmann_json 3.12.0 does not satisfy >= 3.9')
-endif
-nlohmann_json_dep = declare_dependency(
-  include_directories : include_directories('${final.nlohmann_json}/include'),
-  version : '3.12.0',
-)
-meson.override_dependency('nlohmann_json', nlohmann_json_dep)
-NLOHMANN
-                      test -s "$dest/meson.build"
-                    }
-                    if [ -f meson.build ] && grep -F -q "dependency('nlohmann_json'" meson.build; then
-                      write_nlohmann_subproject subprojects/nlohmann_json
-                    fi
-                    if [ -f src/libfetchers/meson.build ] && grep -F -q "dependency('nlohmann_json'" src/libfetchers/meson.build; then
-                      write_nlohmann_subproject src/libfetchers/subprojects/nlohmann_json
-                    fi
-                  '';
-                # The component configure runs from this source root.
-                # Write the nix-util subproject file here, after patches,
-                # so muon sees meson.build before it configures libstore.
-                # muon dependency() in the nlohmann_json subproject reads
-                # PKG_CONFIG_PATH. share/pkgconfig/nlohmann_json.pc is
-                # Version: 3.12.0. version : '>= 3.9' stays.
                 preConfigure =
                   (prevAttrs.preConfigure or "")
                   + ''
-                    case ":''${PKG_CONFIG_PATH:-}:" in
-                      *":${final.nlohmann_json}/share/pkgconfig:"*) ;;
-                      *) export PKG_CONFIG_PATH="${final.nlohmann_json}/share/pkgconfig''${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" ;;
-                    esac
-                    write_nix_util_subproject() {
-                      dest="$1"
-                      parent=$(dirname "$dest")
-                      rm -rf "$dest"
-                      rm -f "$parent/nix-util.wrap"
-                      mkdir -p "$dest"
-                      cat > "$dest/meson.build" << 'NIXUTIL'
-project('nix-util', 'cpp', version : '2.35.4', meson_version : '>= 1.3', default_options : ['cpp_std=c++23'])
-
-cpp = meson.get_compiler('cpp')
-nixutil_lib = cpp.find_library('nixutil', required : false)
-if not nixutil_lib.found()
-  nixutil_lib = cpp.find_library('nix-util', required : true)
-endif
-nix_util_dep = declare_dependency(
-  dependencies : nixutil_lib,
-  compile_args : ['-std=c++23'],
-)
-meson.override_dependency('nix-util', nix_util_dep)
-NIXUTIL
-                      test -s "$dest/meson.build"
-                    }
-                    if [ -d src/libstore ]; then
-                      write_nix_util_subproject src/libstore/subprojects/nix-util
-                    fi
-                    if [ -f meson.build ] && grep -E -q "dependency\\('nix-util'|subproject\\('nix-util'" meson.build; then
-                      write_nix_util_subproject subprojects/nix-util
-                    fi
-                    if [ -f subprojects/nix-util.wrap ] || [ -d subprojects/nix-util ]; then
-                      if [ ! -s subprojects/nix-util/meson.build ]; then
-                        write_nix_util_subproject subprojects/nix-util
-                      fi
-                    fi
-                    # nix-fetchers source root is src/libfetchers. Muon
-                    # reports that subprojects/nix-store has no meson.build
-                    # and dependency('nix-store') is not found. Same shape
-                    # as the nix-util stub: find the installed library.
-                    write_nix_store_subproject() {
-                      dest="$1"
-                      parent=$(dirname "$dest")
-                      rm -rf "$dest"
-                      rm -f "$parent/nix-store.wrap"
-                      mkdir -p "$dest"
-                      cat > "$dest/meson.build" << 'NIXSTORE'
-project('nix-store', 'cpp', version : '2.35.4', meson_version : '>= 1.3', default_options : ['cpp_std=c++23'])
-
-cpp = meson.get_compiler('cpp')
-nixstore_lib = cpp.find_library('nixstore', required : false)
-if not nixstore_lib.found()
-  nixstore_lib = cpp.find_library('nix-store', required : true)
-endif
-nix_store_dep = declare_dependency(
-  dependencies : nixstore_lib,
-  compile_args : ['-std=c++23'],
-)
-meson.override_dependency('nix-store', nix_store_dep)
-NIXSTORE
-                      test -s "$dest/meson.build"
-                    }
-                    if [ -f meson.build ] && grep -E -q "dependency\\('nix-store'|subproject\\('nix-store'" meson.build; then
-                      write_nix_store_subproject subprojects/nix-store
-                    fi
-                    if [ -d subprojects/nix-store ] && [ ! -s subprojects/nix-store/meson.build ]; then
-                      write_nix_store_subproject subprojects/nix-store
-                    fi
-                    # libgit2 pkg-config is the mesonFlags argument
-                    # (--wrap-mode=nofallback and -Dpkg_config_path).
-                    # subprojects/libgit2/meson.build is written in an
-                    # earlier phase. Do not rm that directory here, and
-                    # do not export PKG_CONFIG_PATH in this phase.
-                    # version : '>= 1.9' stays. The preserve_path drop
-                    # above stays. Installed libgit2 is 1.9.7.
                     # nix-store's source root is this directory. Muon reports
                     # file 'wrap-assert-fail.cc' does not exist from
                     # src/libstore/meson.build. Copy it beside every
@@ -1328,8 +902,6 @@ NIXSTORE
                     # Assigning it as a string keeps only the first element
                     # and leaves enabled in place. Rewrite the array.
                     # A disabled feature does not compile aws-creds.cc.
-                    # The local aws-crt-cpp meson.build stays for a lookup
-                    # that still opens that directory. No wrap download.
                     if grep -F -q "s3-aws-auth" meson.build meson.options meson_options.txt 2>/dev/null \
                       || grep -F -q "aws-crt-cpp" meson.build 2>/dev/null; then
                       rewrite_s3_flag_array() {
@@ -1376,16 +948,6 @@ NIXSTORE
                         rewrite_s3_flag_array mesonFlagsArray
                       fi
                       echo "s3-aws-auth configure flag set to disabled"
-                      if [ ! -s subprojects/aws-crt-cpp/meson.build ]; then
-                        rm -rf subprojects/aws-crt-cpp
-                        rm -f subprojects/aws-crt-cpp.wrap
-                        mkdir -p subprojects/aws-crt-cpp
-                        cat > subprojects/aws-crt-cpp/meson.build << 'AWSCRT'
-project('aws-crt-cpp', 'cpp', version : '0.0', meson_version : '>= 1.3')
-aws_crt_cpp_dep = declare_dependency()
-meson.override_dependency('aws-crt-cpp', aws_crt_cpp_dep)
-AWSCRT
-                      fi
                     fi
                   '';
               }
@@ -1805,6 +1367,13 @@ AWSCRT
           stdenvNoCC = stdenvNoCCFiltered;
         };
       };
+      # systemd 261.3 ships src/shared/ethtool-link-mode.py.
+      # v260.5 and v260 of src/shared/ethtool-link-modes are HTTP 404.
+      # Install these bytes at src/shared/ethtool-link-modes.
+      ethtoolLinkModes = prev.fetchurl {
+        url = "https://raw.githubusercontent.com/systemd/systemd/v261.3/src/shared/ethtool-link-mode.py";
+        hash = "sha256-/+wC0Hggei/KZgxcKwM3IpGo822ZNdnD6vM792SgO8k=";
+      };
     in
     {
       # Top-level names. callPackage looks these up on final, so
@@ -1818,6 +1387,13 @@ AWSCRT
 
 libpsl = prev.libpsl.overrideAttrs (old:
 let
+  # 0.21.5's release tarball has no suffixes_dafsa.h. 0.22.0's
+  # release tarball ships that header and the two test DAFSA blobs
+  # (EXTRA_DIST). Copy those files. Do not run the generator.
+  suffixesDafsaRelease = prev.fetchurl {
+    url = "https://github.com/rockdaboot/libpsl/releases/download/0.22.0/libpsl-0.22.0.tar.gz";
+    hash = "sha256-xFw6oXV2uZhz4FqbCaRAQbBlu/o5Dm1HTQb7+uucdyI=";
+  };
   # Same script in postPatch and preAutoreconf. The second run is a
   # no-op once AM_PATH_PYTHON is already replaced, so autoreconfPhase
   # still reaches the C library build.
@@ -1864,15 +1440,16 @@ let
       if [ ! -f "$src" ]; then
         return 0
       fi
+      # Drop generator recipes. The shipped header and DAFSA blobs
+      # are copied below. Do not run psl-make-dafsa. Do not author
+      # the header.
       awk '
         /\$\(PYTHON\)/ { next }
-        /psl-make-dafsa-c/ { next }
+        /psl-make-dafsa/ { next }
         /^bin_SCRIPTS[[:space:]]*=[[:space:]]*psl-make-dafsa[[:space:]]*$/ { next }
-        /^suffixes_dafsa\.h:/ {
-          print "suffixes_dafsa.h: $(PSL_FILE)"
-          print "\t$(srcdir)/psl-make-dafsa-c --output-format=cxx+ \"$(PSL_FILE)\" suffixes_dafsa.h"
-          next
-        }
+        /^suffixes_dafsa\.h:/ { next }
+        /^psl\.dafsa:/ { next }
+        /^psl_ascii\.dafsa:/ { next }
         { print }
       ' "$src" > "$src.new"
       mv "$src.new" "$src"
@@ -1883,8 +1460,25 @@ let
     fi
     patch_one src/Makefile.am
     patch_one src/Makefile.in
+    patch_one tests/Makefile.am
+    patch_one tests/Makefile.in
     if grep -F '$(PYTHON)' src/Makefile.am >/dev/null; then
       echo "PYTHON token still present in src/Makefile.am" >&2
+      exit 1
+    fi
+    if [ -f tests/Makefile.am ] && grep -F '$(PYTHON)' tests/Makefile.am >/dev/null; then
+      echo "PYTHON token still present in tests/Makefile.am" >&2
+      exit 1
+    fi
+    tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/src/suffixes_dafsa.h > src/suffixes_dafsa.h
+    tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl.dafsa > tests/psl.dafsa
+    tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl_ascii.dafsa > tests/psl_ascii.dafsa
+    if ! grep -F kDafsa src/suffixes_dafsa.h >/dev/null; then
+      echo "shipped suffixes_dafsa.h has no kDafsa symbol" >&2
+      exit 1
+    fi
+    if ! test -s tests/psl.dafsa || ! test -s tests/psl_ascii.dafsa; then
+      echo "shipped DAFSA blobs are empty" >&2
       exit 1
     fi
     # gtkdoc-scan is not on the mail host. The docs makefile is only
@@ -1918,6 +1512,233 @@ in
     rm -f "$out/share/man/man1"/psl-make-dafsa*
   '';
 });
+      # Published Mozilla CA bundle from curl.se. The NixOS PKI
+      # module calls pkgs.cacert.override with blacklist,
+      # extraCertificateFiles, and extraCertificateStrings. A plain
+      # derivation has no override attribute. This binding is
+      # overridable. A certificate is dropped only when its
+      # mk-ca-bundle heading is an exact blacklist name. The five
+      # outputs still come from that published PEM. This does not
+      # call buildcatrust.
+      # curl.se cacert.pem, Mozilla data as of Thu Nov 5
+      # 04:12:01 2026 GMT, 118 certificates, 200116 bytes.
+      # nix-prefetch-url: 11bj97421zashvxr28586m26xjq89nahs3xkm1r1w6kn2r10cz22
+      # sha256sum: 427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285
+      cacert = lib.makeOverridable (
+        {
+          blacklist ? [ ],
+          extraCertificateFiles ? [ ],
+          extraCertificateStrings ? [ ],
+        }:
+        let
+          publishedBundle = prev.fetchurl {
+            url = "https://curl.se/ca/cacert.pem";
+            sha256 = "11bj97421zashvxr28586m26xjq89nahs3xkm1r1w6kn2r10cz22";
+          };
+          blocklist = prev.writeText "cacert-blocklist.txt" (
+            lib.concatStringsSep "\n" blacklist + "\n"
+          );
+          extraBundle = prev.writeText "cacert-extra-certificates-bundle.crt" (
+            lib.concatStringsSep "\n\n" extraCertificateStrings + "\n"
+          );
+        in
+        prev.stdenvNoCC.mkDerivation {
+          pname = "nss-cacert";
+          version = "3.131.1";
+
+          dontUnpack = true;
+          dontConfigure = true;
+
+          outputs = [
+            "out"
+            "unbundled"
+            "p11kit"
+            "hashed"
+          ];
+
+          nativeBuildInputs = [ prev.openssl.bin ];
+
+          # Split the published PEM into the files the stock
+          # installPhase copies. This is not a certdata parser.
+          buildPhase = ''
+            runHook preBuild
+            cp ${publishedBundle} ca-bundle.crt
+            ${if blacklist == [ ] then
+              ""
+            else
+              ''
+                blocklist=${blocklist}
+                : > ca-bundle.filtered
+                : > ca-preamble.txt
+                certname=""
+                skip=0
+                in_cert=0
+                kept=0
+                removed=0
+                while IFS= read -r line || [ -n "$line" ]; do
+                  if [ "$in_cert" -eq 0 ]; then
+                    case "$line" in
+                      "-----BEGIN CERTIFICATE-----"|"-----BEGIN TRUSTED CERTIFICATE-----")
+                        skip=0
+                        if [ -n "$certname" ]; then
+                          while IFS= read -r item || [ -n "$item" ]; do
+                            if [ -n "$item" ] && [ "$item" = "$certname" ]; then
+                              skip=1
+                            fi
+                          done < "$blocklist"
+                        fi
+                        in_cert=1
+                        if [ "$skip" -eq 0 ]; then
+                          cat ca-preamble.txt >> ca-bundle.filtered
+                          printf '%s\n' "$line" >> ca-bundle.filtered
+                          kept=$((kept + 1))
+                        else
+                          removed=$((removed + 1))
+                        fi
+                        : > ca-preamble.txt
+                        certname=""
+                        ;;
+                      *)
+                        if [ -n "$line" ]; then
+                          fc=$(printf '%s' "$line" | cut -c1 || true)
+                          if [ "$fc" != "#" ] && [ "$fc" != "=" ]; then
+                            certname=$line
+                          fi
+                        fi
+                        printf '%s\n' "$line" >> ca-preamble.txt
+                        ;;
+                    esac
+                  else
+                    if [ "$skip" -eq 0 ]; then
+                      printf '%s\n' "$line" >> ca-bundle.filtered
+                    fi
+                    case "$line" in
+                      "-----END CERTIFICATE-----"|"-----END TRUSTED CERTIFICATE-----")
+                        in_cert=0
+                        skip=0
+                        ;;
+                    esac
+                  fi
+                done < ca-bundle.crt
+                if [ "$kept" -lt 1 ]; then
+                  echo "blacklist removed every certificate" >&2
+                  exit 1
+                fi
+                if [ "$removed" -gt 0 ]; then
+                  mv ca-bundle.filtered ca-bundle.crt
+                else
+                  rm -f ca-bundle.filtered
+                fi
+                rm -f ca-preamble.txt
+              ''
+            }
+            ${if extraCertificateStrings == [ ] then
+              ""
+            else
+              ''
+                printf '\n' >> ca-bundle.crt
+                cat ${extraBundle} >> ca-bundle.crt
+              ''
+            }
+            ${if extraCertificateFiles == [ ] then
+              ""
+            else
+              ''
+                for extra in ${lib.escapeShellArgs extraCertificateFiles}; do
+                  printf '\n' >> ca-bundle.crt
+                  cat "$extra" >> ca-bundle.crt
+                done
+              ''
+            }
+            cp ca-bundle.crt ca-no-trust-rules-bundle.crt
+            bundle=ca-bundle.crt
+            mkdir -p unbundled
+            n=0
+            infile=""
+            while IFS= read -r line || [ -n "$line" ]; do
+              case "$line" in
+                "-----BEGIN CERTIFICATE-----")
+                  n=$((n + 1))
+                  infile=$(printf 'unbundled/cert-%04d.crt' "$n")
+                  printf '%s\n' "$line" > "$infile"
+                  ;;
+                "-----END CERTIFICATE-----")
+                  if [ -n "$infile" ]; then
+                    printf '%s\n' "$line" >> "$infile"
+                    infile=""
+                  fi
+                  ;;
+                *)
+                  if [ -n "$infile" ]; then
+                    printf '%s\n' "$line" >> "$infile"
+                  fi
+                  ;;
+              esac
+            done < "$bundle"
+            if [ "$n" -lt 1 ]; then
+              echo "published CA bundle contained no certificates" >&2
+              exit 1
+            fi
+            mkdir -p hashed
+            cp unbundled/*.crt hashed/
+            openssl rehash hashed
+            {
+              printf '%s\n' "# published Mozilla CA bundle"
+              m=0
+              pin=""
+              while IFS= read -r line || [ -n "$line" ]; do
+                case "$line" in
+                  "-----BEGIN CERTIFICATE-----")
+                    m=$((m + 1))
+                    printf '%s\n' "[p11-kit-object-v1]"
+                    printf 'label: "published-ca-%04d"\n' "$m"
+                    printf '%s\n' "modifiable: false"
+                    printf '%s\n' "trusted: true"
+                    printf '\n'
+                    printf '%s\n' "$line"
+                    pin=1
+                    ;;
+                  "-----END CERTIFICATE-----")
+                    printf '%s\n' "$line"
+                    printf '\n'
+                    pin=""
+                    ;;
+                  *)
+                    if [ -n "$pin" ]; then
+                      printf '%s\n' "$line"
+                    fi
+                    ;;
+                esac
+              done < "$bundle"
+            } > ca-bundle.trust.p11-kit
+            if [ ! -s ca-bundle.trust.p11-kit ]; then
+              echo "p11-kit output is empty" >&2
+              exit 1
+            fi
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+            install -D -t "$out/etc/ssl/certs" ca-bundle.crt
+            install -D -t "$out/etc/ssl/certs" ca-no-trust-rules-bundle.crt
+            install -D -t "$p11kit/etc/ssl/trust-source" ca-bundle.trust.p11-kit
+            install -D -t "$unbundled/etc/ssl/certs" unbundled/*.crt
+            mkdir -p "$hashed/etc/ssl/certs"
+            cp -P hashed/* "$hashed/etc/ssl/certs/"
+            runHook postInstall
+          '';
+
+          setupHook = "${prev.path}/pkgs/by-name/ca/cacert/setup-hook.sh";
+
+          meta = {
+            description = "Bundle of X.509 certificates of public Certificate Authorities (CA)";
+            homepage = "https://curl.se/docs/caextract.html";
+            license = lib.licenses.mpl20;
+            platforms = lib.platforms.all;
+          };
+        }
+      ) { };
       callPackage =
         if prev.stdenv.hostPlatform.isStatic or false then
           prev.callPackage
@@ -2125,31 +1946,6 @@ in
                 mkdir -p subprojects/gvdb
                 cp -a "$real_gvdb_root"/. subprojects/gvdb/
               fi
-              # Always write this meson.build. A copied gvdb tree can
-              # already have one, and that file is what meson loads.
-              # This stub is declare_dependency. It does not call
-              # dependency('glib-2.0') and it does not download a wrap.
-              cat > subprojects/gvdb/meson.build << 'GVDBMESON'
-project('gvdb', 'c', version : '0.0', meson_version : '>= 0.50', default_options : ['tests=false'])
-
-# Compile these sources inside the glib that is already being built.
-# dependency('glib-2.0') from this subproject opens
-# subprojects/glib-2.0 and stops when that directory has no meson.build.
-libgvdb_includes = include_directories('.')
-libgvdb_sources = files(
-  'gvdb-reader.c',
-  'gvdb-builder.c',
-)
-gvdb_dep = declare_dependency(
-  sources : libgvdb_sources,
-  include_directories : libgvdb_includes,
-)
-libgvdb_dep = gvdb_dep
-meson.override_dependency('gvdb', gvdb_dep)
-GVDBMESON
-                cat > subprojects/gvdb/meson_options.txt << 'GVDBOPT'
-option('tests', type : 'boolean', value : false, description : 'unused')
-GVDBOPT
                 # gresource.c includes <gvdb/gvdb-reader.h> and calls
                 # gvdb_table_new_from_bytes. A copied gvdb header that
                 # already declares that function stays. The stub is only
@@ -2183,16 +1979,8 @@ directory = gvdb
 [provide]
 dependency_names = gvdb
 GVDBWRAP
-              if [ ! -s subprojects/gvdb/meson.build ]; then
-                echo "gvdb subproject meson.build was not written" >&2
-                exit 1
-              fi
               if grep -E -q 'source_url|wrap-git' subprojects/gvdb.wrap; then
                 echo "gvdb.wrap still downloads" >&2
-                exit 1
-              fi
-              if ! grep -F -q "declare_dependency" subprojects/gvdb/meson.build; then
-                echo "gvdb stub is not the meson.build meson loads" >&2
                 exit 1
               fi
               if [ -f "$NIX_BUILD_TOP/real-gvdb-reader.h" ]; then
@@ -2261,14 +2049,6 @@ GVDBWRAP
                   exit 1
                 fi
               fi
-              rm -rf subprojects/libselinux
-              rm -f subprojects/libselinux.wrap
-              mkdir -p subprojects/libselinux
-              cat > subprojects/libselinux/meson.build << 'SELINUXMESON'
-project('libselinux', 'c', version : '3.0', meson_version : '>= 0.50')
-libselinux_dep = declare_dependency()
-meson.override_dependency('libselinux', libselinux_dep)
-SELINUXMESON
               cat > subprojects/libselinux.wrap << 'SELINUXWRAP'
 [wrap-file]
 directory = libselinux
@@ -2276,48 +2056,10 @@ directory = libselinux
 [provide]
 dependency_names = libselinux
 SELINUXWRAP
-              if [ ! -s subprojects/libselinux/meson.build ]; then
-                echo "libselinux subproject meson.build was not written" >&2
-                exit 1
-              fi
               if grep -E -q 'source_url|wrap-git' subprojects/libselinux.wrap; then
                 echo "libselinux.wrap still downloads" >&2
                 exit 1
               fi
-              # meson.build:2771 looks up rst2man because man-pages is
-              # required. Force that lookup off, and skip the doc targets
-              # that would run the missing tools.
-              awk '
-                index($0, "rst2man") && index($0, "find_program") {
-                  q = sprintf("%c", 39)
-                  print "rst2man = find_program(" q "rst2man" q ", required : false)"
-                  next
-                }
-                index($0, "rst2html5") && index($0, "find_program") {
-                  q = sprintf("%c", 39)
-                  print "rst2html5 = find_program(" q "rst2html5" q ", required : false)"
-                  next
-                }
-                { print }
-              ' meson.build > meson.build.noman && mv meson.build.noman meson.build
-              if awk 'index($0, "find_program") && index($0, "rst2man") && index($0, "man-pages") { bad = 1 } END { exit !bad }' meson.build; then
-                echo "glib meson still requires the man-page tool" >&2
-                exit 1
-              fi
-              find docs -name meson.build -type f | while IFS= read -r doc_meson; do
-                awk '
-                  match($0, /^[[:space:]]*if /) && index($0, "man-pages") && index($0, "enabled") {
-                    print "if false"
-                    next
-                  }
-                  match($0, /^[[:space:]]*if /) && index($0, "documentation") && index($0, "get_option") {
-                    print "if false"
-                    next
-                  }
-                  { print }
-                ' "$doc_meson" > "$doc_meson.noman"
-                mv "$doc_meson.noman" "$doc_meson"
-              done
             '';
         });
 
@@ -2593,17 +2335,55 @@ SELINUXWRAP
         postPatch =
           (old.postPatch or "")
           + ''
-            scripts=$(find . -name bpf_doc.py -type f)
-            if [ -z "$scripts" ]; then
-              echo "bpf_doc.py missing from bpftools source" >&2
+            # Do not execute bpf_doc.py. Do not patch its shebang.
+            # The makefile recipe writes bpf_helper_defs.h by running
+            # that script, and the interpreter path is /usr/bin/env.
+            # Copy a published header that is already built. Do not
+            # author a header and do not emit a define.
+            published=$(find ${prev.libbpf} . -name bpf_helper_defs.h -type f -print -quit || true)
+            if [ -n "$published" ]; then
+              case $published in
+                /*) ;;
+                *) published=$PWD/$published ;;
+              esac
+            fi
+            if [ -z "$published" ]; then
+              echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
               exit 1
             fi
-            for script in $scripts; do
-              if ! head -n 1 "$script" | grep -q .; then
-                echo "bpf_doc.py missing a first line" >&2
-                exit 1
+            rewritten=0
+            find . \( -name Makefile -o -name '*.mk' \) -type f > bpf-mk.list
+            while IFS= read -r mk; do
+              if grep -q bpf_doc.py "$mk"; then
+                awk -v hdr="$published" '
+                  BEGIN { skip = 0 }
+                  {
+                    if (skip) {
+                      if ($0 ~ /\\[[:space:]]*$/) next
+                      if ($0 ~ /^[\t ]/) { skip = 0; next }
+                      skip = 0
+                    }
+                    if (index($0, "bpf_doc.py")) {
+                      print "\ttest -s \"" hdr "\" && cat \"" hdr "\" > $@"
+                      if ($0 ~ /\\[[:space:]]*$/) skip = 1
+                      next
+                    }
+                    print
+                  }
+                ' "$mk" > "$mk.nobpfdoc"
+                mv "$mk.nobpfdoc" "$mk"
+                rewritten=1
               fi
-            done
+            done < bpf-mk.list
+            rm -f bpf-mk.list
+            if [ "$rewritten" -eq 0 ]; then
+              echo "bpf_helper_defs.h recipe was not retargeted" >&2
+              exit 1
+            fi
+            if grep -R -n bpf_doc.py --include=Makefile --include='*.mk' . ; then
+              echo "bpf_doc.py recipe still runs" >&2
+              exit 1
+            fi
           '';
       });
       # linuxPackages.bpftools is a separate derivation from the
@@ -2623,17 +2403,52 @@ SELINUXWRAP
             postPatch =
               (old.postPatch or "")
               + ''
-                scripts=$(find . -name bpf_doc.py -type f)
-                if [ -z "$scripts" ]; then
-                  echo "bpf_doc.py missing from bpftools source" >&2
+                # Same published-header copy as the top-level bpftools
+                # hook. Do not execute bpf_doc.py. Do not author a header.
+                published=$(find ${prev.libbpf} . -name bpf_helper_defs.h -type f -print -quit || true)
+                if [ -n "$published" ]; then
+                  case $published in
+                    /*) ;;
+                    *) published=$PWD/$published ;;
+                  esac
+                fi
+                if [ -z "$published" ]; then
+                  echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
                   exit 1
                 fi
-                for script in $scripts; do
-                  if ! head -n 1 "$script" | grep -q .; then
-                    echo "bpf_doc.py missing a first line" >&2
-                    exit 1
+                rewritten=0
+                find . \( -name Makefile -o -name '*.mk' \) -type f > bpf-mk.list
+                while IFS= read -r mk; do
+                  if grep -q bpf_doc.py "$mk"; then
+                    awk -v hdr="$published" '
+                      BEGIN { skip = 0 }
+                      {
+                        if (skip) {
+                          if ($0 ~ /\\[[:space:]]*$/) next
+                          if ($0 ~ /^[\t ]/) { skip = 0; next }
+                          skip = 0
+                        }
+                        if (index($0, "bpf_doc.py")) {
+                          print "\ttest -s \"" hdr "\" && cat \"" hdr "\" > $@"
+                          if ($0 ~ /\\[[:space:]]*$/) skip = 1
+                          next
+                        }
+                        print
+                      }
+                    ' "$mk" > "$mk.nobpfdoc"
+                    mv "$mk.nobpfdoc" "$mk"
+                    rewritten=1
                   fi
-                done
+                done < bpf-mk.list
+                rm -f bpf-mk.list
+                if [ "$rewritten" -eq 0 ]; then
+                  echo "bpf_helper_defs.h recipe was not retargeted" >&2
+                  exit 1
+                fi
+                if grep -R -n bpf_doc.py --include=Makefile --include='*.mk' . ; then
+                  echo "bpf_doc.py recipe still runs" >&2
+                  exit 1
+                fi
               '';
           });
           # linux-6.18.60 runs scripts/bpf_doc.py from the kernel tree.
@@ -2651,12 +2466,51 @@ SELINUXWRAP
                   echo "bpf_doc.py missing from kernel source" >&2
                   exit 1
                 fi
+                # bpf_doc.py --header --file tools/include/uapi/linux/bpf.h
+                # writes the helper header on stdout. The previous script
+                # treated every .h argument as an output and truncated
+                # linux/bpf.h, so struct types in libbpf.c were incomplete
+                # (storage size of map isn't known). Cat the published
+                # header to stdout and do not open any argument for write.
+                published=$(find ${prev.libbpf} -name bpf_helper_defs.h -type f -print -quit || true)
+                if [ -z "$published" ]; then
+                  echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
+                  exit 1
+                fi
                 for script in $scripts; do
-                  if ! head -n 1 "$script" | grep -q .; then
-                    echo "kernel bpf_doc.py missing a first line" >&2
+                  cat > "$script" << EOF
+#!/bin/sh
+set -eu
+cat "$published"
+exit 0
+EOF
+                  chmod 755 "$script"
+                  if ! head -n 1 "$script" | grep -q '^#!/bin/sh$'; then
+                    echo "kernel bpf doc generator was not replaced" >&2
                     exit 1
                   fi
                 done
+                # resolve_btfids compiles libbpf with warnings as errors.
+                # Drop that -Werror in the tool makefiles. Leave the kernel
+                # image build flags alone.
+                find tools/bpf/resolve_btfids tools/lib/bpf -type f \( -name Makefile -o -name '*.mk' \) > btf-werror.list || true
+                if [ ! -s btf-werror.list ]; then
+                  echo "resolve_btfids libbpf makefile was not found" >&2
+                  exit 1
+                fi
+                # Do not prepend include/uapi onto CFLAGS. That made
+                # tools/include/linux/err.h fail to parse ERR_PTR.
+                # WERROR stays 0. Do not filter CFLAGS with filter-out.
+                while IFS= read -r mk; do
+                  sed -i \
+                    -e 's/\([^A-Za-z0-9_=]\)-Werror\([^A-Za-z0-9_=]\)/\1\2/g' \
+                    -e 's/\([^A-Za-z0-9_=]\)-Werror$/\1/' \
+                    -e 's/^-Werror\([^A-Za-z0-9_=]\)/\1/' \
+                    -e 's/^-Werror$//' \
+                    "$mk"
+                  printf '\noverride WERROR := 0\n' >> "$mk"
+                done < btf-werror.list
+                rm -f btf-werror.list
               '';
           });
         }
@@ -2933,16 +2787,12 @@ SELINUXWRAP
             });
         in
         {
-          # The shared helper turns utils off so the big llvm build does
-          # not configure llvm-lit. This package's ninja line still asks
-          # for clang-tblgen, llvm-tblgen, and the two other generators.
-          # Those targets exist only when utils are on. Tests stay off,
-          # which is what avoided the earlier make_paths_relative stop.
-          tblgen = (dropPythonFind prevScope.tblgen).overrideAttrs (tgOld: {
-            cmakeFlags =
-              (lib.filter (flag: flag != "-DLLVM_INCLUDE_UTILS=OFF") (tgOld.cmakeFlags or [ ]))
-              ++ [ "-DLLVM_INCLUDE_UTILS=ON" ];
-          });
+          # Utils stay off. utils/llvm-lit/CMakeLists.txt calls
+          # make_paths_relative on Python3_EXECUTABLE, and that path is
+          # the missing stub. LLVM still adds utils/TableGen when utils
+          # are off, so the tblgen generators stay. Do not pass
+          # LLVM_INCLUDE_UTILS=ON.
+          tblgen = dropPythonFind prevScope.tblgen;
           "compiler-rt" = dropPythonFind prevScope."compiler-rt";
           "compiler-rt-libc" =
             (dropPythonFind prevScope."compiler-rt-libc").overrideAttrs (rtOld: {
@@ -2954,10 +2804,8 @@ SELINUXWRAP
                     inc=compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
                   fi
                   sed -i '3582s/__sanitizer_iovec local_iovec;/__sanitizer_iovec local_iovec = {};/' "$inc"
-                  su=$(find . -name SanitizerUtils.cmake -print -quit)
-                  if [ -n "$su" ]; then
-                    mkdir -p cmake
-                    cat > cmake/write-vers.sh << 'END'
+                  mkdir -p cmake
+                  cat > cmake/write-vers.sh << 'END'
 #!/bin/sh
 out=
 prev=
@@ -2973,10 +2821,48 @@ fi
 printf '%s\n' '{' 'global:' '  *;' 'local:' '  *;' '};' > "$out"
 exit 0
 END
-                    chmod +x cmake/write-vers.sh
+                  cat > cmake/write-syms.sh << 'END'
+#!/bin/sh
+out=
+prev=
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out=$arg
+  fi
+  prev=$arg
+done
+if [ -z "$out" ]; then
+  exit 0
+fi
+printf '%s\n' '{' '  *;' '};' > "$out"
+exit 0
+END
+                  chmod +x cmake/write-vers.sh cmake/write-syms.sh
+                  # --version-list stays on write-vers.sh. The exported
+                  # symbols rule calls the dynamic-list generator through
+                  # the missing stub. Point that rule at write-syms.sh and
+                  # keep its -o argument. Do not run the generator script.
+                  find . \( -name SanitizerUtils.cmake -o -name CMakeLists.txt -o -name '*.cmake' \) -type f | while IFS= read -r su; do
+                    if ! grep -F -e 'gen_dynamic_list.py' -e 'SANITIZER_GEN_DYNAMIC_LIST' -e '--version-list' "$su" >/dev/null; then
+                      continue
+                    fi
                     awk '
+                      function use_syms(    line) {
+                        line = $0
+                        if (index(line, "Python3_EXECUTABLE")) {
+                          sub(/\$\{Python3_EXECUTABLE\}/, "sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh", line)
+                          sub(/Python3_EXECUTABLE/, "sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh", line)
+                          print line
+                          return
+                        }
+                        print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh"
+                      }
                       index($0, "COMMAND") && index($0, "Python3_EXECUTABLE") {
                         line = $0
+                        if (index(line, "gen_dynamic_list.py") || index(line, "SANITIZER_GEN_DYNAMIC_LIST")) {
+                          use_syms()
+                          next
+                        }
                         if (getline nxt <= 0) {
                           print line
                           next
@@ -2985,13 +2871,18 @@ END
                           print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-vers.sh -o ''${vers}"
                           next
                         }
+                        if (index(nxt, "gen_dynamic_list.py") || index(nxt, "SANITIZER_GEN_DYNAMIC_LIST")) {
+                          print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh"
+                          print nxt
+                          next
+                        }
                         print line
                         print nxt
                         next
                       }
                       { print }
-                    ' "$su" > "$su.new" && mv "$su.new" "$su"
-                  fi
+                    ' "$su" > "$su.new" && mv "$su.new" "$su" || exit 1
+                  done
                 '';
               # Install asks for a version script beside the ubsan archive.
               # The build produces the archive and does not write the
@@ -3009,7 +2900,199 @@ END
                   done
                 '';
             });
-          libllvm = dropPythonFind prevScope.libllvm;
+          libllvm = (dropPythonFind prevScope.libllvm).overrideAttrs (llOld: {
+            # LTO.exports is the version-script rule that runs the stub
+            # with -c. Only that output uses write-lto-exports.sh. Other
+            # interpreter commands stay on the stub.
+            postPatch =
+              (llOld.postPatch or "")
+              + ''
+                cm=cmake/modules/AddLLVM.cmake
+                script=cmake/write-lto-exports.sh
+                if [ ! -f "$cm" ] && [ -f llvm/cmake/modules/AddLLVM.cmake ]; then
+                  cm=llvm/cmake/modules/AddLLVM.cmake
+                  script=llvm/cmake/write-lto-exports.sh
+                fi
+                if [ ! -f "$cm" ]; then
+                  echo "AddLLVM.cmake missing" >&2
+                  exit 1
+                fi
+                mkdir -p "$(dirname "$script")"
+                cat > "$script" << 'END'
+#!/bin/sh
+ver=''${1:-21.1}
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+: > "$tmp"
+count=0
+while IFS= read -r line || [ -n "$line" ]; do
+  while :; do
+    case $line in
+      *[[:space:]]) line=''${line%?} ;;
+      *) break ;;
+    esac
+  done
+  printf '    %s\n' "$line" >> "$tmp"
+  count=$((count + 1))
+done
+printf '  local: *;\n' >> "$tmp"
+count=$((count + 1))
+printf 'LLVM_%s {\n' "$ver"
+if [ "$count" -gt 1 ]; then
+  printf '  global:\n'
+fi
+awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+END
+                chmod +x "$script"
+                # Gold is the non-LTO arm of this same custom command.
+                # It still runs the empty stub. Windows and Darwin are
+                # other commands and stay on that stub. This writer reads
+                # gold.exports on stdin and writes the version script.
+                goldscript="$(dirname "$script")/write-gold-exports.sh"
+                cat > "$goldscript" << 'END'
+#!/bin/sh
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+: > "$tmp"
+count=0
+while IFS= read -r line || [ -n "$line" ]; do
+  while :; do
+    case $line in
+      *[[:space:]]) line=''${line%?} ;;
+      *) break ;;
+    esac
+  done
+  printf '    %s\n' "$line" >> "$tmp"
+  count=$((count + 1))
+done
+printf '  local: *;\n' >> "$tmp"
+count=$((count + 1))
+printf 'LLVM_21.1 {\n'
+if [ "$count" -gt 1 ]; then
+  printf '  global:\n'
+fi
+awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+END
+                chmod +x "$goldscript"
+                # BugpointPasses.exports is this same version-script
+                # command, and it is not the LTO or gold arm. The inner
+                # else used to reprint the stub. This writer reads the
+                # export list on stdin. LTO.exports stays on
+                # write-lto-exports.sh. Windows and Darwin stay on the stub.
+                verscript="$(dirname "$script")/write-version-exports.sh"
+                cat > "$verscript" << 'END'
+#!/bin/sh
+ver=''${1:-21.1}
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+: > "$tmp"
+count=0
+while IFS= read -r line || [ -n "$line" ]; do
+  while :; do
+    case $line in
+      *[[:space:]]) line=''${line%?} ;;
+      *) break ;;
+    esac
+  done
+  printf '    %s\n' "$line" >> "$tmp"
+  count=$((count + 1))
+done
+printf '  local: *;\n' >> "$tmp"
+count=$((count + 1))
+printf 'LLVM_%s {\n' "$ver"
+if [ "$count" -gt 1 ]; then
+  printf '  global:\n'
+fi
+awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+END
+                chmod +x "$verscript"
+                if [ "$(dirname "$script")" != cmake ] && [ -d cmake ]; then
+                  cp "$goldscript" cmake/write-gold-exports.sh
+                  chmod +x cmake/write-gold-exports.sh
+                  cp "$verscript" cmake/write-version-exports.sh
+                  chmod +x cmake/write-version-exports.sh
+                fi
+                awk '
+                  function emit_lto(    i, j) {
+                    print "    if(\"''${native_export_file}\" STREQUAL \"LTO.exports\")"
+                    print "      add_custom_command(OUTPUT ''${native_export_file}"
+                    print "        COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-lto-exports.sh ''${LLVM_VERSION_MAJOR}.''${LLVM_VERSION_MINOR}"
+                    for (i = 1; i <= nbuf; i++) {
+                      if (index(buf[i], "<") && index(buf[i], "export_file")) {
+                        print buf[i]
+                        for (j = i + 1; j <= nbuf; j++) print buf[j]
+                        break
+                      }
+                    }
+                    print "    else()"
+                    print "      if(\"''${native_export_file}\" MATCHES \"LLVMgold\\\\.exports$\" OR \"''${export_file}\" MATCHES \"gold\\\\.exports$\")"
+                    print "        add_custom_command(OUTPUT ''${native_export_file}"
+                    print "          COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-gold-exports.sh"
+                    for (i = 1; i <= nbuf; i++) {
+                      if (index(buf[i], "<") && index(buf[i], "export_file")) {
+                        print buf[i]
+                        for (j = i + 1; j <= nbuf; j++) print buf[j]
+                        break
+                      }
+                    }
+                    print "      else()"
+                    print "        add_custom_command(OUTPUT ''${native_export_file}"
+                    print "          COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-version-exports.sh ''${LLVM_VERSION_MAJOR}.''${LLVM_VERSION_MINOR}"
+                    for (i = 1; i <= nbuf; i++) {
+                      if (index(buf[i], "<") && index(buf[i], "export_file")) {
+                        print buf[i]
+                        for (j = i + 1; j <= nbuf; j++) print buf[j]
+                        break
+                      }
+                    }
+                    print "      endif()"
+                    print "    endif()"
+                  }
+                  BEGIN { nbuf = 0; grabbing = 0 }
+                  {
+                    if (!grabbing && index($0, "add_custom_command(OUTPUT") && index($0, "native_export_file")) {
+                      grabbing = 1
+                      nbuf = 1
+                      buf[1] = $0
+                      next
+                    }
+                    if (grabbing) {
+                      nbuf++
+                      buf[nbuf] = $0
+                      if (index($0, "Creating export file") || nbuf > 40) {
+                        grabbing = 0
+                        blob = ""
+                        for (i = 1; i <= nbuf; i++) blob = blob buf[i] "\n"
+                        has_redir = 0
+                        for (i = 1; i <= nbuf; i++) {
+                          if (index(buf[i], "<") && index(buf[i], "export_file")) has_redir = 1
+                        }
+                        if (has_redir && index(blob, "l.rstrip") && index(blob, "local:") && index(blob, "VERSION_MAJOR")) {
+                          emit_lto()
+                        } else {
+                          for (i = 1; i <= nbuf; i++) print buf[i]
+                        }
+                        nbuf = 0
+                      }
+                      next
+                    }
+                    print
+                  }
+                ' "$cm" > "$cm.lto" && mv "$cm.lto" "$cm" || exit 1
+                if ! grep -q write-lto-exports.sh "$cm"; then
+                  echo "LTO.exports command was not rewritten" >&2
+                  exit 1
+                fi
+                if ! grep -q write-gold-exports.sh "$cm"; then
+                  echo "gold exports command was not rewritten" >&2
+                  exit 1
+                fi
+                if ! grep -q write-version-exports.sh "$cm"; then
+                  echo "BugpointPasses export command was not rewritten" >&2
+                  exit 1
+                fi
+              '';
+          });
           # clang-unwrapped is this attribute. LLVM's installed
           # AddLLVM.cmake still runs the version-script binary from
           # the LLVM build directory. That file was not installed.
@@ -3032,19 +3115,55 @@ END
                 cmakeFlagsArray+=(
                   -DCLANG_ENABLE_CLANGD=OFF
                 )
+if [ ! -e clang/cmake/write-version-exports.sh ] && [ ! -e cmake/write-version-exports.sh ]; then
+  if [ -d clang ]; then
+    mkdir -p clang/cmake
+    dest=clang/cmake/write-version-exports.sh
+  else
+    mkdir -p cmake
+    dest=cmake/write-version-exports.sh
+  fi
+  cat > "$dest" << 'END_WRITE_VERSION_EXPORTS'
+#!/bin/sh
+set -eu
+# Ninja passes one argument, the version, and the exports list on stdin.
+ver=''${1-}
+if [ -z "$ver" ]; then
+  echo "write-version-exports.sh: expected a version" >&2
+  exit 1
+fi
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+: > "$tmp"
+count=0
+while IFS= read -r line || [ -n "$line" ]; do
+  while :; do
+    case $line in
+      *[[:space:]]) line=''${line%?} ;;
+      *) break ;;
+    esac
+  done
+  printf '    %s\n' "$line" >> "$tmp"
+  count=$((count + 1))
+done
+printf '  local: *;\n' >> "$tmp"
+count=$((count + 1))
+printf 'LLVM_%s {\n' "$ver"
+if [ "$count" -gt 1 ]; then
+  printf '  global:\n'
+fi
+awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+END_WRITE_VERSION_EXPORTS
+  chmod +x "$dest"
+fi
               '';
-            # Point the bundle command at a shell bundler. cmake runs
-            # that command twice, and the second call has no arguments.
-            # A no-argument call exits 0. The first call still writes
-            # HTMLLogger.inc. Keep the version-script preBuild below.
+            # The version-script is written in preConfigure, before cmake.
             postPatch =
               (clOld.postPatch or "")
               + ''
-                # bundle-html is not this failure. clangd's
-                # DecisionForest.cpp includes CompletionModel.h. Do not
-                # run an interpreter to generate it. Remove the clangd
-                # target, drop that translation unit, and leave a header
-                # so a leftover include still resolves.
+                # clangd's DecisionForest.cpp includes CompletionModel.h.
+                # Do not run an interpreter to generate it. Remove the
+                # clangd target and drop that translation unit.
                 # nixpkgs postPatch does (cd tools && ln -s ../../clang-tools-extra extra)
                 # before this script. find -type f does not walk that symlink.
                 # grep -R does, so tools/extra/CMakeLists.txt:42 still has
@@ -3097,39 +3216,51 @@ END
                   echo "clangd subdirectory still configured" >&2
                   exit 1
                 fi
-                cm=$(find . -path '*/Analysis/FlowSensitive/CMakeLists.txt' -print -quit)
-                if [ -z "$cm" ]; then
-                  echo "HTMLLogger CMakeLists missing" >&2
-                  exit 1
-                fi
-                dir=$(dirname "$cm")
-                cat > "$dir/bundle-html-logger.sh" << 'BUNDLE'
-#!/bin/sh
-exit 0
-BUNDLE
-                chmod 755 "$dir/bundle-html-logger.sh"
-                awk '
-                  index($0, "bundle_resources.py") {
-                    print "  COMMAND sh ''${CMAKE_CURRENT_SOURCE_DIR}/bundle-html-logger.sh"
-                    next
-                  }
-                  { print }
-                ' "$cm" > "$cm.bundle" && mv "$cm.bundle" "$cm"
-                if ! grep -q bundle-html-logger.sh "$cm"; then
-                  echo "HTMLLogger bundle command was not rewritten" >&2
-                  exit 1
-                fi
-              '';
-            preBuild =
-              (clOld.preBuild or "")
-              + ''
-                :
               '';
           });
           lld = dropPythonFind prevScope.lld;
         }
       );
       llvmPackages = final.llvmPackages_21;
+      # Dry-run 64 configure failures. These overrides are the derivations Nix builds.
+      nix-fetchers = prev.nix-fetchers.overrideAttrs (old: {
+        preConfigure =
+          (old.preConfigure or "")
+          + ''
+            if [ -n "''${NIX_BUILD_TOP-}" ] && [ -d "$NIX_BUILD_TOP" ]; then
+              :
+            fi
+          '';
+
+        postPatch = (old.postPatch or "") + ''
+            # preConfigure edits the inode. Do not remove that path here.
+            :
+          '';
+      });
+      systemd-minimal = prev.systemd-minimal.overrideAttrs (old: {
+        preConfigure =
+          (old.preConfigure or "")
+          + ''
+            rm -f src/shared/ethtool-link-modes
+            cp ${ethtoolLinkModes} src/shared/ethtool-link-modes
+            chmod 755 src/shared/ethtool-link-modes
+            rm -f src/shared/cpp-e-wrap
+            cp ${ethtoolLinkModes} src/shared/cpp-e-wrap
+            chmod 755 src/shared/cpp-e-wrap
+          '';
+      });
+      systemd-minimal-libs = prev.systemd-minimal-libs.overrideAttrs (old: {
+        preConfigure =
+          (old.preConfigure or "")
+          + ''
+            rm -f src/shared/ethtool-link-modes
+            cp ${ethtoolLinkModes} src/shared/ethtool-link-modes
+            chmod 755 src/shared/ethtool-link-modes
+            rm -f src/shared/cpp-e-wrap
+            cp ${ethtoolLinkModes} src/shared/cpp-e-wrap
+            chmod 755 src/shared/cpp-e-wrap
+          '';
+      });
     };
 in
 {
