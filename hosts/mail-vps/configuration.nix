@@ -337,14 +337,22 @@
 
   # ---- Minimal conveniences ------------------------------------------------
   environment.systemPackages = with pkgs; [
+    # This nixpkgs vim is the small editor. It does not take an
+    # interpreter-feature argument. vim-full is the package that
+    # defaults that feature on, and this host does not install it.
     vim
     htop
     curl
     dig
     tcpdump
     # nixos-26.05 git defaults pythonSupport to true, which installs
-    # python3. The mail host still has git. The flag stays off.
-    (git.override { pythonSupport = false; })
+    # the interpreter. rustSupport pulls cargo, and cargo's build
+    # input is that same interpreter. The mail host still has git.
+    # Both flags stay off. The manual stays off in the pins overlay.
+    (git.override {
+      pythonSupport = false;
+      rustSupport = false;
+    })
     scc
     fio
     sysstat

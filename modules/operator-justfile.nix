@@ -15,7 +15,9 @@ let
 in
 {
   config = mkIf cfg.enable {
-    environment.systemPackages = [ pkgs.just ];
+    # No service executes just. The recipe file stays. The just
+    # package builds with cargo, and that cargo build input is the
+    # interpreter. Do not install the package on this mail host.
     environment.etc.${etcRel}.source = ../contrib/guest-root-justfile;
     systemd.tmpfiles.rules = [
       "L+ /root/justfile - - - - ${etcAbs}"

@@ -512,6 +512,34 @@ flags and no `--dry-run` is that same switch. Laptop cargo and
 at a time. Prove-the-gate leftover law stays: do not list a leftover
 unless the agent cannot do it.
 
+## Do not stop before a passing dry-run (operator 2026-11-09)
+
+Never stop until just deploy-dry-run exits 0. The operator will not run
+just deploy until that dry-run passes. Stopping to ask the operator to
+deploy, or ending the task before a green dry-run, wastes the
+operator's time. The agent runs the dry-run. The agent must not run
+just deploy. just deploy-host without --dry-run is that same switch.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Rebuilds must hit the cache (operator 2026-11-09)
+
+A later dry-run must not recompile a derivation that a previous dry-run
+already built, unless an input that derivation depends on actually
+changed. If the same package builds again with no input change, the
+cache is broken and that is a bug to fix. Do not treat a full rebuild
+of an unchanged package as normal.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Trim dependencies to this host (operator 2026-11-09)
+
+Drop dependencies the mail host configuration does not need. The
+machine is surmount-1. Keep what that configuration uses. Do not add a
+package only because nixpkgs pulls it by default.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Cargo update and cargo audit are one pair (operator 2026-10-10)
 
 `cargo update` and `cargo audit` are one pass. Do not run one and skip the other.

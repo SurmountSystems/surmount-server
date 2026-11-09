@@ -207,26 +207,16 @@ in
       }
       {
         # Password body must never land in the store via Environment=.
+        # Caller keys are cfg.extraEnvironment. Do not read the unit
+        # environment option from this module: this module defines it,
+        # and that read recurses through system.build.toplevel.
+        # Path-only EnvironmentFile is the only supported recovery pin
+        # load for this secret.
         assertion = !(cfg.extraEnvironment ? STALWART_RECOVERY_ADMIN);
         message = ''
           services.stalwart.extraEnvironment must not set STALWART_RECOVERY_ADMIN
           (secret would enter the Nix store). Use recoveryAdminEnvFile for a
           host EnvironmentFile path only, or temporary unlock drop-in from
-          nix run .#stalwart-recovery-unlock. Prefer strip after permanent
-          admin API key.
-        '';
-      }
-      {
-        # Defense in depth: refuse direct unit environment too (host profile
-        # can set systemd.services.stalwart-mail.environment without going
-        # through extraEnvironment). Path-only EnvironmentFile is the only
-        # supported recovery pin load for this secret.
-        assertion = !((config.systemd.services.stalwart-mail.environment or { }) ? STALWART_RECOVERY_ADMIN);
-        message = ''
-          systemd.services.stalwart-mail.environment must not set
-          STALWART_RECOVERY_ADMIN (secret would enter the Nix store). Use
-          services.stalwart.recoveryAdminEnvFile for a host EnvironmentFile
-          path only, or temporary unlock drop-in from
           nix run .#stalwart-recovery-unlock. Prefer strip after permanent
           admin API key.
         '';

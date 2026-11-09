@@ -2352,7 +2352,9 @@ let
     assert lib.hasInfix "tmux attach -t grok-oss" text;
     assert lib.hasInfix "grok-oss running --json" text;
     assert builtins.any (r: lib.hasInfix "/root/justfile" r) rules;
-    assert builtins.any (n: lib.hasPrefix "just" n) pkgsList;
+    # No service executes just. The package's cargo build input is
+    # the interpreter, so the binary stays off this mail host.
+    assert !(builtins.any (n: n == "just" || lib.hasPrefix "just-" n) pkgsList);
     "t42-guest-root-justfile-ok";
 
   t43-scram-watch-highest-priority =
@@ -4387,6 +4389,8 @@ let
             value = {
               key = builtins.unsafeDiscardStringContext drv.outPath;
               inherit drv;
+              viaKey = null;
+              viaName = "root";
             };
           }) roots
         )
@@ -4398,8 +4402,29 @@ let
           map (drv: {
             key = builtins.unsafeDiscardStringContext drv.outPath;
             inherit drv;
+            viaKey = item.key;
+            viaName = item.drv.name or item.drv.pname or "unknown";
           }) (directDeps item.drv);
       };
+      closureByKey = builtins.listToAttrs (
+        map (item: {
+          name = item.key;
+          value = item;
+        }) closure
+      );
+      # Failure text only. The assert still requires an empty Python walk.
+      pythonIntro =
+        item: n:
+        if item == null || n > 24 then
+          [ ]
+        else
+          [ (item.drv.name or item.drv.pname or "unknown") ]
+          ++ (
+            if item.viaKey or null == null then
+              [ ]
+            else
+              pythonIntro (closureByKey.${item.viaKey} or null) (n + 1)
+          );
       bad = builtins.filter (item: isHaskellDrv item.drv) closure;
       badDesc = lib.concatMapStringsSep ", " (item: item.drv.name or item.drv.pname or "unknown") bad;
       badPython = builtins.filter (item: isPythonDrv item.drv) closure;
@@ -4432,9 +4457,46 @@ let
     assert lib.assertMsg (
       bad == [ ]
     ) "mail-host build and install closure still reaches Haskell: ${badDesc}";
-    assert lib.assertMsg (
-      badPython == [ ]
-    ) "mail-host build and install closure still reaches Python: ${badPythonDesc}";
+    assert lib.assertMsg (badPython == [ ]) (
+      let
+        chain = lib.concatStringsSep " <- " (pythonIntro (builtins.head badPython) 0);
+        introducers = lib.unique (
+          builtins.filter (name: name != "" && !lib.hasInfix "python" name && !lib.hasInfix "Python" name) (
+            map (
+              item:
+              if item.viaKey or null == null then
+                "root"
+              else
+                let
+                  parent = closureByKey.${item.viaKey} or null;
+                in
+                if parent == null || isPythonDrv parent.drv then
+                  ""
+                else
+                  parent.drv.name or parent.drv.pname or "unknown"
+            ) badPython
+          )
+        );
+        introText = lib.concatStringsSep ", " (lib.take 40 introducers);
+        sample = lib.take 8 introducers;
+        sampleChains = lib.concatStringsSep " || " (
+          map (
+            name:
+            let
+              hit = lib.findFirst (
+                item:
+                let
+                  parent = if item.viaKey or null == null then null else closureByKey.${item.viaKey} or null;
+                in
+                parent != null && (parent.drv.name or "") == name
+              ) null badPython;
+            in
+            if hit == null then name else lib.concatStringsSep " <- " (pythonIntro hit 0)
+          ) sample
+        );
+      in
+      "mail-host build and install closure still reaches Python via ${chain}; chains: ${sampleChains}; introducers: ${introText}: ${badPythonDesc}"
+    );
     assert lib.assertMsg (
       !(lib.hasInfix "prev.nixos-firewall-tool" (builtins.readFile ../nix/overlays.nix))
     ) "nixos-firewall-tool must be writeShellScriptBin, not the upstream derivation";
