@@ -1,0 +1,7 @@
+set(Python3_FOUND TRUE)
+set(Python3_Interpreter_FOUND TRUE)
+set(Python3_VERSION "3.12.0")
+set(Python3_VERSION_MAJOR 3)
+set(Python3_VERSION_MINOR 12)
+set(Python3_VERSION_PATCH 0)
+set(Python3_EXECUTABLE "@EXECUTABLE@")

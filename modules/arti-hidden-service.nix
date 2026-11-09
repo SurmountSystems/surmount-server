@@ -31,7 +31,7 @@
 # auto-points at managementUi local cleartext (loopback API bind). Pointing
 # cleartext Arti at the primary https TCP without that path still warns.
 #
-# Version assumption: arti.toml shape matches Surmount-owned Arti 2.7.0
+# Version assumption: arti.toml shape matches Surmount-owned Arti 2.8.0
 # (nix/packages/arti-onion-service.nix; not stock nixpkgs 1.4.x lag). Keys:
 # [storage] cache_dir/state_dir, [onion_services."<nickname>"] proxy_ports,
 # [proxy] socks_listen (not legacy socks_port). See upstream
@@ -166,8 +166,8 @@ let
     # No private keys in this file. Onion service identity lives under
     # onionServiceStateDir on the host (deploy secrets; never in git).
     #
-    # Version assumption: Surmount-owned Arti 2.7.0 config shape
-    # (nix/packages/arti-onion-service.nix; GitLab arti-v2.7.0). Not stock
+    # Version assumption: Surmount-owned Arti 2.8.0 config shape
+    # (nix/packages/arti-onion-service.nix; GitLab arti-v2.8.0). Not stock
     # nixpkgs 1.4.x lag. Keys: socks_listen, onion_services, proxy_ports.
     # Command: arti proxy -c /etc/surmount/arti.toml
     #
@@ -197,7 +197,9 @@ let
 
     # stdout -> journald via the unit. Never log HS keys.
     [logging]
-    console = "info"
+    # debug records circuits and publish failures. Sensitive material
+    # (including hidden-service keys) stays off. Do not set trace.
+    console = "debug"
     log_sensitive_information = false
 
     # Per-site v3 onions reverse-proxying to management UI cleartext.
@@ -348,6 +350,25 @@ in
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
+        # Status text only. No host paths with key material are printed.
+        DynamicUser = true;
+        NoNewPrivileges = true;
+        PrivateTmp = true;
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        RestrictNamespaces = true;
+        LockPersonality = true;
+        MemoryDenyWriteExecute = true;
+        RestrictRealtime = true;
+        RestrictAddressFamilies = [ "AF_UNIX" ];
+        SystemCallArchitectures = "native";
+        SyslogIdentifier = "surmount-arti-scaffold-status";
+        StandardOutput = "journal";
+        StandardError = "journal";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
         ExecStart = pkgs.writeShellScript "surmount-arti-status" ''
           set -eu
           echo "surmount: arti HS module enabled (management-publish config installed; startDaemon=false)."
@@ -395,6 +416,15 @@ in
         ExecStartPost = "-${hostnamePublishScript}";
         Restart = "on-failure";
         RestartSec = "10s";
+        # Ordinary CFS. Not fifo, not rr, not idle I/O, not realtime I/O.
+        Nice = -18;
+        # stdout is the Arti console (debug, sensitive off). Burst so a
+        # circuit storm does not drop the first publish failure.
+        SyslogIdentifier = "surmount-arti-hidden-service";
+        StandardOutput = "journal";
+        StandardError = "journal";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
         # state_dir is onionServiceStateDir (HS identity + instance state).
         # cache_dir is under stateDir. Both need write for a live publisher.
         ReadWritePaths = [

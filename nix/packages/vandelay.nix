@@ -7,10 +7,10 @@
 #
 # Packaging mode: pinned upstream release binary FODs (same pattern as
 # stalwart-cli). Bump: set version, prefetch each arch tar.gz, paste hashes.
-# 1.0.12 (2026-10-11): parallel Email/import batches, keep non-selectable
-# IMAP parents, and stop holding a whole JMAP page of blobs in memory.
-# https://github.com/stalwartlabs/vandelay/releases/tag/v1.0.12
-# (accessed: 2026-10-17). Asset names are unchanged.
+# Checked 2026-11-03: GitHub releases/latest is v1.0.14
+# (published 2026-11-01T16:43:01Z, not a prerelease).
+# https://github.com/stalwartlabs/vandelay/releases/tag/v1.0.14
+# (accessed: 2026-11-03). Asset names and tarball directory names are unchanged.
 
 {
   lib,
@@ -22,17 +22,17 @@
 }:
 
 let
-  version = "1.0.12";
+  version = "1.0.14";
 
   sources = {
     x86_64-linux = {
       url = "https://github.com/stalwartlabs/vandelay/releases/download/v${version}/vandelay-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-4hLrj3B4AUmjN8IGi8qiEsPtRwxkbLVxO2qXD/J+nZ8=";
+      hash = "sha256-nP6wUyG3PVzRPaxS0LGCiXiexuJMhpz1ljUc7KhbLUQ=";
       dir = "vandelay-x86_64-unknown-linux-gnu";
     };
     aarch64-linux = {
       url = "https://github.com/stalwartlabs/vandelay/releases/download/v${version}/vandelay-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-ToazZRZnBi4ZGcyDrhVrQdeu/S2s8My7OAwtAGNM7j0=";
+      hash = "sha256-9mEbJbfntOmg0L1woUKI7ukr6VjpxElKUofJDJKdIAQ=";
       dir = "vandelay-aarch64-unknown-linux-gnu";
     };
   };

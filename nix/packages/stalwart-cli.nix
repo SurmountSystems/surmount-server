@@ -17,17 +17,20 @@
 }:
 
 let
-  version = "1.0.13";
+  # Checked 2026-11-03: GitHub releases/latest is v1.0.14
+  # (published 2026-10-25T18:15:42Z, not a prerelease).
+  # Directory names inside the gnu tarballs are unchanged.
+  version = "1.0.14";
 
   sources = {
     x86_64-linux = {
       url = "https://github.com/stalwartlabs/cli/releases/download/v${version}/stalwart-cli-x86_64-unknown-linux-gnu.tar.xz";
-      hash = "sha256-G4UJt2ft0aF2k+CStRjEFhDsS3JPTmLEYb0ozUDGafc=";
+      hash = "sha256-eFhLI4QisCAae9Ij7ZWzwaf7hzWtP6jIhNgYpm/RvGU=";
       dir = "stalwart-cli-x86_64-unknown-linux-gnu";
     };
     aarch64-linux = {
       url = "https://github.com/stalwartlabs/cli/releases/download/v${version}/stalwart-cli-aarch64-unknown-linux-gnu.tar.xz";
-      hash = "sha256-ZfS25SjYQ4iVP8mNlGM53YJG+wO/TKqmTh2bN49S2JI=";
+      hash = "sha256-ow8MGg+4p+6LxC/Q5pmALkxRJXpT29aBxNkd22dZeSs=";
       dir = "stalwart-cli-aarch64-unknown-linux-gnu";
     };
   };

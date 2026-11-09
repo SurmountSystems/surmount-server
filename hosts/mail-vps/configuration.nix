@@ -66,7 +66,7 @@
 #      a production leaf that names mail.<apex>, run
 #      `just point-stalwart-mail-tls -- --live --restart` on the host.
 #      Same durable PEMs as Axum. Not product browser :443.
-#  14. Review fail2ban/ssh exposure; lock SSH to admin nets if possible.
+#  14. Review sshguard bans and SSH exposure; lock SSH to admin nets if possible.
 #  15. Enable surmount.artiHiddenService when HS identity is on host (later).
 #      With https UI, leave arti backendAddress null so the module auto-
 #      binds loopback cleartext API for the onion reverse-proxy (or set
@@ -100,6 +100,9 @@
   # ---- Surmount stack ------------------------------------------------------
   surmount = {
     enable = true;
+    # Measured guest CPU is x86-64-v3 (no avx512). Source builds only.
+    # Flake packages.* and the generic CI host stay untuned.
+    mailHostCpu.enable = true;
     primaryDomain = "surmount.systems";
     mailHostname = "mail.surmount.systems";
     servicesHostname = "services.surmount.systems";
@@ -280,7 +283,7 @@
     fsType = "ext4";
   };
 
-  time.timeZone = "UTC";
+  time.timeZone = "America/Denver";
   i18n.defaultLocale = "en_US.UTF-8";
 
   # ---- Networking (provider-specific) --------------------------------------
@@ -323,23 +326,40 @@
     trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
     ];
-    # Host cargo cache. An administrator creates the directory.
-    extra-sandbox-paths = [
-      "/var/cache/grok-oss-cargo-target"
-    ];
   };
 
   nixpkgs.config.allowUnfree = false;
 
+  # nixos-render-docs is a Python application. The mail host does not
+  # install the NixOS HTML manual or the configuration man page that
+  # renderer builds. nftables and the firewall stay enabled.
+  documentation.nixos.enable = false;
+
   # ---- Minimal conveniences ------------------------------------------------
   environment.systemPackages = with pkgs; [
+    # This nixpkgs vim is the small editor. It does not take an
+    # interpreter-feature argument. vim-full is the package that
+    # defaults that feature on, and this host does not install it.
     vim
     htop
     curl
     dig
     tcpdump
-    git
+    # nixos-26.05 git defaults pythonSupport to true, which installs
+    # the interpreter. rustSupport pulls cargo, and cargo's build
+    # input is that same interpreter. The mail host still has git.
+    # Both flags stay off. The manual stays off in the pins overlay.
+    (git.override {
+      pythonSupport = false;
+      rustSupport = false;
+    })
+    scc
+    fio
+    sysstat
   ];
+
+  # Wrapped Ookla CLI on PATH. Periodic JSON timer stays off.
+  surmount.speedtest.enable = true;
 
   # Journal persistence + size cap live in modules/logging.nix
   # (surmount.logging; Storage=persistent, SystemMaxUse scaffold 1G).

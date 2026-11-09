@@ -15,10 +15,15 @@
   lib,
   pkgs,
   options,
+  # mail-vps passes the flake as specialArgs.self. Module eval omits
+  # that attribute, so the web root stays unset. Do not declare a self
+  # parameter: nixpkgs applyModuleArgs looks the name up even with ? null.
+  specialArgs,
   ...
 }:
 let
   cfg = config.surmount;
+  flakeSelf = specialArgs.self or null;
   inherit (lib) mkIf optional;
   hostPaths = import ./lib/host-paths.nix { inherit lib; };
   localCleartext = import ./lib/local-cleartext.nix { inherit lib; };
@@ -60,6 +65,22 @@ let
     else
       "${pkgs.writeText "surmount-static-vhosts.json" (builtins.toJSON staticVhostsJsonMap)}";
   extraMailHostnamesCsv = lib.concatStringsSep "," (lib.filter (h: h != "") ui.extraMailHostnames);
+  # HTTP-01 webroot. Empty option uses stateDir/acme-http01. The renew
+  # timer and the :80 listener share this directory. Not a Namecheap path.
+  http01Renew = ui.acme.enable && ui.acme.challenge == "http-01";
+  effectiveHttp01Webroot =
+    if ui.acme.http01Webroot != "" then ui.acme.http01Webroot else "${cfg.stateDir}/acme-http01";
+  # Union status.{primaryDomain} onto a non-empty ACME identifier list so the
+  # systems dashboard Host is on the certificate hostname set for this edge.
+  # Measured 2026-11-03 from horizon: status.surmount.systems has the same
+  # A record as the apex, mail, and services names (no AAAA on any of them),
+  # and port 80 returns 308 to https://status.surmount.systems/. That name
+  # stays on this order. Do not record addresses in this file.
+  acmeDomains =
+    let
+      statusHost = lib.optional (cfg.primaryDomain != "") "status.${cfg.primaryDomain}";
+    in
+    if ui.acme.domains == [ ] then [ ] else lib.unique (ui.acme.domains ++ statusHost);
   hs = cfg.artiHiddenService;
   ac = cfg.accessControl;
   vw = cfg.vaultwarden;
@@ -172,6 +193,8 @@ let
     "SURMOUNT_PRIMARY_DOMAIN=${cfg.primaryDomain}"
     "SURMOUNT_MAIL_HOSTNAME=${cfg.mailHostname}"
     "SURMOUNT_SERVICES_HOSTNAME=${cfg.servicesHostname}"
+    # status.{primaryDomain} is the public systems dashboard Host (Rust-derived).
+    # ACME identifiers also union that name (acmeDomains) when a list is set.
     # Stalwart 0.16 default HTTP management listener.
     "SURMOUNT_STALWART_URL=http://127.0.0.1:8080"
     "SURMOUNT_REDIRECT_HTTP_TO_HTTPS=${if ui.redirectHttpToHttps then "true" else "false"}"
@@ -201,9 +224,7 @@ let
     ]
     ++ optional (ui.acme.directory != "") "SURMOUNT_ACME_DIRECTORY=${ui.acme.directory}"
     ++ optional (ui.acme.email != "") "SURMOUNT_ACME_EMAIL=${ui.acme.email}"
-    ++ optional (
-      ui.acme.domains != [ ]
-    ) "SURMOUNT_ACME_DOMAINS=${lib.concatStringsSep "," ui.acme.domains}"
+    ++ optional (acmeDomains != [ ]) "SURMOUNT_ACME_DOMAINS=${lib.concatStringsSep "," acmeDomains}"
     ++ optional (
       ui.acme.accountCredentialsPath != ""
     ) "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH=${ui.acme.accountCredentialsPath}"
@@ -211,6 +232,9 @@ let
     ++ optional (ui.acme.dnsProvider == "external-hook") (
       "SURMOUNT_ACME_DNS_HOOK_TIMEOUT_SECS=${toString ui.acme.dnsHookTimeoutSecs}"
     )
+    ++ optional (
+      ui.acme.challenge == "http-01"
+    ) "SURMOUNT_ACME_HTTP01_WEBROOT=${effectiveHttp01Webroot}"
   )
   ++ optional redirectListenActive "SURMOUNT_HTTP_REDIRECT_LISTEN=${ui.httpRedirectListen}"
   ++ optional localCleartextActive "SURMOUNT_LOCAL_CLEARTEXT_LISTEN=${effectiveLocalCleartext}"
@@ -289,6 +313,26 @@ let
     ++ optional ac.nftHelper "SURMOUNT_BAN_NFT_HELPER_SOCK=/run/surmount/nft-ban-helper.sock"
   );
 
+  # acme-renew is not an HTTP route. It loads ACME and TLS only.
+  # Do not pass nostr auth settings and do not attach the session secret
+  # file. The UI unit keeps both. The secret stays a host file, not a
+  # Nix store copy.
+  renewDropsAuthLine =
+    line:
+    let
+      stripped = lib.removePrefix "'" line;
+      key = builtins.head (lib.splitString "=" stripped);
+    in
+    !(
+      lib.hasPrefix "SURMOUNT_AUTH_" key
+      || lib.hasPrefix "SURMOUNT_SESSION_" key
+      || lib.hasPrefix "SURMOUNT_NOSTR_" key
+      || lib.hasPrefix "SURMOUNT_NIP98_" key
+      || key == "SURMOUNT_PUBLIC_BASE_URL"
+      || key == "SURMOUNT_ALLOW_PUBLIC_AUTH_OFF"
+    );
+  renewEnvList = lib.filter renewDropsAuthLine envList;
+
   # Non-TLS host secret paths stay read-only. TLS PEMs are read-only when
   # ACME is off; when ACME is on the binary may write cert/key + account JSON.
   # ProtectSystem=strict: create-on-issue needs **parent directories** writable
@@ -334,6 +378,9 @@ let
     ++ lib.optionals hs.enable [
       hs.onionServiceStateDir
       "${hs.stateDir}/published-hostnames"
+    ]
+    ++ lib.optionals (sploraWebRoot != "") [
+      sploraWebRoot
     ]
   );
 
@@ -432,10 +479,18 @@ let
     ExecStart = "${pkg}/bin/surmount-management-ui";
     Restart = "on-failure";
     RestartSec = "5s";
+    # Ordinary CFS. Not fifo, not rr, not idle I/O, not realtime I/O.
+    Nice = -19;
     SyslogIdentifier = "surmount-management-ui";
     StandardOutput = "journal";
     StandardError = "journal";
-    Environment = envList;
+    # Crate debug is already in RUST_LOG. Do not add rustls=debug (handshake
+    # failures are our warn events; rustls debug can include key material).
+    # Burst keeps http_request and tls_handshake_failed during a scan.
+    LogRateLimitIntervalSec = "30s";
+    LogRateLimitBurst = 50000;
+    Environment = envList
+      ++ optional (sploraWebRoot != "") "SURMOUNT_SPLORA_WEB_ROOT=${sploraWebRoot}";
     NoNewPrivileges = true;
     PrivateTmp = true;
     ProtectSystem = "strict";
@@ -513,6 +568,65 @@ let
   # host generation includes the site without a mutable /var/lib copy.
   # Operator may still set apexPublicRoot to a host directory.
   packagedPublicSite = if pkgs ? surmount-public-site then "${pkgs.surmount-public-site}" else "";
+
+  # Trunk client. Flake attribute packages.<system>.splora-web
+  # (nix/packages/splora-web.nix). Overlay name wins when present.
+  # Otherwise the mail host uses specialArgs.self. Not a store hash.
+  # Empty when neither is in scope, so module eval without the flake
+  # does not instantiate the Trunk build.
+  sploraWebPkg =
+    if pkgs ? splora-web then
+      pkgs.splora-web
+    else if flakeSelf == null then
+      null
+    else
+      (flakeSelf.packages.${pkgs.stdenv.hostPlatform.system} or { }).splora-web or null;
+  sploraWebRoot = if sploraWebPkg == null then "" else "${sploraWebPkg}";
+
+  # Oneshot script the timer execs. builtins.readFile of this path is the
+  # hermetic proof the unit names the management UI and the PEM paths.
+  # No Namecheap client, no API token, no DNS hook.
+  certRenewScript = pkgs.writeShellScript "surmount-cert-renew" ''
+    set -eu
+    # acme-renew loads ACME and TLS only. It does not read the session secret.
+    cert=${lib.escapeShellArg ui.tlsCertPath}
+    key=${lib.escapeShellArg ui.tlsKeyPath}
+    stamp=${lib.escapeShellArg "${effectiveHttp01Webroot}/.renewed"}
+    before=$(${pkgs.coreutils}/bin/stat -c %Y "$cert" 2>/dev/null || echo missing)
+    ${pkg}/bin/surmount-management-ui acme-renew
+    after=$(${pkgs.coreutils}/bin/stat -c %Y "$cert" 2>/dev/null || echo missing)
+    if [ "$before" != "$after" ]; then
+      # surmount-management-ui wrote the TLS PEMs this host presents.
+      # Leave an existing stamp in place so a failed root post can retry.
+      ${pkgs.coreutils}/bin/touch "$stamp"
+    fi
+  '';
+  # Root post-step. The "+" prefix ignores this unit's sandbox, so root can
+  # chown the mail copies and restart units. surmount-ui cannot do that.
+  # Copy only when the stamp says the PEM mtime changed. Match
+  # surmount-mail-tls-copy: cert 0640, key 0600, owner stalwart-mail.
+  # Do not delete the source PEMs. A failed order never creates the stamp.
+  certRenewRestartScript = pkgs.writeShellScript "surmount-cert-renew-restart" ''
+    set -eu
+    stamp=${lib.escapeShellArg "${effectiveHttp01Webroot}/.renewed"}
+    srcCert=${lib.escapeShellArg ui.tlsCertPath}
+    srcKey=${lib.escapeShellArg ui.tlsKeyPath}
+    dst=${lib.escapeShellArg "${cfg.secrets.durableMaterialDir}/mail/tls"}
+    if [ -f "$stamp" ]; then
+      if [ ! -f "$srcCert" ] || [ ! -f "$srcKey" ]; then
+        echo "surmount-cert-renew: refusing to copy mail TLS PEMs; source missing" >&2
+        exit 1
+      fi
+      ${pkgs.coreutils}/bin/mkdir -p "$dst"
+      ${pkgs.coreutils}/bin/chmod 0750 "$dst"
+      ${pkgs.coreutils}/bin/chown stalwart-mail:stalwart-mail "$dst" || true
+      ${pkgs.coreutils}/bin/install -o stalwart-mail -g stalwart-mail -m 0640 "$srcCert" "$dst/cert.pem"
+      ${pkgs.coreutils}/bin/install -o stalwart-mail -g stalwart-mail -m 0600 "$srcKey" "$dst/key.pem"
+      ${pkgs.systemd}/bin/systemctl restart stalwart-mail.service
+      ${pkgs.systemd}/bin/systemctl try-restart surmount-management-ui.service
+      ${pkgs.coreutils}/bin/rm -f "$stamp"
+    fi
+  '';
 in
 {
   config = mkIf (cfg.enable && ui.enable) {
@@ -598,9 +712,28 @@ in
           surmount.managementUi.acme.enable is true but incomplete: require
           non-empty acme.directory, acme.email, acme.domains, acme.accountCredentialsPath,
           listenMode=https, and tlsCertPath/tlsKeyPath (write targets for PEMs).
-          Default is acme.enable=false. Prefer staging directory first. Account
-          credentials and PEMs stay on the host (never in git). HTTP-01 on
-          product :80 is parked; only dns-01 is wired.
+          Default is acme.enable=false. Account credentials and PEMs stay on
+          the host (never in git). http-01 renews on this host. dns-01 still
+          uses the operator DNS hook. Namecheap API credentials are not a
+          module input.
+        '';
+      }
+      {
+        assertion =
+          !http01Renew
+          || (
+            ui.acme.dnsProvider == "none"
+            && redirectListenActive
+            && hostPaths.strictHostPath effectiveHttp01Webroot
+            && hostPaths.strictHostPath ui.tlsCertPath
+            && hostPaths.strictHostPath ui.tlsKeyPath
+          );
+        message = ''
+          surmount.managementUi.acme.challenge is http-01 but the host renew
+          path is incomplete. Require dnsProvider = "none" (no Namecheap hook
+          on this host), redirectHttpToHttps with a listen address so port 80
+          can serve /.well-known/acme-challenge/, and strict absolute paths for
+          the HTTP-01 webroot, tlsCertPath, and tlsKeyPath.
         '';
       }
       {
@@ -852,21 +985,95 @@ in
         serviceConfig = serviceConfig;
       };
     }
+    // lib.optionalAttrs http01Renew {
+      surmount-cert-renew = {
+        description = "Renew the Let's Encrypt certificate this host presents (HTTP-01)";
+        after = [
+          "network-online.target"
+          "surmount-management-ui.service"
+        ];
+        wants = [
+          "network-online.target"
+          "surmount-management-ui.service"
+        ];
+        serviceConfig = {
+          Type = "oneshot";
+          User = "surmount-ui";
+          Group = "surmount-ui";
+          ExecStart = "${certRenewScript}";
+          # Privileged prefix so root can restart the UI after a write.
+          # The ACME client itself stays User=surmount-ui above.
+          ExecStartPost = "+${certRenewRestartScript}";
+          TimeoutStartSec = "15min";
+          Nice = 0;
+          Environment = renewEnvList;
+          # NoNewPrivileges stays off so ExecStartPost "+" can restart the
+          # UI as root. The ACME client process is still User=surmount-ui.
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          ProtectKernelTunables = true;
+          ProtectKernelModules = true;
+          ProtectControlGroups = true;
+          RestrictAddressFamilies = [
+            "AF_INET"
+            "AF_INET6"
+            "AF_UNIX"
+          ];
+          RestrictNamespaces = true;
+          LockPersonality = true;
+          MemoryDenyWriteExecute = true;
+          RestrictRealtime = true;
+          SystemCallArchitectures = "native";
+          ReadWritePaths = acmeWritePaths ++ [ effectiveHttp01Webroot ];
+        };
+      };
+    }
+    # Static unit names. Reading config.services.splora.instances while
+    # defining systemd.services recurses. MemoryMax only; Nice stays on
+    # the indexer wrap. The five names are the default indexer units,
+    # including splora-mainnet. splora-queue stays on its own gate.
     // lib.optionalAttrs (sploraServiceOn && splora.unitsMemoryMax != null) (
       let
         cap = {
-          serviceConfig.MemoryMax = splora.unitsMemoryMax;
+          serviceConfig = {
+            MemoryMax = splora.unitsMemoryMax;
+            # Same gate as the memory cap. Does not enable the unit.
+            LogRateLimitIntervalSec = "30s";
+            LogRateLimitBurst = 50000;
+          };
         };
-        inst = lib.filterAttrs (_: i: i.enable or false) config.services.splora.instances;
       in
       lib.optionalAttrs (config.services.splora.queueEnable or false) {
         splora-queue = cap;
       }
-      // lib.mapAttrs' (name: _: lib.nameValuePair "splora-${name}" cap) inst
+      // lib.genAttrs [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+      ] (_: cap)
       // lib.optionalAttrs (config.services.splora.popularScripts.enable or false) {
         splora-popular-scripts = cap;
       }
     );
+
+    systemd.timers = lib.mkIf http01Renew {
+      surmount-cert-renew = {
+        description = "Renew the Let's Encrypt certificate this host presents (HTTP-01)";
+        wantedBy = [ "timers.target" ];
+        timerConfig = {
+          OnCalendar = [
+            "*-*-* 03:17:00"
+            "*-*-* 15:17:00"
+          ];
+          Persistent = true;
+          RandomizedDelaySec = "30min";
+          Unit = "surmount-cert-renew.service";
+        };
+      };
+    };
 
     # State dir always (0755 so surmount-ui can traverse to durable Domain B
     # under stateDir/secrets; H2b). Durable Domain B leaves for runtime secrets
@@ -909,6 +1116,11 @@ in
           ++ (lib.optional (builtins.any underDurable acmeParentDirs) "d ${durableRoot} 0755 root root - -");
       in
       rootRules ++ parentRules
-    );
+    )
+    ++ lib.optionals http01Renew [
+      "d ${effectiveHttp01Webroot} 0750 surmount-ui surmount-ui - -"
+      "d ${effectiveHttp01Webroot}/.well-known 0750 surmount-ui surmount-ui - -"
+      "d ${effectiveHttp01Webroot}/.well-known/acme-challenge 0750 surmount-ui surmount-ui - -"
+    ];
   };
 }

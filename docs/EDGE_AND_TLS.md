@@ -4,7 +4,16 @@ How HTTPS reaches the management UI and (optionally) Stalwart HTTP. Mail
 protocol ports are **not** edge-proxied; they terminate on Stalwart. See
 [STACK.md](STACK.md) for the full path map.
 
-**Last updated:** 2026-09-22 (one public Host `splora.surmount.systems`.
+**Last updated:** 2026-10-28 (Up on this page means that service's socket accepted a connection.)
+Prior 2026-10-24 (Host `status.surmount.systems` is the public
+systems dashboard on the product Axum HTTPS edge, not nginx and not the
+operator console. Names and public hosts are https links. Status text
+comes from systemd ActiveState / HTTP samples in ordinary English.
+Host uptime comes from `/proc/uptime`. The inventory names mail,
+services, this dashboard, Arti, SSH, and Splora testnet units that
+exist; it does not invent Vaultwarden, Lake, or Splora mainnet.
+Intended certificate hostname list includes `status.surmount.systems`.)
+Prior 2026-09-22 (one public Host `splora.surmount.systems`.
 Network paths on that Host, not per-network esplora Hosts. The network
 prefix is stripped before the Unix socket. The query string is kept.
 `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is the WebSocket upgrade.
@@ -31,9 +40,12 @@ leftover Namecheap clicks. Do not MX-flip Baxter.) Prior 2026-09-03 (HTTP/3 NIP-
 hostnames: six extra static zones apex+www plus surmount apex, www,
 mail, services, mta-sts, plus **mail.cryptoquick.com** for IMAP/SMTP.
 Extra-vhost HTTPS live for those six. `cryptoquick.com` apex/www stayed
-off that certificate that day. Prior 2026-08-18: laptop Let's Encrypt renew is
+off that certificate that day. Prior 2026-08-18: laptop Let's Encrypt renew was
 `just laptop-renew-cert -- --check|--live --directory production`.
-`--live` issues only when due. Host ACME stays off. Stalwart 0.16.15
+`--live` issued only when due. That horizon command is not required for
+the certificate to keep renewing. surmount-1 renews the Let's Encrypt
+production certificate it presents, using HTTP-01 on surmount-1.
+horizon does not have to stay online for that renewal. Stalwart 0.16.15
 query resolves certificate hostnames plus id.)
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
@@ -56,7 +68,7 @@ query resolves certificate hostnames plus id.)
 | Reverse proxy / routing | To Axum/Leptos UI; optional Stalwart HTTP path |
 | Local IPC | Prefer **Unix domain sockets** to backends, not TCP localhost |
 | Certificates | Automated public CA is common today; **not** locked to ACME-only (TLS research) |
-| HTTP :80 | Automatically and gracefully upgrade/redirect to :443. Production: **port 80 free** for product redirect-only bind (operator 2026-08-02). ACME HTTP-01 on product :80 **parked** (Q-EDGE); dual-run nginx may still use :80 for ACME |
+| HTTP :80 | Automatically and gracefully upgrade/redirect to :443. Production: **port 80 free** for product redirect-only bind (operator 2026-08-02). When host renewal is on, HTTP-01 on surmount-1 serves `/.well-known/acme-challenge/` on that listener and refreshes the Let's Encrypt production certificate surmount-1 already presents. horizon does not have to stay online for that renewal. Dual-run nginx may still use :80 for ACME while escape is on. |
 | TLS versions | No SSLv3, no TLS 1.0/1.1; **prefer TLS 1.3** (1.2 only if measured client need) |
 | PQ where supported | Enable hybrid PQ KEX (e.g. X25519MLKEM768) when rustls/aws-lc-rs path allows; see PQC research |
 | Rate limiting | Request flood protection at edge and/or app (tower-governor or equivalent) |
@@ -171,7 +183,7 @@ docs or module-eval alone.
 
 - `services.nginx` + `security.acme` only when `surmount.web.enable = true`
 - Vhosts for `services.surmount.systems`, `mail.surmount.systems`, apex, www
-- Proxy `/` -> management UI; `/stalwart-admin/` -> Stalwart HTTP (bootstrap)
+- Proxy `/` -> management UI. No public `/stalwart-admin/` path (removed; SSH tunnel to loopback Stalwart HTTP is the bootstrap).
 - Recommended TLS/proxy/gzip settings enabled
 - `clientMaxBodySize` default 25m (mail bodies go through Stalwart, not the edge)
 - Backends today are **TCP loopback** (scaffold). Target local hops are **UDS**.
@@ -257,9 +269,11 @@ nginx features. Module file remains until operators no longer need dual-run.
 - HTTP->HTTPS redirect helpers + host allowlist; optional **redirect-only**
   plain HTTP listener when `redirectHttpToHttps` + `httpRedirectListen`
   (default `0.0.0.0:80`). No cleartext API on that port. Eval mutex vs
-  `web.enable` (nginx dual-run owns :80 ACME/redirect). **ACME HTTP-01 on
-  product :80 is parked** (Q-EDGE; free :80 is redirect-only, not an invent of
-  ACME-on-product-:80). See RESIDUAL.md.
+  `web.enable` (nginx dual-run owns :80 ACME/redirect while that escape is on).
+  When host renewal is on, HTTP-01 on surmount-1 serves the challenge on
+  that product port 80 listener and refreshes the Let's Encrypt production
+  certificate surmount-1 already presents. horizon does not have to stay
+  online for that renewal. Public module `acme.enable` stays false.
 - **Apex / www public main site vs services console (2026-08-12; document
   root 2026-08-14; SurmountSystems/site 2026-08-18):** allowlisted Host
   `primaryDomain` or `www.<primaryDomain>` is the **public** main site.
@@ -286,8 +300,28 @@ nginx features. Module file remains until operators no longer need dual-run.
   nonce CSP.
   Open-redirect safe: empty allowlist or non-listed Host never builds a
   Location from untrusted input. Default allowlist: services, apex, www,
-  mail, mta-sts.<primary>, plus any extra static Hosts from
+  mail, mta-sts.<primary>, status.<primary>, plus any extra static Hosts from
   `SURMOUNT_STATIC_VHOSTS` / `SURMOUNT_STATIC_VHOSTS_FILE`.
+- **Systems dashboard Host (2026-10-24):** `status.{primaryDomain}`
+  (production: `status.surmount.systems`) is a public systems status
+  surface on this same Axum process. GET `/` is HTML; GET `/status.json`
+  is JSON. Named fields: `surface`, `service`, `version`, `host`,
+  `primary_domain`, `uptime`, and `systems` rows including `mail`,
+  `edge`, `tls`, `mta_sts`, `console`, `status`, `site`, `arti`, `sshd`,
+  and Splora testnet names (`splora-testnet3`, `splora-testnet4`,
+  `splora-mutinynet`, `splora-liquid`). Names and public hosts are
+  clickable `https://` hostname links (mail, services, apex, status,
+  `splora.{primary}` testnet paths, MTA-STS policy). Status text is
+  ordinary English from systemd ActiveState / SubState and optional HTTP
+  samples (running, failed, inactive, listening, HTTP 502), not a
+  constant ok and not RAM/disk/IP. Up on this page means that service's socket accepted a connection.
+  A Splora indexer whose unit is active and whose proxy socket is absent is inactive, not running.
+  Host uptime is `/proc/uptime` formatted
+  as seconds, minutes (at most 60 minutes), N.N hours (through 24 hours),
+  or N.N days. Not the operator console. `/health` and `/api/health`
+  stay edge probes. Other `/api/*` is 404. Laptop DNS-01 intended leaf
+  includes `status.surmount.systems`. Live HTTPS after switch is
+  operator-owned. Do not put nginx back as product edge.
 - **Extra static Hosts (DS3018xs trees, 2026-08-19):** proven public HTML
   sites are served from the same Axum process via a Host -> document root
   map (`SURMOUNT_STATIC_VHOSTS` JSON, or Nix
@@ -297,7 +331,8 @@ nginx features. Module file remains until operators no longer need dual-run.
   never the operator console. Do **not** overload `SURMOUNT_APEX_PUBLIC_ROOT`.
   `services.surmount.systems` stays the operator console. Extra Hosts
   each get a distinct v3 onion (2026-09-11), not a shared onion.
-  Onion-Location for extra Hosts, apex/www, and `mta-sts.{primary}` is
+  Onion-Location for extra Hosts, apex/www, `mta-sts.{primary}`, and
+  `status.{primary}` is
   `http://{that-host-onion}{path}` (empty path becomes `/`). The services
   onion root stays the console. Mail stays unmapped. Do not put nginx
   back as product edge.
@@ -311,23 +346,28 @@ when those indexer units run.
 One public Host: `splora.surmount.systems`. The sample proxy map does not
 list `esplora.surmount.systems`, `testnet3.esplora.surmount.systems`,
 `testnet4.esplora.surmount.systems`, `mutinynet.esplora.surmount.systems`,
-or `liquid.esplora.surmount.systems`. The Rust explorer UI belongs to
-Splora, not this repo. Do not add block, transaction, or address pages.
+or `liquid.esplora.surmount.systems`. The Leptos explorer route table belongs to Splora
+`frontend/web/src/views.rs` (`App`). This Axum process serves that table
+as SSR HTML on `/testnet/` (testnet3), `/testnet4/`, `/signet/`,
+`/mutinynet/`, and `/liquid/`. It does not serve a mainnet frontend on
+`/api/`. The Splora crate mounts `App` with `leptos::mount::mount_to_body`
+on wasm32 only. This server does not start a second HTTP server, and it
+does not build that wasm crate.
 
-The network prefix is stripped before the Unix socket. The query string
-is kept. `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is the WebSocket
+The network prefix is stripped before the Unix socket for indexer REST.
+The query string is kept. `/{network}/api/v1/ws` (mainnet: `/api/v1/ws`) is the WebSocket
 upgrade. `POST /splora/queue` stays the queue and is not a network prefix.
 `GET /` on that host is a short same-host path list (`/api/`, `/testnet/`,
 `/testnet4/`, `/signet/`, `/mutinynet/`, `/liquid/`), not an explorer.
 
 | Public path on `splora.surmount.systems` | Socket | Notes |
 |------------------------------------------|--------|-------|
-| `/api` and `/api/...` | mainnet | 404 while the mainnet indexer is off. |
-| `/testnet` and `/testnet/...` | testnet3 | Public path is `/testnet`, not `/testnet3`. |
-| `/testnet4` and `/testnet4/...` | testnet4 | |
-| `/signet` and `/signet/...` | mutinynet | No redirect between `/signet` and `/mutinynet`. |
-| `/mutinynet` and `/mutinynet/...` | the same mutinynet socket | No redirect between them. |
-| `/liquid` and `/liquid/...` | liquid | |
+| `/api` and `/api/...` | mainnet | 404 while the mainnet indexer is off. Not a Leptos frontend. |
+| `/testnet` and `/testnet/...` | testnet3 | REST `/api` uses the socket. Screen routes are Leptos HTML. Not `/testnet3`. |
+| `/testnet4` and `/testnet4/...` | testnet4 | REST `/api` uses the socket. Screen routes are Leptos HTML. |
+| `/signet` and `/signet/...` | mutinynet | Same mutinynet frontend as `/mutinynet`. No redirect. |
+| `/mutinynet` and `/mutinynet/...` | the same mutinynet socket | REST `/api` uses the socket. Screen routes are Leptos HTML. No redirect. |
+| `/liquid` and `/liquid/...` | liquid | REST `/api` uses the socket. Screen routes are Leptos HTML. |
 
 Mempool / Esplora REST is the indexer process on a Unix socket. It does
 **not** require extra public Hosts, certificate names, or HTTP/3. Unix
@@ -344,13 +384,17 @@ to each Splora Unix socket is still HTTP/1.1. A client that arrived on
 HTTP/3 does not make the indexer speak HTTP/3. Splora does not listen
 on UDP.
 
-Under a network prefix, a remainder that is not the REST API is forwarded
-to that network Unix socket. This edge does not answer it with 404 and
-does not render it. A REST remainder still drops a leading `/api`, except
+Under a network prefix, a remainder of `/api` or `/api/...` is still
+forwarded to that network Unix socket. A remainder that matches the
+Splora Leptos `App` router is HTML from this Axum process and is not
+forwarded. Any other remainder is 404. `/docs/api/...` is a screen, not
+indexer REST. A REST remainder still drops a leading `/api`, except
 exact `/api/v1/ws`, which stays and is the WebSocket upgrade. `/api` on
-mainnet is 404 only while the mainnet indexer is off. Public
-`/testnet3/...` is not a prefix. The Electrum newline socket is not
-proxied (fail-closed if configured).
+mainnet is 404 only while the mainnet indexer is off, and it is not a
+Leptos frontend. Public `/testnet3/...` is not a prefix. `/signet` and
+`/mutinynet` both serve the mutinynet frontend. There is no redirect
+between them. The Electrum newline socket is not proxied (fail-closed
+if configured).
 
   **Live in browsers (2026-08-20):** Namecheap NS, exclusive A matching
   this host, HTTPS **200**, the Let's Encrypt certificate this host presents covers apex+www, packaged
@@ -409,7 +453,7 @@ proxied (fail-closed if configured).
   whitelist). Then add FQDNs to private `acme_domains` and
   `just laptop-renew-cert -- --issue --directory production --host-profile ~/.local/share/surmount/host-profile.toml --install --restart-ui --target USER@HOST`.
   `--live` does **not** detect missing certificate hostnames (expiry
-  only). Do not start host in-process ACME.
+  only). That horizon issue command is not what keeps the certificate renewing.
 
   Extra-zone DNS-01 (cryptoquick.com, yiffa.app, and other Namecheap
   zones besides surmount.systems) cannot use the one-SLD Namecheap hook
@@ -423,7 +467,9 @@ proxied (fail-closed if configured).
   `--issue --directory production` (Let's Encrypt production). Do **not**
   put unowned, archived, or still-Cloudflare zones on `--domains` until
   their nameservers are Namecheap. Extra certificate hostnames belong
-  on a leaf only after that NS cut. Host in-process ACME stays off.
+  on a leaf only after that NS cut. surmount-1 renews with HTTP-01.
+  horizon does not have to stay online for that renewal. Namecheap API
+  credentials stay off surmount-1.
 - **MTA-STS policy path:** `GET /.well-known/mta-sts.txt` when `mtaStsMode`
   is `testing` or `enforce` (default **off**). Served only for Host
   `mta-sts.<primaryDomain>` on the allowlist (HTTP/2 uses Host or URI
@@ -437,7 +483,11 @@ proxied (fail-closed if configured).
   optional DNS-01 path inside management-ui via **`instant-acme` 0.8** (rustls
   0.23 / aws-lc-rs). **Default off** (`surmount.managementUi.acme.enable =
   false` / no `SURMOUNT_ACME_ENABLE`). Static host PEM load remains first-class
-  (not ACME-only forever).
+  (not ACME-only forever). Public module default stays false. On surmount-1,
+  the private overlay on horizon turns host renewal on. HTTP-01 refreshes
+  the Let's Encrypt production PEMs that host presents. horizon does not
+  have to stay online for that renewal. Namecheap API credentials stay off
+  surmount-1.
   - **Reuse / early renew:** reuse PEMs when leaf is not past notAfter, not
     not-yet-valid, certificate hostnames cover configured domains, **and** remaining lifetime
     is at least `SURMOUNT_ACME_RENEW_DAYS_BEFORE_EXPIRY` days (scaffold default
@@ -468,8 +518,11 @@ proxied (fail-closed if configured).
     Hot-reload residual: restart after renew. CI never requires live Let's
     Encrypt. Env: `SURMOUNT_ACME_*`. Ops sketch: [OPS.md](OPS.md).
 - **Production assumption (operator 2026-08-02):** TCP **port 80 is free** on
-  the NixOS box so the product redirect-only listener can bind. That free
-  :80 is for **redirect/upgrade only**, not an invent of ACME-on-product-:80.
+  the NixOS box so the product redirect-only listener can bind. When host
+  renewal is on, that same listener on surmount-1 also serves HTTP-01
+  `/.well-known/acme-challenge/` and the timer refreshes the Let's Encrypt
+  production PEMs that host presents. horizon does not have to stay online
+  for that renewal. Public module `acme.enable` stays false.
   Day-one ops: [OPS.md](OPS.md).
 - Fixed-window rate limit; when peer is loopback, trust **X-Real-IP only**
   (useful behind dual-run nginx). X-Forwarded-For is ignored for rate-limit
@@ -712,7 +765,7 @@ Stalwart HTTP without evidence.
 | **Cons** | We own multi-vhost, renewals, edge cases, security updates of *our* edge binary; more code than a packaged proxy |
 | **NixOS** | Package with crane like management-ui; simple systemd unit on :80/:443 |
 | **UDS** | Natural (hyper/axum backend client to UDS) |
-| **Certs** | Static host PEMs always supported. **In-process** path uses **instant-acme** (DNS-01, default off). Dual-run may still use host `security.acme`. **Not locked** ACME-only or to a single CA. |
+| **Certs** | Static host PEMs always supported. **In-process** path uses **instant-acme**. Public `acme.enable` stays false. On surmount-1, HTTP-01 renews the Let's Encrypt production certificate that host presents. horizon does not have to stay online for that renewal. DNS-01 remains the external-hook path and stays off that host. Dual-run may still use host `security.acme`. **Not locked** ACME-only or to a single CA. |
 | **Verdict** | **Default path** per operator follow-up 2026-07-30 |
 
 ### Rama / Pingora / other Rust proxy frameworks
@@ -741,7 +794,7 @@ Stalwart HTTP without evidence.
 |---------|--------|
 | **Now (tree default)** | **Axum-first** management-ui rustls (`listenMode=https` + host PEMs); `surmount.web.enable` default **false** |
 | **Dual-run escape** | `surmount.web.enable = true` + UI `listenMode=http` loopback; nginx + `security.acme` (**transitional-to-delete**) |
-| **Production :80** | **Free** for product **redirect-only** bind (operator 2026-08-02). Not ACME-on-product-:80 (parked; Q-EDGE) |
+| **Production :80** | **Free** for product redirect-only bind (operator 2026-08-02). HTTP-01 on surmount-1 uses that listener for Let's Encrypt production renewal. horizon does not have to stay online for that renewal. |
 | **Host residual** | Public :443 + MemoryDenyWriteExecute (no writable+executable memory) + cert path (Q-EDGE-1 / Q-CA-*); see RESIDUAL.md host tracks. Not claimed done from eval or local e2e alone |
 | **Local backends** | Move UI (and proxied Stalwart HTTP when possible) toward **Unix domain sockets** |
 | **Not target** | Caddy/Sozu/nginx as product identity |
@@ -767,8 +820,8 @@ proof, not flipping the module default again.
    Module asserts against dual-run + public UI https (:443 or non-loopback).
 6. When dual-run is unused: remove nginx module path; update STACK, OPS,
    hygiene, architecture-review.
-7. Lock down or remove `/stalwart-admin/` public path once Rust admin covers
-   bootstrap needs.
+7. The public `/stalwart-admin/` path was removed from `modules/web.nix`.
+   Bootstrap is an SSH tunnel to the loopback Stalwart HTTP listener.
 
 ### Host end-to-end recipes (operator)
 
@@ -796,7 +849,7 @@ nix run .#e2e-host
 
 | Track | What host mode checks | Notes |
 |-------|----------------------|--------|
-| **1. HTTPS + hardening** | **`BASE_URL` required** (FAIL if unset); health 200; UI unit active; `MemoryDenyWriteExecute=yes` (no writable+executable memory); TLS check (handshake; **expired cert fails**); nginx inactive; UI ambient **and** bounding set have no CAP_NET_ADMIN | Operator PEMs on host; key not group/world readable; external PEMs lean until Q-EDGE/Q-CA answered; ACME-on-product-:80 parked |
+| **1. HTTPS + hardening** | **`BASE_URL` required** (FAIL if unset); health 200; UI unit active; `MemoryDenyWriteExecute=yes` (no writable+executable memory); TLS check (handshake; **expired cert fails**); nginx inactive; UI ambient **and** bounding set have no CAP_NET_ADMIN | Operator PEMs on host; key not group/world readable; external PEMs lean until Q-EDGE/Q-CA answered; HTTP-01 renew on surmount-1; horizon does not have to stay online |
 | **2. Arti** | `surmount-arti-hidden-service` (or override) active; `User=surmount-arti`; optional onion fetch via `SURMOUNT_E2E_ONION` + `TOR_SOCKS` | **Unit active != published.** HS keys under `onionServiceStateDir`, never in git. Cleartext local backend when UI is https-only. Do not invent Q-ARTI-2/3 |
 | **3. Ban / kernel firewall** | Helper socket + helper socket unit; set **preflight** (exists only, not drop); **`LAB_IP` required** and must appear in `surmount-ban4` (FAIL if unset/absent) unless `SKIP_BAN=1` | CAP_NET_ADMIN on **helper only**. Summary `ban_drop=UNPROVEN` (membership != traffic drop). Prove drop + cleanup out-of-band. Q-ACL-1..6 parked |
 
@@ -835,7 +888,7 @@ Ids: **Q-CA-1**, **Q-CA-2** in [research/pqconnect-and-pqc.md](research/pqconnec
 
 | Rule | Lean |
 |------|------|
-| :80 -> :443 | Graceful redirect/upgrade on free production :80 (redirect-only product path). ACME HTTP-01 may share :80 only on dual-run nginx or a future Q-EDGE answer; **not** invent ACME-on-product-:80 |
+| :80 -> :443 | Graceful redirect/upgrade on free production :80 (redirect-only product path). HTTP-01 on surmount-1 also serves the challenge on that listener and renews the Let's Encrypt production certificate. horizon does not have to stay online for that renewal. |
 | Insecure protocols | Disabled: SSLv3, TLS 1.0, TLS 1.1 |
 | Prefer | TLS 1.3 |
 | PQ KEX on Axum/rustls | **First-class (D1):** **aws-lc-rs** + `prefer-post-quantum` (X25519MLKEM768 first in default provider). Hermetic unit tests pin group config. **Live host hybrid negotiation is residual** until measured post-B1 (do not claim from local e2e alone). Probe: `nix run .#surmount-tls-hybrid` / `just check-tls-hybrid` (requires `SURMOUNT_E2E_BASE_URL`; exit 2 BLOCKED if unset) |

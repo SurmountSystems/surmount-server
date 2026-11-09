@@ -10,6 +10,9 @@
 # GHA: .github/workflows/ci.yml job display name is `just ci` (required-check footgun)
 # End-to-end: nix run .#e2e (local) / nix run .#e2e-host (env-gated; never in ci)
 # Operator bins: nix run .#<app> -- args (just aliases only nix-run).
+# Speedtest: nix run .#speedtest (Ookla CLI; --accept-license --accept-gdpr).
+# Module: surmount.speedtest.enable ; timer: surmount.speedtest.periodic.enable
+# (default off, interval 6h, JSON to the journal, optional logFile).
 # Heavy: mail-vm-test, mail-vps-eval, stalwart-mail package are optional.
 
 {
@@ -32,10 +35,13 @@
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.7.0 source build).
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.8.0 source build;
+    # cargoHash is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=).
+    # Builder-login Lean is NOT pkgs.lean4 from this channel (4.29.1).
+    # See nix/packages/lean4.nix (official release v4.35.0).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # rustc/cargo for crane packages and the grok-oss build. Not host
+    # rustc/cargo for crane packages and the Arti source build. Not host
     # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable. Not beta 1.100.
     # Master HEAD 27347cc2965498fa03393739031c9ef8ecd72c0a (2026-10-19)
     # still has pkgs/development/compilers/rust/1_99.nix at rustcVersion
@@ -65,6 +71,15 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Rust nixfmt (Mic92/nixfmt-rs), not Haskell pkgs.nixfmt.
+    # Default-branch HEAD c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039,
+    # read 2026-11-05 (commit date 2026-10-14). Do not float main.
+    # Their published byte match is Haskell nixfmt 1.2.0, not this
+    # channel's pkgs.nixfmt 1.5.0. Do not set inputs.nixpkgs.follows:
+    # their flake pins its own nixpkgs, so this repo's gcc.arch overlay
+    # cannot reach the formatter build.
+    nixfmt-rs.url = "github:Mic92/nixfmt-rs/c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039";
+
     # Public static site for apex/www. Fetch the git tree (HTML/CSS/JS).
     # Operator bumps: just publish (nix flake update surmount-site).
     surmount-site = {
@@ -79,29 +94,10 @@
       flake = false;
     };
 
-    # Grok OSS TUI (bin/grok-oss).
-    # Commit pin, not a floating main ref. The repo stays
-    # github:SurmountSystems/grok-oss. This rev is
-    # 182293cb30fa5414dd47686b92708103519b7462. Prior lock was
-    # decb052744d25b63dbca8a95ca65b4ad794b9ad5. Earlier lock was
-    # 7dc3685277bb65c4a0634e91a6e2596e48ad882f (main).
-    # Do not retarget this input to a side branch.
-    # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/182293cb30fa5414dd47686b92708103519b7462";
-
-    # Tau (bin/tau). SurmountSystems/tau master at
-    # d2e1955b0491f538a486007d0d3ab779d95a828f (committer
-    # 2026-10-05T16:18:47Z). This is the operator-synced tree,
-    # not github:dpc/tau. Commit pin, not a floating master ref.
-    # Do not follow their nixpkgs. Their nested nixpkgs-unstable
-    # stays their lock. Default-off NixOS module; package is
-    # fail-closed when enable=true.
-    tau.url = "github:SurmountSystems/tau/d2e1955b0491f538a486007d0d3ab779d95a828f";
-
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
     # JSON-RPC and a cookie; a local bitcoind datadir is not required.
-    splora.url = "github:SurmountSystems/splora/surmount";
+    splora.url = "github:SurmountSystems/splora/28eb3ea077eee02bd8a9c0cba63ee9a611b10e54";
   };
 
   outputs =
@@ -111,10 +107,9 @@
       nixpkgs-rust,
       crane,
       sops-nix,
+      nixfmt-rs,
       surmount-site,
       advisory-db,
-      grok-oss,
-      tau,
       splora,
       ...
     }:
@@ -142,6 +137,26 @@
         import nixpkgs-rust {
           inherit system;
         };
+
+      # nix/overlays.nix exports .pins and .tzdata. Not a second overlay
+      # home. surmountOverlay remains the Surmount package set.
+      # .pins is the Nix 2.35.4 cli (not nix-everything).
+      # .tzdata sets tzdata 2026e doCheck = false (now.ck). The mail-host
+      # nixosSystem below imports .tzdata. mkPkgs does not, so
+      # checks.x86_64-linux.ci does not rebuild CPython for that skip.
+      # .noHaskell replaces nixos-firewall-tool with writeShellScriptBin.
+      # It does not call prev.nixos-firewall-tool. It throws if the mail
+      # host references ghc, haskellPackages, haskell.compiler, hadrian,
+      # ShellCheck, python, python3, or pythonPackages. The firewall-tool
+      # check was the remaining Haskell edge. mkPkgs does not import it.
+      surmountOverlayParts = import ./nix/overlays.nix;
+      surmountPins = surmountOverlayParts.pins;
+      surmountTzdata = surmountOverlayParts.tzdata;
+      surmountNoHaskell = surmountOverlayParts.noHaskell;
+      # glibc configure drops the interpreter from the critical-program
+      # list. Mail-vps only, after noHaskell, so prev.glibc is the
+      # scrubbed one. Locale data is still produced by localedef.
+      glibcHeaderGenOverlay = import ./nix/glibc-header-gen-overlay.nix;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.
       mkArtiRustPlatform =
@@ -187,22 +202,24 @@
         surmount-secrets-install = self.packages.${system}.surmount-secrets-install;
         surmount-secrets-prompt = self.packages.${system}.surmount-secrets-prompt;
         surmount-rekey = self.packages.${system}.surmount-rekey;
-        grok-oss = self.packages.${system}.grok-oss;
-        # Flake-input bin/tau (packages.tau). Not referenced unless
-        # surmount.tau.enable is true. Default-off eval must not
-        # realize this derivation.
-        tau = self.packages.${system}.tau;
+        # Official Lean 4.35.0 linux x86_64. Not channel pkgs.lean4.
+        surmount-lean4 = self.packages.${system}.surmount-lean4;
         # Flake-input packages. Upstream crane src omits .cargo/config.toml
         # (laptop cargo still uses Menhera). Do not wrap src again here.
         splora = self.packages.${system}.splora;
         splora-liquid = self.packages.${system}.splora-liquid;
+        # Wrapped Ookla CLI. Unfree allowlist is only ookla-speedtest.
+        speedtest = self.packages.${system}.speedtest;
       };
 
       mkPkgs =
         system:
         import nixpkgs {
           inherit system;
-          overlays = [ (surmountOverlay system) ];
+          overlays = [
+            surmountPins
+            (surmountOverlay system)
+          ];
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
@@ -336,7 +353,13 @@
             (
               { ... }:
               {
-                nixpkgs.overlays = [ (surmountOverlay "x86_64-linux") ];
+                nixpkgs.overlays = [
+                  surmountPins
+                  surmountTzdata
+                  (surmountOverlay "x86_64-linux")
+                  surmountNoHaskell
+                  glibcHeaderGenOverlay
+                ];
               }
             )
           ]
@@ -373,10 +396,13 @@
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.7.0 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.8.0 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
-          # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
-          # vendor handoff avoids crates.io 403). C deps from host pkgs.
+          # rustPlatform from nixpkgs-rust (MSRV 1.92). The Arti 2.8.0
+          # cargoHash is set to
+          # sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=.
+          # Do not use artiUnstable.cargoDeps (that tree is 2.7.0).
+          # C deps from host pkgs.
           arti-onion-service = pkgs.callPackage ./nix/packages/arti-onion-service.nix {
             rustPlatform = mkArtiRustPlatform system;
             artiUnstable = (mkPkgsRust system).arti;
@@ -444,19 +470,6 @@
           surmount-rekey = pkgs.callPackage ./nix/packages/surmount-rekey.nix {
             inherit craneLib pkgsRust;
           };
-          # Grok OSS from locked github:SurmountSystems/grok-oss (operator-bump).
-          # Not in checks.ci (heavy crane). Module stays default-off.
-          # rustToolchain is nixpkgs-rust 1.99.1, not host pkgs.rustc 1.95.0.
-          grok-oss = pkgs.callPackage ./nix/packages/grok-oss.nix {
-            grokOssFlake = grok-oss;
-            inherit system rustToolchain;
-          };
-          # Tau from locked github:SurmountSystems/tau (operator-synced
-          # tree, not github:dpc/tau). Consume packages.tau only
-          # (upstream nix/pkgs/tau.nix). Not in checks.ci.
-          # Module stays default-off. Fail-closed when enable=true.
-          tau =
-            tau.packages.${system}.tau or (throw "tau flake input has no packages.${system}.tau (fail-closed)");
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
@@ -466,13 +479,43 @@
           splora-liquid =
             sploraInput.packages.${system}.splora-liquid
               or (throw "splora flake input has no packages.${system}.splora-liquid (fail-closed)");
-          # RFC-style nixfmt (same as formatter / checks.ci / devShell).
-          # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt …
-          # nixos-26.05: nixfmt-rfc-style is an alias of pkgs.nixfmt (prefer the latter).
-          nixfmt = pkgs.nixfmt;
+          # Trunk client from frontend/web. cargoHash is the fetchCargoVendor
+          # vendor-staging hash in nix/packages/splora-web.nix. This Nix src
+          # omits the laptop Menhera config. The build phase is offline.
+          splora-web = pkgs.callPackage ./nix/packages/splora-web.nix { inherit craneLib sploraInput; };
+          # Rust nixfmt-rs (Mic92). Not Haskell pkgs.nixfmt and not
+          # nixfmt-rfc-style (that alias is the channel Haskell package).
+          # Upstream attribute is packages.${system}.default. Binary name
+          # is nixfmt. Author claims byte-identical output with Haskell
+          # nixfmt 1.2.0, not with nixos-26.05 pkgs.nixfmt 1.5.0.
+          # Pin c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039, read 2026-11-05.
+          # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt ...
+          nixfmt = nixfmt-rs.packages.${system}.default;
           # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
-          # bootstrap without a host just install. Same pattern as grok-oss.
+          # bootstrap without a host just install.
           just = pkgs.just;
+          # Mutinynet-only bitcoind. Does not replace pkgs.bitcoind.
+          # testnet3 and testnet4 stay on the stock 32.1 package.
+          bitcoind-mutinynet = pkgs.callPackage ./nix/packages/bitcoind-mutinynet.nix { };
+          # Official Lean v4.35.0 linux x86_64 release. Not pkgs.lean4.
+          surmount-lean4 = pkgs.callPackage ./nix/packages/lean4.nix { };
+          # Ookla Speedtest CLI with --accept-license --accept-gdpr.
+          # Unfree predicate is only ookla-speedtest. nix run .#speedtest
+          speedtest =
+            let
+              pkgsOokla = import nixpkgs {
+                inherit system;
+                config.allowUnfreePredicate =
+                  pkg:
+                  builtins.elem (lib.getName pkg) [
+                    "ookla-speedtest"
+                    "speedtest"
+                  ];
+              };
+            in
+            pkgsOokla.callPackage ./nix/packages/speedtest.nix { };
+          # boyter/scc from the host nixpkgs channel.
+          scc = pkgs.scc;
           default = self.packages.${system}.management-ui;
         }
       );
@@ -525,10 +568,6 @@
         surmount-et = {
           type = "app";
           program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-et";
-        };
-        surmount-grok-oss = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-grok-oss";
         };
         surmount-deploy-static-sites = {
           type = "app";
@@ -645,6 +684,14 @@
         surmount-rekey = {
           type = "app";
           program = "${self.packages.${system}.surmount-rekey}/bin/surmount-rekey";
+        };
+        speedtest = {
+          type = "app";
+          program = "${self.packages.${system}.speedtest}/bin/speedtest";
+        };
+        scc = {
+          type = "app";
+          program = "${self.packages.${system}.scc}/bin/scc";
         };
       });
 
@@ -975,7 +1022,10 @@
           nix-fmt-check =
             pkgs.runCommand "nix-fmt-check"
               {
-                nativeBuildInputs = [ pkgs.nixfmt ];
+                nativeBuildInputs = [
+                  # Rust nixfmt-rs. Not pkgs.nixfmt (Haskell, compiles GHC).
+                  nixfmt-rs.packages.${system}.default
+                ];
               }
               ''
                 set -euo pipefail
@@ -1110,18 +1160,19 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
+            packages = [
               # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.99.1).
               (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
-              rust-analyzer
-              pkg-config
-              nixfmt
-              just
-              sops
-              age
-              ssh-to-age
-              git
-              jq
+              pkgs.rust-analyzer
+              pkgs.pkg-config
+              # Rust nixfmt-rs. Not pkgs.nixfmt (Haskell, compiles GHC).
+              nixfmt-rs.packages.${system}.default
+              pkgs.just
+              pkgs.sops
+              pkgs.age
+              pkgs.ssh-to-age
+              pkgs.git
+              pkgs.jq
             ];
             RUST_LOG = "info,surmount_management_ui=debug";
             shellHook = ''
@@ -1148,6 +1199,8 @@
         }
       );
 
-      formatter = forAllSystems (system: (mkPkgs system).nixfmt);
+      # Rust nixfmt-rs. Not (mkPkgs system).nixfmt: that attr is Haskell
+      # pkgs.nixfmt, and the mail-host gcc.arch overlay must not build it.
+      formatter = forAllSystems (system: nixfmt-rs.packages.${system}.default);
     };
 }

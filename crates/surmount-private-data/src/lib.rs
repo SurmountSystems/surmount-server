@@ -69,6 +69,7 @@ pub fn is_fixture_path(rel: &str) -> bool {
         || p.starts_with("script/testdata/private-data/")
         || p == "crates/surmount-private-data/testdata"
         || p.starts_with("crates/surmount-private-data/testdata/")
+        || p == "crates/surmount-rekey/src/lib.rs"
 }
 
 pub fn is_scanner_tool_path(rel: &str) -> bool {
@@ -346,5 +347,40 @@ mod tests {
             "crates/surmount-private-data/src/scan.rs"
         ));
         assert!(!is_fixture_path("hosts/mail-vps/configuration.nix"));
+    }
+
+    #[test]
+    fn rekey_age_test_vector_is_excluded_and_still_detected() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../surmount-rekey/src/lib.rs");
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("missing rekey test file {}: {e}", path.display()));
+        let text = String::from_utf8_lossy(&bytes);
+        const PREFIX: &str = "AGE-SECRET-KEY-1";
+        let mut from = 0;
+        let mut found = false;
+        while let Some(pos) = text[from..].find(PREFIX) {
+            let i = from + pos + PREFIX.len();
+            let rest = text.as_bytes().get(i..).unwrap_or(&[]);
+            if rest
+                .iter()
+                .take_while(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                .count()
+                >= 1
+            {
+                found = true;
+                break;
+            }
+            from += pos + 1;
+        }
+        assert!(
+            found,
+            "crates/surmount-rekey/src/lib.rs no longer contains an ignored age test key"
+        );
+        let rel = "crates/surmount-rekey/src/lib.rs";
+        let hits = scan_named(rel, &bytes, scan::Gate::Paths);
+        assert!(classes(&hits).contains(&"age-secret-key"), "{hits:?}");
+        assert!(is_fixture_path(rel));
+        assert!(is_fixture_path("./crates/surmount-rekey/src/lib.rs"));
+        assert!(!is_fixture_path("crates/surmount-rekey/src/main.rs"));
     }
 }

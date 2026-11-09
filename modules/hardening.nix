@@ -1,4 +1,4 @@
-# Security defaults: SSH hardening, fail2ban sketch, edge-friendly limits.
+# Security defaults: SSH hardening, sshguard, edge-friendly limits.
 # nginx is transitional-to-delete; prefer limits that transfer to Axum-first edge.
 # Keep this boring and reversible; deep custom hardening belongs in host config.
 #
@@ -7,12 +7,11 @@
 # - Ban decision layer in management-ui (default enforcement off; lean private)
 # - Unauthorized access -> fast/immediate host blacklist (nftables lean; Q-ACL-1 open)
 # - Explicit whitelist IPs never banned; track last-used for hygiene
-# - Long-term prefer Rust ban helper over Python fail2ban as product identity
-# This module's fail2ban block is a LIGHT TRANSITIONAL SKETCH (sshd only),
-# not final merciless policy. Design:
+# - Long-term prefer Rust ban helper over a host Python service
+# sshguard is the sshd ban: permanent after 3 failures. fail2ban is not
+# installed. Design notes:
 #   docs/research/access-control-fail2ban.md
-# Do not expand aggressive mail jails here without that design + false-positive
-# review. Stalwart owns mail anti-abuse first.
+# Do not add mail watchers here. Stalwart owns mail anti-abuse first.
 #
 # SSH host keys: advertise and generate ed25519 only. NixOS 26.05 default
 # also offers RSA; this module stops that. Existing RSA files on disk are
@@ -59,49 +58,80 @@ in
           PermitRootLogin = mkDefault "prohibit-password";
           X11Forwarding = false;
           AllowAgentForwarding = mkDefault false;
+          # Empty passwords and user ~/.ssh/environment are not an option.
+          # When password auth is off, publickey is the only method so a
+          # later default cannot turn keyboard-interactive back on.
+          PermitEmptyPasswords = false;
+          PermitUserEnvironment = false;
+          # Default grace is 120 seconds of unauthenticated hold.
+          LoginGraceTime = 60;
+        }
+        // lib.optionalAttrs (!cfg.hardening.allowPasswordAuth) {
+          AuthenticationMethods = "publickey";
         };
       };
 
-      # fail2ban: light transitional sketch for sshd only.
-      # Target policy is merciless ban + whitelist + last-used (see header).
-      # Mail abuse: Stalwart spam-filter + greylisting first; not wild jails.
-      # Prefer shrinking this over growing Python jails as product identity.
-      services.fail2ban = {
-        enable = mkDefault true;
-        maxretry = 5;
-        bantime = "1h";
-        jails = {
-          sshd = {
-            settings = {
-              enabled = true;
-              port = "ssh";
-              filter = "sshd";
-              backend = "systemd";
-            };
-          };
-        };
+      # sshguard 2.5.1 (pinned nixos-26.05): an sshd auth failure scores
+      # 10. Block and blacklist both fire when cumulated danger >= the
+      # threshold, so 30 is 3 failures. blacklist pardontime 0 is never
+      # unblocked and is reloaded from blacklist_file. The nixpkgs module
+      # uses sshg-fw-ipset with the host iptables firewall, or
+      # sshg-fw-nft-sets when networking.nftables.enable is true, and
+      # partOf firewall.service. fail2ban is Python and stays off.
+      # Do not enable surmount.accessControl or the nft helper.
+      services.fail2ban.enable = false;
+      services.sshguard = {
+        enable = true;
+        services = [ "sshd" ];
+        attack_threshold = 30;
+        blacklist_threshold = 30;
+        blacklist_file = "/var/lib/sshguard/blacklist.db";
+      };
+
+      systemd.services.sshguard.serviceConfig = {
+        SyslogIdentifier = "sshguard";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
       };
 
       # Kernel / network hygiene (small set; avoid surprising operators).
       boot.kernelParams = mkDefault [ "page_alloc.shuffle=1" ];
 
       security.sudo.execWheelOnly = mkDefault true;
+
+      # programs.shadow sets su forwardXAuth. That PAM line references
+      # xauth. This host has no X server, so the forward stays off.
+      security.pam.services.su.forwardXAuth = lib.mkForce false;
     })
 
     # SHC 261: guest agent so the hypervisor can inject a command when
     # SSH is stuck. Default off; host-local enables on this QEMU VPS.
     (mkIf (cfg.enable && cfg.hardening.enable && cfg.hardening.qemuGuestAgent.enable) {
       services.qemuGuest.enable = true;
+      # Not nixpkgs qemu_kvm.ga. That package walks into pythonPackages.
+      services.qemuGuest.package = pkgs.callPackage ../nix/packages/qemu-guest-agent.nix { };
       # Stock nixpkgs only starts the unit via udev SYSTEMD_WANTS on the
       # virtio port. After a switch that udev event has already fired, so
       # the unit stays dead. Want multi-user so SHC inject works on boot
       # and after this generation.
       systemd.services.qemu-guest-agent.wantedBy = [ "multi-user.target" ];
+      # Start and guest-exec lines stay in the journal. The option stays
+      # default off; this does not enable the agent.
+      systemd.services.qemu-guest-agent.serviceConfig = {
+        SyslogIdentifier = "qemu-guest-agent";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
+      };
     })
 
     # Access-control nft fragment: opt-in, lean private default off.
     (mkIf (cfg.enable && ac.enable && ac.nftSets) {
       networking.nftables.enable = true;
+      systemd.services.nftables.serviceConfig = {
+        SyslogIdentifier = "nftables";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
+      };
       networking.nftables.tables.${nftTable} = {
         family = "inet";
         content = ''
@@ -132,8 +162,8 @@ in
             ${
               if (cfg.logging.enable or false) then
                 ''
-                  ip saddr @${nftBan4} log prefix "surmount-nft-ban-drop: " drop
-                  ip6 saddr @${nftBan6} log prefix "surmount-nft-ban-drop: " drop
+                  ip saddr @${nftBan4} log prefix "surmount-nft-ban-drop: " level info drop
+                  ip6 saddr @${nftBan6} log prefix "surmount-nft-ban-drop: " level info drop
                 ''
               else
                 ''
@@ -304,6 +334,11 @@ in
             StandardInput = "socket";
             StandardOutput = "socket";
             StandardError = "journal";
+            # stderr is the helper log. stdout stays the socket (the
+            # protocol). Do not log nft payloads or set contents.
+            SyslogIdentifier = "surmount-nft-ban-helper";
+            LogRateLimitIntervalSec = "30s";
+            LogRateLimitBurst = 50000;
           };
         };
       }

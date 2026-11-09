@@ -171,6 +171,13 @@ in
         # Align restart with other Surmount units (stock is Restart=always).
         Restart = lib.mkDefault "on-failure";
         RestartSec = lib.mkDefault "5s";
+        # LOG_LEVEL stays info. debug and trace can include request secrets.
+        # EXTENDED_LOGGING already records URI and status. No LOG_FILE.
+        SyslogIdentifier = "vaultwarden";
+        StandardOutput = "journal";
+        StandardError = "journal";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
       };
     };
 

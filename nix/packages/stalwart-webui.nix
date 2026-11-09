@@ -14,11 +14,13 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "stalwart-webui";
-  version = "1.0.11";
+  # Checked 2026-11-03: GitHub releases/latest is still v2.0.4
+  # (published 2026-11-02T11:19:17Z). Asset name is still webui.zip.
+  version = "2.0.4";
 
   src = fetchurl {
     url = "https://github.com/stalwartlabs/webui/releases/download/v${finalAttrs.version}/webui.zip";
-    hash = "sha256-1n5oyroCAkMBx52p8V/kZd6b9Tgs7lS9+cMJqXtBeaU=";
+    hash = "sha256-cni+Zwh0Y+ARq/QBeKL/Bz0Bu/AuYq0qP/BENRQAIrA=";
   };
 
   dontUnpack = true;

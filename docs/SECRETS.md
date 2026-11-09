@@ -222,7 +222,7 @@ render into private host-local.
 
 | Store | Holds | Does not hold |
 |-------|-------|----------------|
-| **Host profile** (e.g. `~/.local/share/surmount/host-profile.toml`) | `acme_domains` (certificate hostnames: services + mail + apex + www + mta-sts), `acme_email`, `acme_directory` (staging default; production only with explicit flag or profile field), optional `host_id`, path overrides | Namecheap ApiKey, PEMs, session/Stalwart/VW tokens |
+| **Host profile** (e.g. `~/.local/share/surmount/host-profile.toml`) | `acme_domains` (certificate hostnames: services + mail + apex + www + mta-sts + status), `acme_email`, `acme_directory` (staging default; production only with explicit flag or profile field), optional `host_id`, path overrides | Namecheap ApiKey, PEMs, session/Stalwart/VW tokens |
 | **Secret Service / staging (Domain A)** | Secret **values** + labels (`namecheap-api`, `stalwart-token`, …) | Edge FQDNs as the SoT for Nix ACME (use profile / host-local) |
 | **Domain B files** | Installed secrets + ACME parents; hook reads `namecheap.env` | Git-tracked host config |
 | **Vaultwarden (Domain C)** | Human notes / optional copies after S7b | Activation; profile fields as boot SoT |

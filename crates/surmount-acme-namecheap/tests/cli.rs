@@ -316,6 +316,7 @@ fn render_sample_and_refuse() {
     assert!(text.contains("services.example.invalid"));
     assert!(text.contains("mail.example.invalid"));
     assert!(text.contains("www.example.invalid"));
+    assert!(text.contains("status.example.invalid"));
     assert!(text.contains("ops@example.invalid"));
     assert!(text.contains("acme-staging-v02.api.letsencrypt.org"));
     assert!(text.contains("dnsProvider = \"external-hook\""));
@@ -612,7 +613,9 @@ fn laptop_issue_wrap_execs_stored_hook_not_one_sld_only() {
         fs::set_permissions(&fake_ui, fs::Permissions::from_mode(0o755)).unwrap();
     };
     let one_sld_exec = "exec acme-dns-hook-namecheap \"$@\"";
-    let extra_domains = "surmount.systems,www.surmount.systems,mail.surmount.systems,services.surmount.systems,mta-sts.surmount.systems,baxterartworks.com,www.baxterartworks.com,btcfur.com,www.btcfur.com,exophiles.org,www.exophiles.org,iantuckerstudios.com,www.iantuckerstudios.com,nostrfurs.com,www.nostrfurs.com,yiffa.app,www.yiffa.app,cryptoquick.com,www.cryptoquick.com,mail.cryptoquick.com";
+    // Full intended leaf so extra-zone --issue is not refused for a dropped
+    // dashboard Host. The wrap contract is dispatcher exec, not omit-status.
+    let extra_domains = "surmount.systems,www.surmount.systems,mail.surmount.systems,services.surmount.systems,mta-sts.surmount.systems,status.surmount.systems,baxterartworks.com,www.baxterartworks.com,btcfur.com,www.btcfur.com,exophiles.org,www.exophiles.org,iantuckerstudios.com,www.iantuckerstudios.com,nostrfurs.com,www.nostrfurs.com,yiffa.app,www.yiffa.app,cryptoquick.com,www.cryptoquick.com,mail.cryptoquick.com";
 
     let stored = PathBuf::from(dispatch());
     let issue_hook = root.join("issue-hook");
@@ -757,7 +760,7 @@ fn laptop_issue_fails_when_ui_child_exits_nonzero() {
 }
 
 /// Host-profile Cloudflare extras must not replace Namecheap static zones.
-/// Profile without --domains floors the intended 20-name leaf.
+/// Profile without --domains floors the intended leaf (status + extras).
 #[test]
 fn host_profile_floors_intended_leaf_and_strips_cloudflare_extras() {
     let root = scratch("laptop-profile-floor");
@@ -792,6 +795,10 @@ fn host_profile_floors_intended_leaf_and_strips_cloudflare_extras() {
     assert!(
         t.contains("exophiles.org") && t.contains("www.exophiles.org"),
         "host-profile must floor exophiles even when the profile omitted them: {t}"
+    );
+    assert!(
+        t.contains("status.surmount.systems"),
+        "host-profile must floor systems dashboard Host: {t}"
     );
     assert!(
         !t.contains("btcdragonlord.com") && !t.contains("btckitties.com"),

@@ -262,8 +262,9 @@ fn sanitize_protocols(protocols: Vec<String>) -> Vec<String> {
 
 /// Public HTTP Hosts that may receive a per-site v3 onion.
 ///
-/// Apex, `www.{apex}`, services, `mta-sts.{apex}`, plus extra static Hosts.
-/// Never mail. Never onion names. De-duplicated, insertion order.
+/// Apex, `www.{apex}`, services, `mta-sts.{apex}`, `status.{apex}`, plus
+/// extra static Hosts. Never mail. Never onion names. De-duplicated,
+/// insertion order.
 #[cfg(test)]
 pub fn auto_clearnet_hosts(
     primary_domain: &str,
@@ -299,6 +300,10 @@ pub fn auto_clearnet_hosts_excluding_mail(
         let mta = format!("mta-sts.{apex}");
         if !out.iter().any(|h| h == &mta) {
             out.push(mta);
+        }
+        let status = format!("status.{apex}");
+        if !out.iter().any(|h| h == &status) {
+            out.push(status);
         }
     }
     for raw in extra_static_hosts {
@@ -972,6 +977,7 @@ mod tests {
                 "www.example.test".to_string(),
                 "services.example.test".to_string(),
                 "mta-sts.example.test".to_string(),
+                "status.example.test".to_string(),
             ]
         );
     }
@@ -986,6 +992,7 @@ mod tests {
         assert!(hosts.contains(&"extra.test".to_string()));
         assert!(hosts.contains(&"www.extra.test".to_string()));
         assert!(hosts.contains(&"mta-sts.example.test".to_string()));
+        assert!(hosts.contains(&"status.example.test".to_string()));
         assert!(
             !hosts.contains(&"mail.example.test".to_string()),
             "mail is not a public site and must not auto-map: {hosts:?}"
@@ -1345,6 +1352,7 @@ mod tests {
         assert!(hosts.contains(&"www.example.test"));
         assert!(hosts.contains(&"services.example.test"));
         assert!(hosts.contains(&"mta-sts.example.test"));
+        assert!(hosts.contains(&"status.example.test"));
         assert!(!hosts.contains(&"mail.example.test"));
     }
 

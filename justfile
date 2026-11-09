@@ -262,8 +262,10 @@ deploy *args:
     fi
     exec nix run ".#surmount-deploy-host" -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local "$@"
 
-# Same mail-host command as `just deploy`, with `--dry-run` before `--target`. Extra arguments append.
-# Agents may run `just deploy-dry-run`. Do not pass `--install-secrets` unless secrets should be copied.
+# Same target as `just deploy`, with `--dry-run` before `--target`. Extra arguments append.
+# `--dry-run` rsyncs, bootstraps gccarch-x86-64-v3, and runs `nixos-rebuild build`.
+# It does not switch the running generation and does not install secrets.
+# Agents may run `just deploy-dry-run`. `--install-secrets` on a dry-run only prints the plan.
 [positional-arguments]
 deploy-dry-run *args:
     #!/usr/bin/env bash
@@ -421,6 +423,12 @@ test-eternal-terminal-eval:
 
 test-inxi-eval:
     nix eval --impure --json --file tests/inxi-contract.nix
+
+test-btop-eval:
+    nix eval --impure --json --file tests/btop-contract.nix
+
+test-perf-tools-eval:
+    nix eval --impure --json --file tests/perf-tools-contract.nix
 
 test-remote-builder-eval:
     nix eval --impure --json --file tests/remote-builder-contract.nix

@@ -110,8 +110,9 @@ Browser (admin, then v1 webmail)          Desktop / MUA (always OK)
                      +-- status / admin APIs ----> Stalwart :8080
 ```
 
-Stalwart webadmin (`/admin` on loopback, optional `/stalwart-admin/` via edge)
-is a **bootstrap fallback**, not the long-term Surmount UX.
+Stalwart webadmin (`/admin` on loopback only; the edge does not publish
+`/stalwart-admin/`) is a **bootstrap fallback**, not the long-term Surmount UX.
+Reach it with an SSH tunnel to the loopback listener.
 
 Legacy public sites: **static files only** at the edge. Not part of
 the Leptos app. Live apex/www serve the packaged
@@ -119,7 +120,10 @@ the Leptos app. Live apex/www serve the packaged
 `surmount.systems` / `www.surmount.systems`). `just publish` publishes
 static sites; `just deploy` is the NixOS generation (the host switch).
 `just deploy-host` is that switch with no default target.
-Operator console stays on `services.surmount.systems`. COMING SOON
+Operator console stays on `services.surmount.systems`. Public systems
+dashboard is Host `status.surmount.systems` on the same Axum edge.
+That page links public hosts over https, shows ordinary unit/HTTP
+status text, and prints host uptime from `/proc/uptime`. COMING SOON
 leftover is closed.
 
 ## Phases
@@ -147,7 +151,8 @@ leftover is closed.
   **Discovery headers (2026-08-17, every public Host 2026-08-20;
   per-site v3 2026-09-11):**
   Onion-Location + Alt-Svc on mapped HTTPS 2xx/3xx. Map: apex, www,
-  services, `mta-sts.{apex}`, extra static Hosts; one v3 per Host.
+  services, `mta-sts.{apex}`, `status.{apex}`, extra static Hosts; one
+  v3 per Host.
   Onion-Location is `{that-host-onion}{path}`. Mail unmapped. Mapping loaded
   at process start; restart the unit after hostname/env/map/static-vhost
   change (no hot-reload). Optional env: `SURMOUNT_ONION_LOCATION_ENABLED`,
@@ -313,7 +318,7 @@ full Q-AUTH-1 still residual).
 - Auth foundation shipped (mode off default); full Q-AUTH-1 residual remains
 
 **Exit criteria:** day-to-day admin no longer requires Stalwart webadmin for
-common tasks; `/stalwart-admin/` can be disabled by default.
+common tasks. The public `/stalwart-admin/` path is not in the nginx escape.
 
 ### Operator console UX principles (living)
 

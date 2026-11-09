@@ -111,11 +111,9 @@ sha2 = "0.11"
 base64 = "0.23"
 # CSRF tokens + CSP nonces (already in lock via other crates; direct dep for auth).
 getrandom = "0.4"
-# rage CLI is built on this library (age-encryption.org). Used by just rekey.
-# 0.12.1+ pulls i18n-embed-fl 0.10.1, which uses proc-macro-error3.
-# RUSTSEC-2026-0173 is proc-macro-error2, which is not in this lock.
-# Identity::generate / to_public / to_string stay.
-age = { version = "0.12", default-features = false }
+# surmount-rekey mints X25519 age identity strings itself (x25519-dalek +
+# bech32 0.11). Do not depend on the age crate: 0.12.1 always pulls hpke
+# and p256, and that edge requires crypto-bigint 0.5 (RUSTSEC-2026-0387).
 
 # menhera 10d lists chacha20 0.10.2 and faster-hex 0.10.1 (checked
 # 2026-10-17). Those git lines are gone. crates-io is still replaced by
@@ -124,6 +122,33 @@ age = { version = "0.12", default-features = false }
 # rustls 0.23.46 is not on menhera 10d yet (10d stops at 0.23.45). Public
 # git tag v/0.23.46, commit f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb.
 # When menhera 10d lists 0.23.46, drop this rustls line.
+#
+# ctutils 0.4.4+ is not on menhera 10d yet (10d stops at 0.4.3). Public
+# git tag ctutils-v0.4.5, commit 88d6e90d4cfd2fc3333d00e13c99241507d2138f.
+# RUSTSEC-2026-0385 patched list is >=0.4.4.
+# https://rustsec.org/advisories/RUSTSEC-2026-0385 (accessed: 2026-10-24).
+# When menhera 10d lists 0.4.4 or later, drop this ctutils line.
+#
+# rustls-webpki 0.103.16 is not on menhera 10d yet (10d stops at 0.103.15).
+# Public git tag v/0.103.16, commit 8ecdcc76f56b68fda67a6adf7976f5eed5006a4c.
+# RUSTSEC-2026-0382 patched list is >=0.103.16, <0.104.0-alpha.1.
+# https://rustsec.org/advisories/RUSTSEC-2026-0382 (accessed: 2026-10-24).
+# When menhera 10d lists 0.103.16, drop this rustls-webpki line.
+#
+# webpki-root-certs 1.0.10+ is not on menhera 10d yet (10d stops at 1.0.9).
+# Public git tag v/1.0.11, commit 7ebfa0b377fd0c7e0a2848f9d9b2867a4c2198cf.
+# RUSTSEC-2026-0383 patched list is >=1.0.10.
+# https://rustsec.org/advisories/RUSTSEC-2026-0383 (accessed: 2026-10-24).
+# When menhera 10d lists 1.0.10 or later, drop this webpki-root-certs line.
+#
+# i18n-config left with age. age 0.12.1 was the only crate that pulled
+# i18n-embed, and that edge required crypto-bigint 0.5. Do not re-add the
+# i18n-config git patch unless a crate depends on i18n-config again.
+# basic-toml (RUSTSEC-2026-0374) was only reached through that edge.
+# https://rustsec.org/advisories/RUSTSEC-2026-0374 (accessed: 2026-10-24).
 [patch.crates-io]
 rustls = { git = "https://github.com/rustls/rustls", rev = "f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb" }
+ctutils = { git = "https://github.com/RustCrypto/utils", rev = "88d6e90d4cfd2fc3333d00e13c99241507d2138f" }
+rustls-webpki = { git = "https://github.com/rustls/webpki", rev = "8ecdcc76f56b68fda67a6adf7976f5eed5006a4c" }
+webpki-root-certs = { git = "https://github.com/rustls/webpki-roots", rev = "7ebfa0b377fd0c7e0a2848f9d9b2867a4c2198cf" }
 

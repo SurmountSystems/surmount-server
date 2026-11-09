@@ -14,16 +14,18 @@
 //!   when that directory has index.html; otherwise UNDER CONSTRUCTION
 //!   (same-host HTTP->HTTPS). Extra Hosts from `SURMOUNT_STATIC_VHOSTS` (or
 //!   `_FILE`) use the same path/MIME/CSP rules with a Host -> root map.
-//!   Operator console only on the services hostname.
+//!   Operator console only on the services hostname. `status.{primary}`
+//!   (production: status.surmount.systems) is the public systems dashboard.
 //! - Optional MTA-STS policy at `/.well-known/mta-sts.txt` (default off)
 //! - Optional loopback cleartext **full API** listener (`SURMOUNT_LOCAL_CLEARTEXT_LISTEN`)
 //!   for local reverse-proxies (Arti HS lean path) when primary is https
 //! - In-memory fixed-window rate limit; trusted client IP when peer is loopback
 //! - Ban decision layer (whitelist last-used, optional enforce/dry-run; default off)
-//! - Optional in-process ACME (DNS-01; default off). HTTP-01 on product :80 parked.
+//! - Optional in-process ACME (DNS-01; default off). HTTP-01 challenge files
+//!   are served from `SURMOUNT_ACME_HTTP01_WEBROOT` when that challenge is on.
 //!
 //! Stalwart remains the mail engine. Auth: Nostr foundation (mode off by default).
-//! ACME HTTP-01 on product :80 is parked (see RESIDUAL.md).
+//! Enduring Let's Encrypt renewal is the surmount-1 `surmount-cert-renew` timer.
 
 mod acme;
 mod apex_static;
@@ -36,6 +38,7 @@ mod onion_discovery;
 mod pages;
 mod proxy_vaultwarden;
 mod redirect;
+mod status;
 mod tls;
 
 use std::net::SocketAddr;
@@ -62,13 +65,13 @@ use crate::apex_static::{
     apex_static_file, document_root_is_ready, public_site_csp, serve_apex_static_file,
 };
 use crate::client_ip::client_ip_for_rate_limit;
-use crate::config::AppConfig;
+use crate::config::{AcmeRenewSettings, AppConfig};
 use crate::directory::Directory;
 use crate::mta_sts::{mta_sts_policy_body, should_serve_mta_sts_policy};
 use crate::redirect::{
     HostSurface, HttpToHttps, RedirectBindDecision, RedirectStatus,
     apex_public_path_is_edge_exception, classify_host_surface, https_port_for_redirect,
-    is_public_static_surface, redirect_bind_decision, redirect_http_to_https,
+    is_public_non_console_surface, redirect_bind_decision, redirect_http_to_https,
     request_authority_host, should_reject_public_static_api, should_serve_apex_coming_soon,
     static_vhost_document_root,
 };
@@ -123,6 +126,37 @@ async fn main() -> anyhow::Result<()> {
     // crates can leave no automatic default; ACME's ClientConfig::builder()
     // and other rustls consumers panic without this. Already-installed is OK.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Host timer: `surmount-management-ui acme-renew`. Issues HTTP-01 and
+    // writes the PEM paths, then exits. Does not bind :80 or :443. The
+    // already-running process serves the challenge files.
+    //
+    // This branch is before AppConfig::from_env. That parse refuses nostr
+    // mode without the session secret. acme-renew is not an HTTP route and
+    // loads ACME and TLS settings only.
+    if std::env::args().nth(1).as_deref() == Some("acme-renew") {
+        if std::env::args().len() != 2 {
+            bail!("acme-renew takes no extra arguments");
+        }
+        let settings = AcmeRenewSettings::from_env()
+            .map_err(anyhow::Error::msg)
+            .context(
+                "acme-renew loads ACME and TLS settings only (no session secret; fail-closed)",
+            )?;
+        match crate::acme::renew_http01_if_due(&settings.tls, &settings.acme)
+            .await
+            .map_err(anyhow::Error::msg)
+            .context("HTTP-01 renew (fail-closed; no Namecheap)")?
+        {
+            crate::acme::Http01RenewOutcome::NotDue => {
+                info!("HTTP-01 renew not due; existing PEMs still usable");
+            }
+            crate::acme::Http01RenewOutcome::WrotePems => {
+                info!("HTTP-01 renew wrote the TLS cert and key this host presents");
+            }
+        }
+        return Ok(());
+    }
 
     let config = AppConfig::from_env().map_err(anyhow::Error::msg)?;
     config
@@ -735,7 +769,7 @@ async fn security_headers_middleware(
     };
     let vault_proxy = state.config.vaultwarden_proxy.enable
         && state.config.vaultwarden_proxy.matches_path(&vault_path);
-    let public_static = is_public_static_surface(classify_host_surface(
+    let public_static = is_public_non_console_surface(classify_host_surface(
         &csp_host,
         state.config.primary_domain.as_str(),
         state.config.services_hostname.as_str(),
@@ -1598,6 +1632,17 @@ async fn http_redirect_handler(State(state): State<Arc<AppState>>, request: Requ
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or("/");
+    // HTTP-01 token, before the HTTPS redirect. Let's Encrypt fetches this
+    // on port 80. Other paths still redirect.
+    if let Some(body) = crate::acme::read_http01_challenge_file(&state.config.acme, path_and_query)
+    {
+        return (
+            StatusCode::OK,
+            [("content-type", "text/plain; charset=utf-8")],
+            body,
+        )
+            .into_response();
+    }
     let https_port = https_port_for_redirect(state.config.listen.port());
     match http_upgrade_location(
         true,
@@ -1630,6 +1675,16 @@ async fn apex_public_host_middleware(
     let services = state.config.services_hostname.as_str();
     let path_only = path.split('?').next().unwrap_or(path);
 
+    // HTTP-01 on the HTTPS listener too, in case a client followed the :80 redirect.
+    if let Some(body) = crate::acme::read_http01_challenge_file(&state.config.acme, path_only) {
+        return (
+            StatusCode::OK,
+            [("content-type", "text/plain; charset=utf-8")],
+            body,
+        )
+            .into_response();
+    }
+
     // Router::layer runs after routing. Onion Host rewrite sets the mapped
     // clearnet Host; serve MTA-STS here when that Host is the policy name.
     if path_only == "/.well-known/mta-sts.txt"
@@ -1648,6 +1703,14 @@ async fn apex_public_host_middleware(
         return (StatusCode::NOT_FOUND, "not found").into_response();
     }
     let surface = classify_host_surface(&host, primary, services, &state.config.static_vhosts);
+    if surface == HostSurface::SystemsStatus && path_only != "/health" && path_only != "/api/health"
+    {
+        return crate::status::serve_systems_status(
+            &state.config,
+            path_only,
+            header_str(request.headers(), "accept"),
+        );
+    }
     if surface == HostSurface::ApexPublic
         && !apex_public_path_is_edge_exception(path)
         && let Some(root) = state.config.apex_public_root.as_deref()
@@ -2063,6 +2126,7 @@ mod edge_wire_tests {
                 "example.test".into(),
                 "www.example.test".into(),
                 "mta-sts.example.test".into(),
+                "status.example.test".into(),
             ],
             https_allow_cleartext_escape: false,
             acme: crate::acme::AcmeConfig::default(),
@@ -2126,6 +2190,7 @@ mod edge_wire_tests {
                 "example.test".into(),
                 "www.example.test".into(),
                 "mta-sts.example.test".into(),
+                "status.example.test".into(),
             ],
             https_allow_cleartext_escape: false,
             acme: crate::acme::AcmeConfig::default(),
@@ -3429,6 +3494,126 @@ mod edge_wire_tests {
             api_redir.status(),
             reqwest::StatusCode::PERMANENT_REDIRECT,
             "redirect port must not serve cleartext API"
+        );
+
+        serve.abort();
+        let _ = serve.await;
+    }
+
+    /// Named contract: Host status.{primary} is the systems dashboard on Axum.
+    /// Hermetic GET calls the shipped handler (build_router), not a stub.
+    #[tokio::test]
+    async fn status_host_serves_systems_dashboard_not_console() {
+        let state = test_state(0);
+        let app = build_router(state.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let serve = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .ok();
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+
+        let res = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "status.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let body = res.text().await.unwrap();
+        assert!(!body.is_empty(), "systems dashboard body must be non-empty");
+        assert!(
+            body.contains("data-surface=\"systems-status\"") || body.contains("systems_status"),
+            "must mark systems status surface: {body}"
+        );
+        for field in ["mail", "edge", "tls", "mta_sts", "console"] {
+            assert!(
+                body.contains(field),
+                "handler must emit named system {field}: {body}"
+            );
+        }
+        let lower = body.to_ascii_lowercase();
+        assert!(
+            !lower.contains("dashboard overview"),
+            "must not be the operator console: {body}"
+        );
+        assert!(
+            !body.contains("UNDER CONSTRUCTION"),
+            "status Host is not coming-soon: {body}"
+        );
+
+        let json_res = client
+            .get(format!("http://{addr}/status.json"))
+            .header("Host", "status.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(json_res.status(), reqwest::StatusCode::OK);
+        let json: serde_json::Value = json_res.json().await.unwrap();
+        assert_eq!(json["surface"], "systems_status");
+        assert_eq!(json["service"], "surmount");
+        assert_eq!(json["host"], "status.example.test");
+        let systems = json["systems"].as_array().expect("systems array");
+        assert!(
+            !systems.is_empty(),
+            "systems array must be non-empty: {json}"
+        );
+        let names: Vec<&str> = systems.iter().filter_map(|s| s["name"].as_str()).collect();
+        for must in ["mail", "edge", "tls", "mta_sts", "console"] {
+            assert!(
+                names.contains(&must),
+                "JSON must name system {must}: {json}"
+            );
+        }
+
+        let api = client
+            .get(format!("http://{addr}/api/v1/system"))
+            .header("Host", "status.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            api.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "status Host must not serve the operator system API"
+        );
+        let api_body = api.text().await.unwrap();
+        assert!(
+            !api_body.contains("onion_discovery"),
+            "status Host must not dump operator system JSON: {api_body}"
+        );
+
+        let console = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "services.example.test")
+            .send()
+            .await
+            .unwrap();
+        let console_body = console.text().await.unwrap();
+        assert!(
+            !console_body.contains("data-surface=\"systems-status\""),
+            "services Host must not serve the public systems dashboard"
+        );
+
+        let other = client
+            .get(format!("http://{addr}/"))
+            .header("Host", "mail.example.test")
+            .send()
+            .await
+            .unwrap();
+        let other_body = other.text().await.unwrap();
+        assert!(
+            !other_body.contains("data-surface=\"systems-status\""),
+            "mail Host must not map to the systems dashboard"
         );
 
         serve.abort();
@@ -5625,6 +5810,10 @@ mod edge_wire_tests {
         assert!(
             hosts.contains(&"mta-sts.example.test"),
             "auto-map dump must include mta-sts: {hosts:?}"
+        );
+        assert!(
+            hosts.contains(&"status.example.test"),
+            "auto-map dump must include systems dashboard Host: {hosts:?}"
         );
         serve.abort();
         let _ = serve.await;

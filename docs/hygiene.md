@@ -69,6 +69,8 @@ before a commit object exists:
 | Git hook | `script/git-hooks/pre-commit` is a short shebang that execs the scanner. Git needs that file. It is not a product bash driver. |
 | Self-test | crate tests in `crates/surmount-private-data` |
 
+The crate test `bad_age_fixture_is_hit` fails if `crates/surmount-private-data/testdata/bad-age.txt` is missing, and when that file is present it scans the file bytes and requires the age-secret-key class. `crates/surmount-rekey/src/lib.rs` is an excluded test sample for the tree and staged gates, and `rekey_age_test_vector_is_excluded_and_still_detected` fails if that key is removed.
+
 **Classes (regex / path only; never real values in the tool):** PEM / OpenSSH
 private key blocks; `AGE-SECRET-KEY-1...`; common token shapes (`ghp_`,
 `github_pat_`, `AKIA...`, etc.); password/secret/token assignment heuristic;
@@ -155,7 +157,7 @@ not grow that set.
   **operator direction YYYY-MM-DD** labels.
 - **No ADR jargon.** Plain English open choices only:
   [open-choices.md](open-choices.md).
-- Evidence for Stalwart stores (current pin 0.16.15):
+- Evidence for Stalwart stores (the 0.16.15 research note; living pin is 1.0.2 in `nix/packages/stalwart-mail.nix`):
   `docs/research/stalwart-0.16.15-stores-evidence.md`.
   Historical 0.11.8 only:
   `docs/research/stalwart-stores-evidence-2026-07-30.md`.

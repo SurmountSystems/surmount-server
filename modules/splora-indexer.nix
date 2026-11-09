@@ -73,8 +73,47 @@ in
           }
         ];
       })
+      # Nice on units this module's imported splora stack actually starts.
+      # Static instance names. Do not map config.services.splora.instances
+      # into systemd attr keys (that recurses). Instance enable defaults
+      # true even when services.splora.enable is false, so the service
+      # enable is required or those names become Nice-only stubs.
+      (mkIf (hasSplora && config.services.splora.enable) {
+        systemd.services = mkMerge (
+          map (
+            name:
+            let
+              inst = config.services.splora.instances.${name} or { };
+              on = inst.enable or false;
+              daemonName = if name == "liquid" then "elementsd-liquid" else "bitcoind-${name}";
+            in
+            mkMerge [
+              (mkIf on {
+                "splora-${name}" = {
+                  serviceConfig = {
+                    Nice = 5;
+                    SyslogIdentifier = "splora-${name}";
+                    LogRateLimitIntervalSec = "30s";
+                    LogRateLimitBurst = 50000;
+                  };
+                };
+              })
+              (mkIf (on && (inst.startLocalDaemon or false)) {
+                ${daemonName} = {
+                  serviceConfig = {
+                    Nice = 5;
+                    SyslogIdentifier = daemonName;
+                    LogRateLimitIntervalSec = "30s";
+                    LogRateLimitBurst = 50000;
+                  };
+                };
+              })
+            ]
+          ) allowedNames
+        );
+      })
     ]
-    ++ optionals hasSplora [
+    ++ optionals hasSplora ([
       (mkIf (cfg.enable && idx.enable) {
         services.splora.enable = true;
         services.splora.instances = mkMerge (
@@ -93,6 +132,6 @@ in
           }) allowedNames
         );
       })
-    ]
+    ])
   );
 }

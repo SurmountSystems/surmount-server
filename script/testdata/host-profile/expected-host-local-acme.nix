@@ -19,7 +19,7 @@
       enable = true;
       directory = "https://acme-staging-v02.api.letsencrypt.org/directory";
       email = "ops@example.invalid";
-      domains = [ "services.example.invalid" "mail.example.invalid" "example.invalid" "www.example.invalid" ];
+      domains = [ "services.example.invalid" "mail.example.invalid" "example.invalid" "www.example.invalid" "status.example.invalid" ];
       accountCredentialsPath = "/var/lib/surmount/secrets/acme/account.json";
       challenge = "dns-01";
       dnsProvider = "external-hook";

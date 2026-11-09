@@ -4,7 +4,8 @@ How the Surmount mail VPS should be operated, observed, and checked
 end-to-end. Aligned with [hygiene.md](hygiene.md). Architecture:
 [STACK.md](STACK.md).
 
-**Last updated:** 2026-10-10 (primary SPF is
+**Last updated:** 2026-10-23 (grok-oss and tau are not mail-host
+packages; do not enable them from host-local). Prior 2026-10-10 (primary SPF is
 `v=spf1 a:mail.surmount.systems include:_spf.google.com -all`.
 DMARC stays `p=quarantine`. Detail:
 [DNS.md](DNS.md) section *Google send (operator direction 2026-10-10)*).
@@ -752,10 +753,9 @@ usable SSH key **files** (lockout risk if password auth is off), syncs the
 **public** tree (refuses copying host-local into tracked `hosts/` /
 `secrets/`), rsyncs private host-local to `REMOTE/host-local/`, optionally
 runs the secrets install bridge when `--install-secrets` is set, runs
-`nixos-rebuild switch --flake path:REMOTE_DIR#mail-vps` on the host (or prints
-that plan in `--dry-run`), then **always** runs post-switch smoke on the remote
+`nixos-rebuild switch --flake path:REMOTE_DIR#mail-vps` on a real deploy, then **always** runs post-switch smoke on the remote
 (`nix run .#surmount-deploy-host-post-switch-smoke`) even if rebuild exit was non-zero
-(activation may still have applied). Smoke checks generation current, unit
+(activation may still have applied). `--dry-run` rsyncs, bootstraps, and runs `nixos-rebuild build` instead of switch. It does not run post-switch smoke and it does not install secrets. Smoke checks generation current, unit
 activity (`sshd`, `stalwart-mail`, `surmount-management-ui`; starts UI if
 inactive), loopback `/health` (never invents a public URL), TLS PEM path
 presence when https edge or `SURMOUNT_TLS_*` is set (durable default
@@ -816,6 +816,14 @@ background, block graphs, square corners). Canonical file is
 `/etc/xdg/btop/btop.conf`. Activation also links
 `/root/.config/btop/btop.conf` (and the same path under any defined
 normal user's home) so `just btop` loads it without extra flags.
+Disk usage follows fstab (`use_fstab = true`). Persist extra disks with
+NixOS `fileSystems` (that is how NixOS writes `/etc/fstab`), not by
+listing every mount. The extra disk is LABEL=hdd at `/mnt/hdd` via
+private host-local `fileSystems` (`/dev/disk/by-label/hdd`, ext4,
+`nofail`). Public sample eval does not import that overlay.
+`disks_filter` stays empty. Targeted eval: `just test-btop-eval`.
+A live `just btop` does not reload a later store conf. Quit btop and
+run `just btop` again after the host switch.
 
 ### Host hardware probe (`just host-inxi`)
 
@@ -838,6 +846,90 @@ Target comes from `--target`, `SURMOUNT_DEPLOY_TARGET`, or
 `just test-inxi-eval`. Do not put provisioned host addresses, SKUs, or
 plan names in the public tree. Prefer not to paste RAM/swap sizes into
 product docs.
+
+### Mail-host compiler CPU (x86-64-v3)
+
+The mail host compiles C and C++ for `x86-64-v3`, including libraries
+those packages build, not only a named list of top-level derivations.
+That is the measured guest CPU: avx, avx2, bmi1, bmi2, f16c, fma, lzcnt
+(kernel flag `abm`), movbe, popcnt, sse4.1, sse4.2, and ssse3. AES is
+present on that guest. This module does not add a separate `-maes` or
+any flag above `x86-64-v3`. AVX-512 is absent, so this is not
+`x86-64-v4`. QEMU iothread was not sampled. Do not claim `iothread=1`.
+
+`hosts/mail-vps/configuration.nix` sets `surmount.mailHostCpu.enable`.
+`modules/mail-host-cpu.nix` then sets `nixpkgs.hostPlatform` to this
+host's system with `gcc.arch = "x86-64-v3"`. The host Nix daemon must
+advertise gccarch-x86-64-v3 or the v3 stdenv will not build. Nixpkgs
+adds that token to `nix.settings.system-features` when `gcc.arch` is
+`x86-64-v3`, and it also adds the inferior tokens `gccarch-x86-64-v2`
+and `gccarch-x86-64`. The mail-host module appends `gccarch-x86-64-v3`
+again on `nix.settings.extra-system-features`. That list concatenates
+with `surmount-remote` from the remote builder module. Do not replace
+`system-features` with only the march token. Do not remove `gcc.arch`
+and do not set a lower march to make a build pass.
+
+The running daemon does not read that evaluated list until a switch
+activates the new `nix.conf`. The switch builds the v3 stdenv first.
+A cache miss (zlib, gcc, glibc, and the rest of that chain) requires
+`gccarch-x86-64-v3` on the daemon that is already running. A
+`NIX_CONFIG` drop-in does not make that build check pass. The conf
+the daemon reads is the store file behind `/etc/nix/nix.conf`.
+`surmount-deploy-host` bootstraps that feature on the target before
+the system build. When `nix config show` system-features omits
+`gccarch-x86-64-v3`, the tool reads that conf, writes
+`extra-system-features` so the line contains `surmount-remote` and
+`gccarch-x86-64-v3` (other tokens on that line stay), leaves the
+`system-features` line unchanged (`benchmark`, `big-parallel`, `kvm`,
+and `nixos-test` stay on that line; `surmount-remote` stays on the
+extra line), copies the result to
+`/run/surmount-nix.conf`, and bind-mounts that file over the store
+path. It does not write the store file in place. It restarts
+`nix-daemon` only when the feature was missing. If the daemon already
+advertises the feature, it does not rewrite the conf and does not
+restart the daemon. If the feature is still absent after that
+restart, the tool stops and does not start the system build. The
+`/run` bind does not survive reboot. A successful switch is what puts
+the feature in the generation's `nix.conf`. An operator or an agent
+does not SSH a bind before `just deploy`. `just deploy-dry-run` rsyncs,
+bootstraps gccarch-x86-64-v3 the same way, and runs `nixos-rebuild build`.
+It does not switch the running generation.
+
+The nixpkgs cc-wrapper
+reads `targetPlatform.gcc.arch` and writes `-march=x86-64-v3` into
+`cc-cflags-before`. That flag applies to every C and C++ compile that
+uses this host's stdenv, including dependencies such as nixpkgs
+RocksDB, libsodium, and bitcoind or elementsd libraries when those
+derivations are built. The next switch rebuilds that C and C++ closure.
+The module is opt-in. Generic CI eval does not enable it.
+
+The same module still sets `gccArch` and `rustTargetCpu` to
+`x86-64-v3`, and it still prefixes `NIX_CFLAGS_COMPILE`,
+`NIX_CXXFLAGS_COMPILE`, and `CARGO_BUILD_RUSTFLAGS` on a named
+top-level list. The nixpkgs cc-wrapper applies `NIX_CFLAGS_COMPILE` to
+both C and C++. This nixpkgs does not map `gcc.arch` onto rustc, so
+the Rust `-C target-cpu=x86-64-v3` flag stays on those named
+derivations only. The host platform march is what covers C and C++
+dependency builds.
+
+Generic CI eval (`tests/module-eval.nix` without the mail-vps host
+file) leaves `surmount.mailHostCpu.enable` false, so
+`nixpkgs.hostPlatform.gcc.arch` stays unset and the named flags are
+empty. Flake `packages.*` (GitHub Actions `checks.*.ci`, laptop
+`nix build`) are built from `mkPkgsBare` and are not wrapped. Do not
+set this march on those package sets.
+
+Do not use `-march=native` in this public flake. Do not request
+`x86-64-v4` or `-mavx512`. Stalwart stays a release binary
+(`dontBuild`). This march does not recompile that tarball or the
+RocksDB inside it. A nixpkgs RocksDB built as a dependency of something
+this host compiles is in scope. The vendored RocksDB inside the
+Stalwart release tarball is not. Splora and bitcoind or elementsd are
+on the named tune list only when a derivation references those
+attributes. The sample host does not enable `surmount.sploraIndexer`
+and does not start bitcoind.
+
+Contract: `t62-mail-host-cpu-v3` in `tests/module-eval.nix`.
 
 ### Remote Nix builder (operator 2026-08-17; Lake default-off 2026-08-25)
 
@@ -887,8 +979,17 @@ reboot.**
 **In-guest follow-up (2026-08-25):** Builder `MemoryMax` is a **builder
 budget**, not 95 percent of the whole guest (that lets rustc starve
 mail). `nix-daemon` gets a positive `OOMScoreAdjust` so it is the
-preferred in-guest OOM victim; mail, management-ui, and sshd get a
-negative score and stay un-niced. `surmount.hardening.qemuGuestAgent`
+preferred in-guest OOM victim. Mail and scram are nice -20 on ordinary
+CFS. They are not fifo. They are not realtime I/O. If a separate mail
+database unit exists, it is also nice -20. scram stays root and its
+start command still contains `--watch`. The HTTP management UI is
+nice -19. Arti is nice -18. An enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The
+Nix daemon is nice 19 with idle I/O. Lake, when that eval or host-local
+enables Lake, is nice 19 with idle I/O. sshd stays un-niced (`Nice`
+unset). Do **not** set `Nice=` on sshd. Builds stay nice 19 with idle
+I/O. No realtime policy on product units. Mail, the HTTP management UI,
+and sshd still get a negative OOM score. Do not set builder `Nice=19`
+on mail to deprioritize it. `surmount.hardening.qemuGuestAgent`
 starts `services.qemuGuest` when enabled from host-local so staff can
 inject a command next time. Disk refuse stays at 95 percent. `cpuQuota
 = auto` stays 95 percent times online CPUs on the niced wrapper. Live
@@ -958,26 +1059,124 @@ missing system features. `extra-` keeps NixOS auto-detected
 `surmount-remote`. After a module change, rebuild and switch this host
 (`just deploy-host` or host `nixos-rebuild switch`) so
 `/etc/nix/nix.conf` picks up the extra feature; then restart is
-implied by the switch. `/var/cache/grok-oss-cargo-target` is an extra
-sandbox path (`nix.settings.extra-sandbox-paths` on the mail host) so
-sandboxed builds can see that cargo cache. Do not advertise a fake
-high slot count. Speed factor is
+implied by the switch. That order works for `surmount-remote` only
+when the daemon can already build the closure. `gccarch-x86-64-v3`
+is required to build the v3 stdenv, so `surmount-deploy-host`
+bootstraps it on the running daemon before that system build. See
+Mail-host compiler CPU above. The `/run` bind does not survive
+reboot. A successful switch is what puts the feature in the
+generation's `nix.conf`.
+Do not advertise a fake high slot count. Speed factor is
 not a substitute for `MemoryMax`. Disk refuse at `diskGuardPercent`
 (default 95). Enable from private host-local. Host-local may set a
 real `memoryMax` as the **builder budget**; never publish that number
 as a guest size in git. Do not set it to about 95 percent of the whole
 guest while mail shares the box.
 Mail and other critical units are **not** on this slice and do
-**not** get this `MemoryMax` or `Nice=`. `nix-daemon` **does** get
-`Nice=19` and idle ionice when the module is enabled (dev builds
-only; not mail).
+**not** get this builder `MemoryMax` or this builder `Nice=19`.
+Mail and scram are nice -20 on ordinary CFS. They are not fifo. They
+are not realtime I/O. If a separate mail database unit exists, it is
+also nice -20. scram stays root and its start command still contains
+`--watch`. The HTTP management UI is nice -19. Arti is nice -18. An
+enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The Nix daemon is nice 19 with idle
+I/O. Lake, when that eval or host-local enables Lake, is nice 19 with
+idle I/O. sshd stays un-niced (`Nice` unset). Do **not** set `Nice=`
+on sshd. Builds stay nice 19 with idle I/O. No realtime policy on
+product units. Mail is the highest nice priority (-20), not `Nice`
+unset. Do not set builder `Nice=19` on mail to deprioritize it.
+`nix-daemon` **does** get `Nice=19` and idle I/O when the module is
+enabled (dev builds only; not mail).
+
+### Builder login cc, C++, and Lean (2026-11-04)
+
+When `surmount.remoteBuilder.enable` is true,
+`modules/remote-builder.nix` adds `surmount-builder-devtools` to
+`users.users.nixbuilder.packages`. NixOS activation installs that list
+at `/etc/profiles/per-user/nixbuilder/bin`. Measured ssh as nixbuilder,
+including a login shell, already has that directory on PATH. The
+directory was missing because the user had no packages. A later switch
+rebuilds the profile from this list, so the names stay. The public
+module default of `remoteBuilder.enable` stays false. The private
+overlay on horizon sets enable and does not list these packages. The
+module supplies them when enable is true.
+
+This does not set `systemd.services.nix-daemon.path`. It does not
+change the sandbox. Live `/etc/nix/nix.conf` on surmount-1 had
+`sandbox = true`, `sandbox-fallback = false`, and an empty
+`extra-sandbox-paths`. Derivations still use their own stdenv.
+`surmount-remote` and mail-host `gccarch-x86-64-v3` stay on
+`extra-system-features`. `pkgs.gcc` is the host `pkgs` wrapper, so
+mail-host `gcc.arch` still applies to that `cc`.
+
+`cc`, `c++`, `gcc`, `g++`, `clang`, `clang++`, `ld`, `lld`, `ld.lld`,
+and `make` are symlinks. `lean`, `lake`, `leanc`, and `leanmake` are
+wrappers that exec the pinned store paths. `leanmake` uses `dirname`
+of its own path to find `share/lean/lean.mk`, so a symlink in this
+devtools tree would point at the wrong directory. The derivation
+checks that the source paths exist when it is built. On 2026-11-04
+`nix eval --raw .#surmount-lean4.version` printed `4.35.0` and
+`nix eval --raw .#surmount-lean4.outPath` printed
+`/nix/store/v22cg43c1292h1wwbrl32xjl42h84snh-lean4-4.35.0`.
+That store path's `bin/lean --version` printed
+`Lean (version 4.35.0, x86_64-unknown-linux-gnu, commit eb6cafb7290e8bd5f2937522d8d804f58f02bafc, Release)`.
+The devtools profile derivation was not built in that same command.
+The switch was not run.
+
+1. `cc`, `c++`, `gcc`, and `g++` from `pkgs.gcc`. That attribute is
+   wrapCC of gcc 15.3.0 on non-i686
+   (`pkgs/development/compilers/gcc/versions.nix` at nixpkgs
+   `7dcdd87373d72e7a2173e4db02e20d3d7f495cfd`). cc-wrapper creates
+   `bin/cc` and `bin/c++`. It does not install `ld`. There is no live
+   `gcc --version` because `gcc` was not on PATH.
+2. `clang` and `clang++` from `pkgs.llvmPackages.clang-unwrapped`
+   (`llvmPackages_21`). Not wrapped `pkgs.clang`, which also ships
+   `cc`.
+3. `ld` from `pkgs.binutils`.
+4. `lld` and `ld.lld` from `pkgs.lld`.
+5. `make` from `pkgs.gnumake` (package expression version 4.4.1). The
+   on-disk leanmake script calls `make`.
+6. `lean`, `lake`, `leanc`, and `leanmake` from
+   `nix/packages/lean4.nix` (official release tag `v4.35.0`, version
+   4.35.0). Operator directed Lean 4.35 on 2026-11-04. This is not
+   `pkgs.lean4` (package expression version 4.29.1 on nixpkgs
+   `7dcdd87373d72e7a2173e4db02e20d3d7f495cfd`).
+
+Measured on surmount-1 as nixbuilder before this edit: the login PATH
+did not contain `cc`, `c++`, `gcc`, `g++`, `clang`, `clang++`, `ld`,
+`lld`, `lean`, `lake`, or `leanc`. Those names were also absent from
+`/run/current-system/sw/bin`. An elan tree was on disk at
+`/home/nixbuilder/.elan/toolchains/leanprover--lean4---v4.32.0/bin`
+and was not on PATH. `lean`, `lake`, `leanc`, `clang`, and `ld.lld`
+there failed `--version` with the NixOS stub dynamic linker.
+`leanmake` is a shell script and printed `make: command not found`.
+`leantar` printed `leantar 0.1.19`. This nixpkgs pin has no `leantar`
+attribute, so it is not in the profile. Activation does not delete
+that home tree. The directory name v4.32.0 is not the pin. The pin
+is official tag v4.35.0 in `nix/packages/lean4.nix`. nixpkgs
+`pkgs.lean4` on this lock remains 4.29.1 and is not what the login
+profile installs. The live login PATH does not have 4.35.0 until a
+switch. `just deploy` was not run for this pin.
+
+`~/.nix-profile` pointed at a profile with no `bin`. There was no
+bashrc. A switch would not put the elan bin directory on PATH. It
+replaces `/run/current-system` and the per-user profile from this
+module. Declaring the package is what makes the next switch install
+the tools.
+
+The switch was not run. These names are not on the live nixbuilder
+login PATH until that switch. The flake attribute `.#surmount-lean4`
+evaluates to version 4.35.0, and the built binary at
+`/nix/store/v22cg43c1292h1wwbrl32xjl42h84snh-lean4-4.35.0/bin/lean`
+prints Lean 4.35.0 commit eb6cafb. The login profile on surmount-1
+still does not include that binary until a generation switch.
 
 Hermetic tests: crate `surmount-niced-builder` in `checks.*.ci`, `just test-remote-builder-eval`,
 `just test-logging-eval`, `nix eval --impure --json --file tests/lake-contract.nix`,
 and `tests/module-eval.nix` t39* / t42* / t44*.
 No live SSH. t39* prove the builder contract (user, trusted-users, slice
 caps, nix-daemon MemoryMax/Nice, max-jobs, extra-system-features
-`surmount-remote`, niced stdio, `onlineCpus` multi-CPU quota). t44*
+`surmount-remote`, niced stdio, `onlineCpus` multi-CPU quota, login
+devtools package t39q). t44*
 prove Lake is default off and, when enabled, MemoryMax/Nice land on
 `surmount-lake.service`. t39e still refuses a Lake overlay that is not
 `surmount.lake.enable`.
@@ -1006,13 +1205,20 @@ make maximally nice use of cores without also OOMing the guest. That
 is the contract. Do not retarget the question to static-site slowness.
 
 Dev builds (remote Nix store builds, flake check, hygiene compiles) are
-always maximally nice: `nice -n 19` and idle ionice when practical.
-Prefer a niced builder user and a niced remote-build path. Prefer
-build-on-laptop then switch so the host does not compile the UI. Do
-**not** set `Nice=` on mail or other critical units (`stalwart-mail`,
-`surmount-management-ui`, `sshd`, `surmount-arti-hidden-service` / Arti,
-networking). Do **not** nice the whole machine. Starving mail to make a
-compile cheaper is a miss.
+always nice 19 with idle I/O. Prefer a niced builder user and a niced
+remote-build path. Prefer build-on-laptop then switch so the host does
+not compile the UI. Mail and scram are nice -20 on ordinary CFS. They
+are not fifo. They are not realtime I/O. If a separate mail database
+unit exists, it is also nice -20. scram stays root and its start
+command still contains `--watch`. The HTTP management UI is nice -19.
+Arti is nice -18. An enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The Nix daemon
+is nice 19 with idle I/O. Lake, when that eval or host-local enables
+Lake, is nice 19 with idle I/O. sshd stays un-niced (`Nice` unset).
+Do **not** set `Nice=` on sshd. Builds stay nice 19 with idle I/O. No
+realtime policy on product units. Do **not** nice the whole machine.
+Starving mail to make a compile cheaper is a miss. Mail is the highest
+nice priority (-20). Do not set builder `Nice=19` on mail to
+deprioritize it.
 
 **Niceness is not a memory cap.** We already started niced Lake without
 `MemoryMax`; that is why the box went dark (guest OOM / hypervisor
@@ -1586,8 +1792,16 @@ Paper trail is **journald** (operator-only). `surmount.logging.enable` defaults
 true with `surmount.enable`. Persistent journal under `/var/log/journal` with
 a **size cap** so logs cannot fill the disk (SHC ticket 261 class). Scaffold
 `SystemMaxUse=1G` and `RuntimeMaxUse=256M` are not published guest disk or
-RAM. `ForwardToSyslog=no`. Mail, management-ui, sshd, Arti, and networking
-stay at normal priority (not niced). No public log dump on the apex site.
+RAM. `ForwardToSyslog=no`. Mail and scram are nice -20 on ordinary CFS.
+They are not fifo. They are not realtime I/O. If a separate mail
+database unit exists, it is also nice -20. scram stays root and its
+start command still contains `--watch`. The HTTP management UI is
+nice -19. Arti is nice -18. An enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The
+Nix daemon is nice 19 with idle I/O. Lake, when that eval or host-local
+enables Lake, is nice 19 with idle I/O. sshd stays un-niced (`Nice`
+unset). Do **not** set `Nice=` on sshd. Builds stay nice 19 with idle
+I/O. No realtime policy on product units. Mail is the highest nice
+priority (-20), not `Nice` unset. No public log dump on the apex site.
 
 | Source | Where | Notes |
 |--------|-------|-------|
@@ -1597,7 +1811,7 @@ stay at normal priority (not niced). No public log dump on the apex site.
 | sshd | journald | `LogLevel VERBOSE` (auth fail / disconnect; no passwords) |
 | fail2ban | journald | Transitional sshd jail; `backend = systemd` |
 | nft `surmount_guard` | kernel -> journald | `log prefix "surmount-nft-ban-drop: "` when logging on |
-| Arti | journald via stdout | `console = info`; `log_sensitive_information = false` (no HS keys) |
+| Arti | journald via stdout | `console = debug`; `log_sensitive_information = false` (no HS keys) |
 | nix-daemon | journald | Remote builder path; niced + MemoryMax; per-unit log burst kept high so OOM start is visible; not mail |
 | surmount-lake (if enabled) | journald | Default-off; niced + MemoryMax on the lake unit; SyslogIdentifier `surmount-lake` |
 | Vaultwarden (if enabled) | journald via stdout | `LOG_LEVEL=info`; never `LOG_FILE`; never ADMIN_TOKEN |
@@ -1796,55 +2010,16 @@ just et -- --target root@surmount-1
 # or: nix run .#surmount-et -- --target root@surmount-1
 ```
 
-Remote grok-oss attach is SSH plus tmux as user grok (`just grok-oss` /
-`nix run .#surmount-grok-oss`): `ssh -t` then `runuser -u grok` so
-`tmux attach -t grok-oss` or `tmux new -s grok-oss grok-oss` runs as that
-user (module uid, default grok). Root tmux is a miss: `user-1988.slice`
-MemoryMax applies only when the process uid is grok. It is **not** Eternal
-Terminal (`et -p 2022`). Nested guest `just grok-oss` attaches that same
-local tmux session as user grok and does not SSH to itself. `just et -- --status`
-prints whether TCP 22 and TCP 2022 answer, without addresses. If 2022 does not
-answer, that status tells you to use SSH/tmux (`just grok-oss`).
+`just et -- --status` prints whether TCP 22 and TCP 2022 answer, without
+addresses.
 
-Guest grok-oss on surmount-1 uses a **machine xAI console API key**. That
-key spends **console API credits** (console team prepaid). It is **not**
-included SuperGrok period limits. It is **not** SuperGrok dollar credits.
-Path only (never key bytes in git): `/home/grok/.grok/console.env`
-(`XAI_API_KEY`, mode 0600) and `/home/grok/.grok/machine-console-auth.toml`
-(`[auth] preferred_method = "api_key"`; that file does not hold the key).
-The guest has **no git** and **no GitHub SSH**. Signed commits stay on
-the laptop. Laptop L0 (`surmount-coordinator-gui
-set-remote-host-console-api-key`) lives in grok-oss `remote-1`; the
-operator already tasked that tree. Dual-pin [SECRETS.md](SECRETS.md).
-
-Grok OSS has three distinct surfaces. Do not merge them.
-
-The pager `/dashboard` (also `grok-oss dashboard`, or Ctrl+backslash in the TUI) is
-the Agent Dashboard inside **this** grok-oss TUI process. It is not a web
-page, not management-ui, and not L0.
-
-`/running` (alias `/windows`, CLI `grok-oss running` and
-`grok-oss running --json`) lists live TUI windows on **this** `$GROK_HOME`
-from `active_sessions.json`. That list is not L0. `just grok-oss-running`
-SSHes to the mail host and prints that JSON as user grok. It does not
-allocate a TTY, does not bind HTTP, and does not print secrets.
-
-L0 is the laptop Surmount coordinator GUI (`surmount-coordinator-gui`)
-tagging `grok-oss running --json` with a host name such as surmount-1.
-It does not bind HTTP and it does not listen on the mail host. The guest
-`grok-oss` package does not install that GUI. Do not serve L0 on
-management-ui or on :443.
-
-`surmount.grokOss.enable` stays default false. Enable only from private
-host-local. The module does not start a boot TUI unit. Do not set `Nice=`
-on grok-oss (sshd class). Flake input grok-oss is commit pin
-`182293cb30fa5414dd47686b92708103519b7462` on
-`github:SurmountSystems/grok-oss`. Prior lock was
-`decb052744d25b63dbca8a95ca65b4ad794b9ad5`. Operator 2026-10-14 locked
-`b7ab91532c9e8008081b4f281794be43ecae73a6` (HB-1 merged as GitHub pull
-167, crate version 1.0.45). Operator bumps:
-`nix flake update grok-oss`. After a host switch that includes this
-package, attach with `just grok-oss` as user grok.
+Grok OSS and tau are **not** mail-host packages. This flake does not
+take those inputs. `surmount.grokOss.enable` and `surmount.tau.enable`
+stay false. Named eval fails if either is true or if those packages
+appear in `environment.systemPackages`. Do not re-enable them from
+host-local. Do not install `pkgs.grok-oss` or `pkgs.tau` on the guest.
+Laptop grok-oss (the operator TUI on this machine) is a different
+tree. Do not put it back on the mail host.
 
 For a rebuild that must finish even if every laptop tunnel dies, SSH or
 `just et` in, then `tmux new -s switch` and run the command inside tmux.
@@ -1864,7 +2039,7 @@ exceptions*.
 | `nix run .#e2e-host` / `just e2e-host` | Host end-to-end (Rust flake app; `SURMOUNT_E2E_HOST=1` or exit 2; also requires `SURMOUNT_E2E_BASE_URL`; `LAB_IP` unless `SKIP_BAN=1`). **Never** a flake check |
 | `just publish` | Publish static sites (apex/www from locked `github:SurmountSystems/site` via `nix build .#surmount-public-site`, plus extra vhosts). Not a NixOS generation. |
 | `just deploy` | Operator's real mail-host switch. Defaults: `--target root@surmount-1` and `--host-local /home/hunter/.local/share/surmount/host-local`. Extra arguments append. Agents must not run this. Explicit equivalent: `just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
-| `just deploy-dry-run` | Same switch with `--dry-run` before `--target`. Agents may run this. Extra arguments append. Explicit equivalent: `just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
+| `just deploy-dry-run` | Rsyncs, bootstraps gccarch-x86-64-v3, and runs `nixos-rebuild build` on the mail host. Does not switch the running generation and does not install secrets. Agents may run this. Extra arguments append. Explicit equivalent: `just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
 | `nix run .#surmount-deploy-host` / `just deploy-host` | Flexible deploy driver with no default target: public rsync + host-local checks + `#mail-vps` rebuild (not CI). That is the NixOS generation. [deploy-host-local.md](deploy-host-local.md) |
 | `nix run .#surmount-deploy-host-post-switch-smoke` | Post-switch smoke (generation, units, loopback health, listen proof). |
 | `just fix-public-dashboard` / `nix run .#surmount-fix-public-dashboard` | Compose recovery pin + mint API key + free-443 dry-run (no operator password homework). Optional `--live-free-443` on operator host only. [SECRETS.md](SECRETS.md) |
@@ -1886,9 +2061,7 @@ exceptions*.
 | `nix run .#surmount-private-data` / `just check-private-data` | Private-data pattern scan (`--staged` / `--tree` / `--paths`). |
 | `nix run .#surmount-host-logs` / `just host-logs` | Host journal follow and `--status`. |
 | `nix run .#surmount-et` / `just et` | Eternal Terminal client. Reconnects after sleep and network change. Does not replace Mullvad. After the host switch, `etserver` listens on TCP 2022. Long commands still belong in tmux on the guest. |
-| `nix run .#surmount-grok-oss` / `just grok-oss` | Attach grok-oss on the mail host via SSH + tmux as user grok. Not Eternal Terminal. Nested guest is local tmux as grok. Live TTY required. MemoryMax only if uid grok. |
-| `just grok-oss-running` | SSH (or local on the guest) `grok-oss running --json` as user grok. No TTY, no HTTP bind, no secrets. Input for laptop L0 tagging, not a dashboard. |
-| `nix run .#surmount-rekey` / `just rekey` | SHC Backups PGP paste: mint age identity (age/rage crate), wrap with gpg, print `age1...` for type PGP. Identity stays 0600 on disk. |
+| `nix run .#surmount-rekey` / `just rekey` | SHC Backups PGP paste: mint an X25519 age identity (not the age crate), wrap with gpg, print `age1...` for type PGP. Identity stays 0600 on disk. |
 | `nix run .#surmount-shc` / `just rdns-shc` | SHC customer user-api (rDNS PTR + tickets). No python3 in the crate. |
 | `nix run .#surmount-tls-hybrid` / `just check-tls-hybrid` | **D1** host hybrid TLS negotiation probe after B1. Requires `SURMOUNT_E2E_BASE_URL=https://...` or exit **2** BLOCKED. Never a flake check. |
 | `nix run .#surmount-domain-audit` / `just domain-audit` | Read-only DNS/web/TLS/mail posture (SPF/DKIM/DMARC, dual-sign selectors `stalwart`/`stalwart-rsa`, HTTPS, optional `--smtp` STARTTLS). |

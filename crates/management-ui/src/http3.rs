@@ -371,6 +371,7 @@ mod tests {
             queue_path: DEFAULT_QUEUE_PATH.into(),
             body_limit_bytes: DEFAULT_BODY_LIMIT_BYTES,
             portal_host: None,
+            web_root: PathBuf::new(),
         };
         let http3_cfg = Http3Config {
             enable: true,

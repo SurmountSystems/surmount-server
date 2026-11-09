@@ -46,10 +46,11 @@ needs acme-dns-hook-namecheap-dispatch. When --hook is omitted and
 --domains includes a zone besides surmount.systems, wrap defaults to
 that dispatcher (sibling of this binary when present).
 
-Host-profile without --domains floors the intended 20-name leaf (includes
-exophiles.org and www.exophiles.org) and strips Cloudflare extras
-(btcdragonlord.com, btckitties.com). Production --issue that names any
-intended extra zone must include the full 20-name list (no silent drop).
+Host-profile without --domains floors the intended leaf (includes
+status.surmount.systems, exophiles.org, and www.exophiles.org) and
+strips Cloudflare extras (btcdragonlord.com, btckitties.com).
+Production --issue that names any intended extra zone must include
+the full intended list (no silent drop).
 "#;
 
 /// Intended production leaf (web + mail). One PEM, with_single_cert.
@@ -59,6 +60,7 @@ const INTENDED_LEAF_DOMAINS: &[&str] = &[
     "mail.surmount.systems",
     "services.surmount.systems",
     "mta-sts.surmount.systems",
+    "status.surmount.systems",
     "baxterartworks.com",
     "www.baxterartworks.com",
     "btcfur.com",
@@ -352,7 +354,7 @@ where
         }
     }
     if domains.is_empty() {
-        domains = "services.surmount.systems,mail.surmount.systems,surmount.systems,www.surmount.systems,mta-sts.surmount.systems".into();
+        domains = "services.surmount.systems,mail.surmount.systems,surmount.systems,www.surmount.systems,mta-sts.surmount.systems,status.surmount.systems".into();
     }
     if issue || live {
         refuse_dropped_intended_leaf(&domains)?;
@@ -818,7 +820,7 @@ fn refuse_dropped_intended_leaf(domains: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     Err(blocked(format!(
-        "production extra-zone issue must keep the intended 20-name leaf (missing {}); do not drop Namecheap static zones such as exophiles.org",
+        "production extra-zone issue must keep the intended leaf (missing {}); do not drop Namecheap static zones such as exophiles.org or status.surmount.systems",
         missing.join(",")
     )))
 }

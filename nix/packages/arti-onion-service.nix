@@ -2,14 +2,14 @@
 #
 # Why not stock pkgs.arti from the host nixpkgs channel?
 #   That channel packages Arti 1.4.2 (client-default features only). Upstream
-#   stable is far ahead (2.7.0, GitLab tag arti-v2.7.0). Greenfield Surmount
+#   stable is far ahead (2.8.0, GitLab tag arti-v2.8.0). Greenfield Surmount
 #   pins the current engine here, same
 #   spirit as Stalwart: channel lag is not a reason to ship old Tor for the
 #   required HS surface.
 #
 # Why not only overrideAttrs on host pkgs.arti?
 #   Feature-only overrides inherit the channel version (1.4.2). This expression
-#   owns the upstream tag (arti-v2.7.0), features, and Surmount capability
+#   owns the upstream tag (arti-v2.8.0), features, and Surmount capability
 #   passthru.
 #
 # Why source build (not binary FOD like Stalwart)?
@@ -20,16 +20,16 @@
 # Vendor / crates.io:
 #   fetch-cargo-vendor against crates.io returned HTTP 403 from this
 #   environment (same class of failure that forced Stalwart to release-binary
-#   FODs). We still build *from GitLab source*, but take `cargoDeps` from the
-#   matching nixpkgs-rust `arti` package (same version / Cargo.lock) so the
-#   vendor tree is substitutable from cache.nixos.org. When crates.io vendor
-#   works again, cargoHash can replace the artiUnstable.cargoDeps handoff.
+#   FODs). nixpkgs-rust pkgs.arti is still 2.7.0. Do not set cargoDeps to
+#   that tree or to any other 2.7.0 vendor. cargoHash for arti-v2.8.0 is
+#   sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. The missing-hash
+#   throw is gone. Do not pretend a 2.7.0 vendor tree matches this source.
 #
 # Toolchain:
-#   Arti 2.7.0 MSRV is 1.92. Older host channels had rustc < 1.91 and
-#   rustPackages_* tops out at 1.89. The flake passes a rustPlatform whose
-#   rustc/cargo meet MSRV (from the nixpkgs-rust input), without rebasing
-#   the whole host OS channel.
+#   crates/arti/Cargo.toml in the arti-v2.8.0 tree sets rust-version = "1.92".
+#   Older host channels had rustc < 1.91 and rustPackages_* tops out at 1.89.
+#   The flake passes a rustPlatform whose rustc/cargo meet MSRV (from the
+#   nixpkgs-rust input), without rebasing the whole host OS channel.
 #
 # Features: onion-service-service on the arti binary (HS publish / tor-hsrproxy).
 #   Prefer this lean feature over nixpkgs-unstable `full` unless build needs
@@ -44,15 +44,15 @@
 #
 # Bump procedure:
 #   1. Set the single `version` binding below to "X.Y.Z" (GitLab tag
-#      arti-vX.Y.Z). Assert, drv version, and src tag all use that binding.
-#   2. Bump flake input nixpkgs-rust until its pkgs.arti.version matches (for
-#      cargoDeps), or restore cargoHash once crates.io vendor works.
+#      arti-vX.Y.Z). The drv version and the src tag both use that binding.
+#   2. Prefetch cargoHash for this tag. Do not reuse a 2.7.0 vendor tree.
 #   3. Refresh src hash (nix build until got: hash, or prefetch).
 #   4. Confirm MSRV still met by nixpkgs-rust rustc.
 #   5. Re-read upstream CHANGELOG / example config for TOML shape drift.
 #   6. Keep passthru.surmountOnionServiceCapable = true.
 #
-# Modelled on nixpkgs pkgs/by-name/ar/arti/package.nix (2.7.0 shape:
+# Modelled on nixpkgs pkgs/by-name/ar/arti/package.nix (2.7.0 shape). Source
+# tag is now arti-v2.8.0.
 # buildAndTestSubdir, tokio-util postPatch, ARTI_FS_DISABLE_PERMISSION_CHECKS)
 # with Surmount pname, lean HS feature, and capability passthru.
 #
@@ -70,19 +70,17 @@
   openssl,
   zstd,
   versionCheckHook,
-  # Matching-version arti from nixpkgs-rust (provides substitutable cargoDeps).
+  # Still passed by the flake. Not a cargoDeps source for 2.8.0.
   artiUnstable,
 }:
 
 let
-  # Single source of truth for pin, cargoDeps assert, and GitLab tag.
-  version = "2.7.0";
+  # Single source of truth for pin, drv version, and GitLab tag.
+  version = "2.8.0";
 in
 assert lib.assertMsg (
   artiUnstable != null
-) "arti-onion-service: artiUnstable is required (cargoDeps handoff)";
-assert lib.assertMsg (artiUnstable.version == version)
-  "arti-onion-service: artiUnstable.version must be ${version} (got ${artiUnstable.version or "null"})";
+) "arti-onion-service: artiUnstable is passed by the flake; it is not cargoDeps for ${version}";
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "arti-onion-service";
@@ -94,7 +92,12 @@ rustPlatform.buildRustPackage (finalAttrs: {
     owner = "core";
     repo = "arti";
     tag = "arti-v${finalAttrs.version}";
-    hash = "sha256-28s2BnesadPGm1gQDxzIqSgGaUd8ZgoTpKK3WXBRU9Q=";
+    # nix-prefetch-url --unpack of the GitLab archive and of the
+    # fetchFromGitLab API URL both printed
+    # 0jkhr8d9z9m6sffslvahcqnzdvb61kw8hnlgsdm9xnn6lfb80w12
+    # builtins.convertHash to sri printed
+    # sha256-InCAlqPG2p5q049aiPgMZu32LWZQbaqd06amnxrKcEo=
+    hash = "sha256-InCAlqPG2p5q049aiPgMZu32LWZQbaqd06amnxrKcEo=";
   };
 
   # Working around a bug in cargo that appears with cargo-auditable, see
@@ -108,9 +111,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   buildAndTestSubdir = "crates/arti";
 
-  # Substitutable vendor tree from nixpkgs-rust arti (avoids crates.io 403).
-  # Same version lock as src tag above.
-  cargoDeps = artiUnstable.cargoDeps;
+  # nixpkgs-rust pkgs.arti is 2.7.0. Do not point cargoDeps at it.
+  # cargoHash is the fetchCargoVendor vendor-staging got hash for this tag.
+  cargoHash = "sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=";
 
   nativeBuildInputs = lib.optionals stdenv.hostPlatform.isLinux [ pkg-config ];
 
@@ -126,7 +129,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
   checkFeatures = [ "onion-service-service" ];
 
   checkFlags = [
-    # problematic test that hangs the build (same skip as nixpkgs 2.7.0)
+    # problematic test that hangs the build (same skip as nixpkgs 2.7.0; still skipped on 2.8.0)
     "--skip=reload_cfg::test::watch_single_file"
   ];
 
@@ -148,9 +151,9 @@ rustPlatform.buildRustPackage (finalAttrs: {
     onionServiceFeatures = [ "onion-service-service" ];
     # Honest packaging provenance for audits.
     surmountArtiPackaging = {
-      mode = "gitlab-source-with-nixpkgs-rust-cargoDeps";
+      mode = "gitlab-source-cargoHash-set";
       upstreamTag = "arti-v${finalAttrs.version}";
-      reason = "crates.io fetch-cargo-vendor 403; reuse matching nixpkgs-rust vendor";
+      reason = "arti 2.8.0 cargoHash is sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=; the missing-hash throw is gone; nixpkgs-rust arti 2.7.0 cargoDeps is not this source";
     };
   };
 

@@ -11,7 +11,8 @@
 #
 # Guest directory setup and the one SMTP dialogue are Rust programs in
 # surmount-stalwart-ops (vm-lab-directory-setup and vm-lab-smtp-accept).
-# The testScript below stays Python because that runner is upstream NixOS.
+# testScript is the upstream NixOS Python runner. The RCPT code check is
+# /bin/sh in that script, not a Python function.
 #
 # Invoke later via: nix build .#checks.x86_64-linux.mail-vm-test
 # This file does not run that build.
@@ -126,12 +127,6 @@ runTest {
     };
 
   testScript = ''
-    def smtp_rcpt(text):
-        for line in text.splitlines():
-            if line.startswith("RCPT "):
-                return int(line.split()[1])
-        raise AssertionError(text)
-
     server.start()
     server.wait_for_unit("stalwart-mail.service")
     server.wait_for_unit("surmount-vm-lab-recovery-pin.service")
@@ -175,17 +170,85 @@ runTest {
     assert '"created":true' in created or '"created": true' in created, created
     assert '"source":"stalwart"' in created or '"source": "stalwart"' in created, created
 
-    accepted = server.succeed(
-        "${stalwartOps}/bin/vm-lab-smtp-accept recvbox@example.test"
-    )
-    assert smtp_rcpt(accepted) == 250, accepted
-    assert any(line == "DATA 250" for line in accepted.splitlines()), accepted
+    # Same acceptance and refusal as the previous RCPT asserts.
+    # accept: first RCPT code is 250, and one line is exactly DATA 250.
+    # refuse: first RCPT code is 500 or higher, and no line starts with DATA.
+    server.succeed(
+        r"""
+        set -eu
+        transcript=/tmp/surmount-vm-lab-smtp-transcript
+        cr=$(printf '\r')
 
-    refused = server.succeed(
-        "${stalwartOps}/bin/vm-lab-smtp-accept notcreated@example.test"
+        smtp_fail() {
+          printf '%s\n' "$1"
+          if [ -f "$transcript" ]; then
+            cat "$transcript"
+          fi
+          rm -f "$transcript"
+          exit 1
+        }
+
+        rcpt_status_check() {
+          mode=$1
+          recipient=$2
+          if [ "$mode" != accept ] && [ "$mode" != refuse ]; then
+            smtp_fail "smtp check: unknown mode"
+          fi
+          if ! ${stalwartOps}/bin/vm-lab-smtp-accept "$recipient" >"$transcript"; then
+            smtp_fail "smtp $mode $recipient: vm-lab-smtp-accept failed"
+          fi
+          rcpt_code=
+          data_exact=0
+          data_prefix=0
+          while IFS= read -r line || [ -n "$line" ]; do
+            line=''${line%"$cr"}
+            case "$line" in
+              "DATA 250")
+                data_exact=1
+                ;;
+            esac
+            case "$line" in
+              "DATA "*)
+                data_prefix=1
+                ;;
+            esac
+            case "$line" in
+              "RCPT "*)
+                if [ -z "$rcpt_code" ]; then
+                  set -f
+                  set -- $line
+                  field_count=$#
+                  if [ "$field_count" -ge 2 ]; then
+                    rcpt_code=$2
+                  else
+                    rcpt_code=x
+                  fi
+                  set +f
+                fi
+                ;;
+            esac
+          done <"$transcript"
+          case "$rcpt_code" in
+            ""|*[!0-9]*)
+              smtp_fail "smtp $mode $recipient: no numeric RCPT code"
+              ;;
+          esac
+          if [ "$mode" = accept ]; then
+            if [ "$rcpt_code" -ne 250 ] || [ "$data_exact" -ne 1 ]; then
+              smtp_fail "smtp accept $recipient: wanted RCPT 250 and a line DATA 250, got RCPT $rcpt_code"
+            fi
+          else
+            if [ "$rcpt_code" -lt 500 ] || [ "$data_prefix" -ne 0 ]; then
+              smtp_fail "smtp refuse $recipient: wanted RCPT 500 or higher and no DATA line, got RCPT $rcpt_code"
+            fi
+          fi
+          rm -f "$transcript"
+          printf 'smtp %s %s RCPT %s\n' "$mode" "$recipient" "$rcpt_code"
+        }
+
+        rcpt_status_check accept "recvbox@example.test"
+        rcpt_status_check refuse "notcreated@example.test"
+        """
     )
-    refused_code = smtp_rcpt(refused)
-    assert refused_code >= 500, refused
-    assert not any(line.startswith("DATA ") for line in refused.splitlines()), refused
   '';
 }

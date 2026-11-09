@@ -76,8 +76,12 @@ fn secrets_stub() -> PathBuf {
     write_exec(
         &dir,
         "secrets-install-host",
-        "#!/bin/sh\necho secrets-install-host \"$@\"\nexit 0\n",
+        "#!/bin/sh\nprintf ran > \"$(dirname \"$0\")/ran\"\necho secrets-install-host \"$@\"\nexit 0\n",
     )
+}
+
+fn secrets_stub_ran(stub: &Path) -> bool {
+    stub.parent().unwrap().join("ran").is_file()
 }
 
 #[test]
@@ -87,6 +91,9 @@ fn help_exits_0_and_mentions_dry_run() {
     let s = combined(&out);
     assert!(s.contains("--dry-run"), "{s}");
     assert!(s.contains("--install-secrets"), "{s}");
+    assert!(s.contains("nixos-rebuild build"), "{s}");
+    assert!(!s.contains("do not rsync"), "{s}");
+    assert!(!s.contains("Print planned commands"), "{s}");
 }
 
 #[test]
@@ -107,36 +114,37 @@ fn option_shaped_target_rejected() {
 }
 
 #[test]
-fn dry_run_good_host_local_prints_rebuild_and_smoke() {
-    let out = cmd()
+fn dry_run_good_host_local_builds_and_does_not_switch() {
+    let (mut c, ssh_log_path, rsync_log_path) = hermetic_cmd();
+    let out = c
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
         .arg(good_hl())
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
+    let rsync_log = fs::read_to_string(&rsync_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("nixos-rebuild") && s.contains("mail-vps"), "{s}");
-    assert!(s.contains("path:") && s.contains("#mail-vps"), "{s}");
-    assert!(s.contains("host-local"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
     assert!(
-        s.contains("secrets.yaml") || s.contains(".agekey") || s.contains("secrets/"),
-        "{s}"
+        rsync_log.lines().filter(|line| !line.is_empty()).count() >= 2,
+        "dry-run must rsync the public tree and host-local: {rsync_log}"
     );
-    let low = s.to_ascii_lowercase();
+    assert!(
+        rsync_log.contains("secrets.yaml")
+            || rsync_log.contains(".agekey")
+            || rsync_log.contains("secrets/"),
+        "{rsync_log}"
+    );
+    assert!(rsync_log.contains("host-local"), "{rsync_log}");
+    assert!(rsync_log.contains("example.test"), "{rsync_log}");
     assert!(
         !s.contains("does not mention authorizedKeys"),
         "known-name layout auto-wires keys and must not warn: {s}"
     );
-    assert!(
-        low.contains("post-switch smoke") || s.contains("deploy-host-post-switch-smoke"),
-        "{s}"
-    );
-    assert!(
-        low.contains("systemctl is-active") || low.contains("surmount-management-ui"),
-        "{s}"
-    );
-    assert!(low.contains("health") || low.contains("loopback"), "{s}");
+    assert!(!s.to_ascii_lowercase().contains("post-switch smoke"), "{s}");
+    assert!(!ssh_log.contains("post-switch-smoke"), "{ssh_log}");
 }
 
 #[test]
@@ -144,7 +152,8 @@ fn root_target_dry_run_mentions_laptop_identity() {
     let home = temp_dir("ssh-home");
     fs::create_dir_all(home.join(".ssh")).unwrap();
     fs::write(home.join(".ssh/id_ed25519"), "synthetic-not-a-real-key\n").unwrap();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("HOME", &home)
         .args(["--dry-run", "--target", "root@example.test"])
         .arg("--host-local")
@@ -152,12 +161,11 @@ fn root_target_dry_run_mentions_laptop_identity() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("id_ed25519"), "{s}");
-    assert!(
-        s.contains("keepalives") || s.contains("SURMOUNT_DEPLOY_SSH_IDENTITY"),
-        "{s}"
-    );
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(ssh_log.contains("id_ed25519"), "{ssh_log}");
+    assert!(ssh_log.contains("ServerAliveInterval=30"), "{ssh_log}");
 }
 
 #[test]
@@ -233,18 +241,47 @@ fn refuse_host_local_into_hosts_and_secrets_paths() {
 
 #[test]
 fn default_dry_run_does_not_plan_secrets_install() {
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
         .arg(good_hl())
         .output()
         .unwrap();
-    assert!(out.status.success());
-    let s = combined(&out).to_ascii_lowercase();
+    let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
+    assert!(out.status.success(), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    let low = s.to_ascii_lowercase();
     assert!(
-        !s.contains("secrets-install-host") && !s.contains("would run secrets-install"),
+        !low.contains("secrets-install-host") && !low.contains("would run secrets-install"),
         "{s}"
     );
+}
+
+#[test]
+fn dry_run_build_failure_does_not_switch_or_run_smoke() {
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
+        .env("SURMOUNT_TEST_REBUILD_EXIT", "1")
+        .args(["--dry-run", "--target", "example.test"])
+        .arg("--host-local")
+        .arg(good_hl())
+        .output()
+        .unwrap();
+    let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
+    assert!(!out.status.success(), "{s}");
+    assert!(ssh_log.contains("nixos-rebuild build --flake"), "{ssh_log}");
+    assert!(!ssh_log.contains("nixos-rebuild switch"), "{ssh_log}");
+    assert!(
+        !ssh_log.contains("/nix/var/nix/profiles/system"),
+        "{ssh_log}"
+    );
+    assert!(!ssh_log.contains("post-switch-smoke"), "{ssh_log}");
+    assert!(s.contains("the running generation was not switched"), "{s}");
+    assert!(!s.contains("nixos-rebuild build finished"), "{s}");
+    assert!(!s.to_ascii_lowercase().contains("post-switch smoke"), "{s}");
 }
 
 #[test]
@@ -355,7 +392,8 @@ fn plant_stage() -> PathBuf {
 fn opt_in_dry_run_plans_bridge_without_payload() {
     let stub = secrets_stub();
     let stg = plant_stage();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
@@ -372,8 +410,9 @@ fn opt_in_dry_run_plans_bridge_without_payload() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("secrets-install-host"), "{s}");
+    assert!(s.contains("would run secrets-install-host"), "{s}");
     assert!(s.contains("--from-staging"), "{s}");
     assert!(s.contains("mail-lab"), "{s}");
     assert!(s.contains("example.test"), "{s}");
@@ -381,7 +420,8 @@ fn opt_in_dry_run_plans_bridge_without_payload() {
         s.contains("--require-kind") && s.contains("tls-cert"),
         "{s}"
     );
-    assert!(s.contains("nixos-rebuild"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
     assert!(!s.contains(PLANTED), "{s}");
 }
 
@@ -389,7 +429,8 @@ fn opt_in_dry_run_plans_bridge_without_payload() {
 fn env_install_secrets_plans_bridge() {
     let stub = secrets_stub();
     let stg = plant_stage();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
         .env("SURMOUNT_DEPLOY_INSTALL_SECRETS", "1")
         .env("SURMOUNT_SECRETS_STAGING", &stg)
@@ -400,15 +441,19 @@ fn env_install_secrets_plans_bridge() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("secrets-install-host"), "{s}");
+    assert!(s.contains("would run secrets-install-host"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
     assert!(!s.contains(PLANTED));
 }
 
 #[test]
 fn secret_service_only_plans_without_staging() {
     let stub = secrets_stub();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
@@ -422,11 +467,13 @@ fn secret_service_only_plans_without_staging() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("secrets-install-host"), "{s}");
+    assert!(s.contains("would run secrets-install-host"), "{s}");
     assert!(s.contains("--from-secret-service"), "{s}");
     assert!(!s.contains("--from-staging"), "{s}");
-    assert!(s.contains("nixos-rebuild"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
 }
 
 #[test]
@@ -477,7 +524,8 @@ fn vaultwarden_admin_and_namecheap_allowlisted() {
     let stub = secrets_stub();
     let stg = plant_stage();
     for kind in ["vaultwarden-admin", "namecheap-api"] {
-        let out = cmd()
+        let (mut c, ssh_log_path, _) = hermetic_cmd();
+        let out = c
             .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
             .args(["--dry-run", "--target", "example.test"])
             .arg("--host-local")
@@ -494,9 +542,12 @@ fn vaultwarden_admin_and_namecheap_allowlisted() {
             .output()
             .unwrap();
         let s = combined(&out);
+        let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
         assert!(out.status.success(), "{kind}: {s}");
-        assert!(s.contains("secrets-install-host"), "{s}");
+        assert!(s.contains("would run secrets-install-host"), "{s}");
         assert!(s.contains("--require-kind") && s.contains(kind), "{s}");
+        assert_dry_run_builds(&ssh_log, &s);
+        assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
         assert!(!s.contains(PLANTED), "{s}");
     }
 }
@@ -531,6 +582,61 @@ esac
 
 fn lines_containing(log: &str, needle: &str) -> usize {
     log.lines().filter(|line| line.contains(needle)).count()
+}
+
+/// Fake rsync plus the fake ssh, so a dry-run test does not touch the network.
+fn hermetic_cmd() -> (Command, PathBuf, PathBuf) {
+    let dir = temp_dir("hermetic");
+    let (ssh, ssh_log) = fake_ssh(&dir);
+    let rsync_log = dir.join("rsync.log");
+    write_exec(
+        &dir,
+        "rsync",
+        "#!/bin/sh\nlog=\"$SURMOUNT_TEST_RSYNC_LOG\"\nprintf '%s\\n' \"$*\" >> \"$log\"\nexit 0\n",
+    );
+    let mut c = cmd();
+    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+    c.env("PATH", format!("{}:{path}", dir.display()));
+    c.env("SURMOUNT_DEPLOY_SSH", &ssh);
+    c.env("SURMOUNT_TEST_SSH_LOG", &ssh_log);
+    c.env("SURMOUNT_TEST_RSYNC_LOG", &rsync_log);
+    (c, ssh_log, rsync_log)
+}
+
+fn assert_dry_run_builds(ssh_log: &str, out: &str) {
+    assert!(
+        ssh_log.contains(
+            "nixos-rebuild build --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 0 --keep-going"
+        ),
+        "{ssh_log}"
+    );
+    assert!(!ssh_log.contains("nixos-rebuild switch"), "{ssh_log}");
+    assert!(
+        !ssh_log.contains("/nix/var/nix/profiles/system"),
+        "{ssh_log}"
+    );
+    assert!(!ssh_log.contains("post-switch-smoke"), "{ssh_log}");
+    assert!(
+        !ssh_log.contains("surmount-deploy-host-post-switch-smoke"),
+        "{ssh_log}"
+    );
+    assert!(ssh_log.contains("gccarch-x86-64-v3"), "{ssh_log}");
+    assert!(ssh_log.contains("/run/surmount-nix.conf"), "{ssh_log}");
+    let build_at = ssh_log
+        .find("nixos-rebuild build")
+        .expect("dry-run remote command");
+    let boot_at = ssh_log.find("/run/surmount-nix.conf").expect("bootstrap");
+    assert!(
+        boot_at < build_at,
+        "bootstrap must run before nixos-rebuild build"
+    );
+    assert!(
+        out.contains(
+            "deploy-host: nixos-rebuild build finished; the running generation was not switched"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("nixos-rebuild switch"), "{out}");
 }
 
 fn deploy_with_fake_ssh(rebuild_exit: &str, smoke_exit: &str) -> (Output, String) {
@@ -580,6 +686,12 @@ fn finished_rebuild_runs_smoke_and_can_succeed() {
     let (out, log) = deploy_with_fake_ssh("0", "0");
     let s = combined(&out);
     assert!(out.status.success(), "{s}");
+    assert!(log.contains("nixos-rebuild switch"), "{log}");
+    assert!(log.contains(
+        "nixos-rebuild switch --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 0"
+    ));
+    assert!(!log.contains("--keep-going"), "{log}");
+    assert!(!log.contains("nixos-rebuild build"), "{log}");
     assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 1, "{log}");
 }

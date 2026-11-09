@@ -512,13 +512,14 @@ impl AppConfig {
             .unwrap_or_else(|| {
                 // Default open-redirect allowlist: services (operator console),
                 // apex + www (public COMING SOON; same-host HTTPS upgrade),
-                // mail name, MTA-STS policy host.
+                // mail name, MTA-STS policy host, systems dashboard Host.
                 vec![
                     services_hostname.clone(),
                     primary_domain.clone(),
                     format!("www.{primary_domain}"),
                     mail_hostname.clone(),
                     format!("mta-sts.{primary_domain}"),
+                    crate::redirect::status_hostname(&primary_domain),
                 ]
             });
 
@@ -554,6 +555,7 @@ impl AppConfig {
         let extra_mail_hostnames = extra_mail_hostnames_from_env();
         let redirect_allowed_hosts =
             union_static_vhost_hosts(redirect_allowed_hosts, &static_vhosts);
+        let redirect_allowed_hosts = union_status_hostname(redirect_allowed_hosts, &primary_domain);
         // Vaultwarden: operator-published URL only. Never invent; no admin token.
         let vaultwarden_url = resolve_vaultwarden_url_from_env();
         // Path proxy to loopback Rocket (default off). Fail-closed on bad prefix/upstream.
@@ -742,6 +744,42 @@ impl AppConfig {
     }
 }
 
+/// Settings `surmount-management-ui acme-renew` needs.
+///
+/// The command is not an HTTP route. It must not go through
+/// [`AppConfig::from_env`], because that parse refuses nostr mode without
+/// `SURMOUNT_SESSION_SECRET` before any issuance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcmeRenewSettings {
+    pub acme: AcmeConfig,
+    pub tls: TlsPaths,
+}
+
+impl AcmeRenewSettings {
+    /// Load ACME and TLS settings for the host renew command.
+    ///
+    /// Does not call [`AppConfig::from_env`]. That parse validates nostr
+    /// auth and refuses a missing session secret. This command does not
+    /// serve HTTP and does not need that secret.
+    pub fn from_env() -> Result<Self, String> {
+        let acme = AcmeConfig::from_env()?;
+        let listen = ListenMode::from_parts(
+            env::var("SURMOUNT_LISTEN_MODE").ok().as_deref(),
+            env::var("SURMOUNT_TLS_CERT").ok().as_deref(),
+            env::var("SURMOUNT_TLS_KEY").ok().as_deref(),
+        )?;
+        let tls = match listen {
+            ListenMode::Https(paths) => paths,
+            ListenMode::PlainHttp => {
+                return Err("acme-renew requires SURMOUNT_LISTEN_MODE=https with \
+                     SURMOUNT_TLS_CERT and SURMOUNT_TLS_KEY (fail-closed)"
+                    .into());
+            }
+        };
+        Ok(Self { acme, tls })
+    }
+}
+
 /// SoT for truthy env flags (`1` / `true` / `yes` / `on`, case-insensitive).
 ///
 /// Used by [`env_bool`] and directory lab-escape
@@ -900,6 +938,20 @@ pub fn extra_onion_hosts_union(
     hosts
 }
 
+fn union_status_hostname(mut allowed: Vec<String>, primary_domain: &str) -> Vec<String> {
+    let status = crate::redirect::status_hostname(primary_domain);
+    if status.is_empty() {
+        return allowed;
+    }
+    if !allowed
+        .iter()
+        .any(|a| crate::redirect::host_is_allowlisted(&status, std::slice::from_ref(a)))
+    {
+        allowed.push(status);
+    }
+    allowed
+}
+
 pub fn union_static_vhost_hosts(
     mut allowed: Vec<String>,
     vhosts: &BTreeMap<String, PathBuf>,
@@ -1029,6 +1081,7 @@ mod tests {
             "SURMOUNT_ACME_DOMAINS",
             "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH",
             "SURMOUNT_ACME_CHALLENGE",
+            "SURMOUNT_ACME_HTTP01_WEBROOT",
             "SURMOUNT_ACME_DNS_PROVIDER",
             "SURMOUNT_ACME_DNS_HOOK",
             "SURMOUNT_ACME_DNS_HOOK_TIMEOUT_SECS",
@@ -1094,6 +1147,13 @@ mod tests {
     fn splora_proxy_and_http3_default_off_on_plain_http() {
         let _g = EnvGuard::acquire();
         let cfg = AppConfig::from_env().unwrap();
+        assert!(
+            cfg.redirect_allowed_hosts
+                .iter()
+                .any(|h| h == "status.surmount.systems"),
+            "default :80 allowlist must include systems dashboard Host: {:?}",
+            cfg.redirect_allowed_hosts
+        );
         assert!(!cfg.splora_proxy.enable);
         assert!(cfg.splora_proxy.portal_host.is_none());
         assert!(!cfg.http3.enable);
@@ -1343,6 +1403,77 @@ mod tests {
         assert!(
             err.contains("SESSION_SECRET") || err.contains("session"),
             "{err}"
+        );
+    }
+
+    /// Named contract: `acme-renew` is not an HTTP route. Nostr mode without
+    /// `SURMOUNT_SESSION_SECRET` must not refuse before issue. The HTTP
+    /// server path still refuses that same environment.
+    #[test]
+    fn acme_renew_nostr_without_session_secret_does_not_exit_before_issue() {
+        let _g = EnvGuard::acquire();
+        set_env("SURMOUNT_AUTH_MODE", "nostr");
+        set_env("SURMOUNT_LISTEN", "0.0.0.0:443");
+        set_env("SURMOUNT_LISTEN_MODE", "https");
+        set_env(
+            "SURMOUNT_TLS_CERT",
+            "/var/lib/surmount/secrets/tls/cert.pem",
+        );
+        set_env("SURMOUNT_TLS_KEY", "/var/lib/surmount/secrets/tls/key.pem");
+        set_env("SURMOUNT_ACME_ENABLE", "1");
+        set_env("SURMOUNT_ACME_CHALLENGE", "http-01");
+        set_env("SURMOUNT_ACME_DNS_PROVIDER", "none");
+        set_env(
+            "SURMOUNT_ACME_DIRECTORY",
+            "https://acme-v02.api.letsencrypt.org/directory",
+        );
+        set_env("SURMOUNT_ACME_EMAIL", "ops@example.test");
+        set_env(
+            "SURMOUNT_ACME_DOMAINS",
+            "services.example.test,mail.example.test",
+        );
+        set_env(
+            "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH",
+            "/var/lib/surmount/secrets/acme/account.json",
+        );
+        set_env(
+            "SURMOUNT_ACME_HTTP01_WEBROOT",
+            "/var/lib/surmount/acme-http01",
+        );
+
+        let settings = AcmeRenewSettings::from_env();
+        assert!(
+            settings.is_ok(),
+            "acme-renew exited before issue (nostr without session secret): {settings:?}"
+        );
+        let settings = settings.unwrap();
+        assert!(settings.acme.enable);
+        assert_eq!(settings.acme.challenge, crate::acme::AcmeChallenge::Http01);
+        assert_eq!(
+            settings.acme.dns_provider,
+            crate::acme::DnsProviderKind::None
+        );
+        assert_eq!(
+            settings.acme.domains,
+            vec![
+                "services.example.test".to_string(),
+                "mail.example.test".to_string()
+            ]
+        );
+        assert_eq!(
+            settings.tls.cert_path.as_os_str(),
+            std::ffi::OsStr::new("/var/lib/surmount/secrets/tls/cert.pem")
+        );
+        assert_eq!(
+            settings.tls.key_path.as_os_str(),
+            std::ffi::OsStr::new("/var/lib/surmount/secrets/tls/key.pem")
+        );
+
+        let err = AppConfig::from_env()
+            .expect_err("the HTTP server must still refuse nostr without the session secret");
+        assert!(
+            err.contains("SESSION_SECRET"),
+            "full UI config must still refuse nostr without the session secret: {err}"
         );
     }
 
@@ -1811,6 +1942,7 @@ mod tests {
         );
         assert!(!hosts.contains(&"www.example.test"));
         assert!(!hosts.contains(&"mta-sts.example.test"));
+        assert!(!hosts.contains(&"status.example.test"));
         assert!(!hosts.contains(&"mail.example.test"));
         let services = cfg.onion_discovery.lookup("services.example.test").unwrap();
         assert_eq!(services.onion_port, 443);

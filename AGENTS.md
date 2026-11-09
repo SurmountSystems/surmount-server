@@ -91,8 +91,10 @@ Product detail lives under `docs/`. This file is standing law only.
   switch and stays the explicit equivalent with no default
   target), hypervisor,
   Namecheap **hosted DNSSEC Status** click, or the operator using a TUI they asked to sit in.
-  Host-local enable is agent work when this machine already has
-  host-local. Using `just grok-oss` after the guest has the package is
+  Turning a switch on in the private overlay on horizon
+  (`~/.local/share/surmount/host-local/default.nix`) is agent work when
+  that file is already on this laptop. That directory is not a machine
+  name. The machines are horizon and surmount-1. Using `just grok-oss` after the guest has the package is
   the product, not a leftover click. If this laptop already has the
   Namecheap env files (mode 0600 regular files under
   `~/.local/share/surmount/`), `just laptop-renew-cert` is **agent work**.
@@ -227,6 +229,88 @@ Living maps: [docs/DNS.md](docs/DNS.md), [docs/SECURITY.md](docs/SECURITY.md),
 - **No NPM** ecosystem.
 - Short form why: [docs/principles.md](docs/principles.md).
 
+## No GHC, Haskell, or Python (operator 2026-11-06)
+
+This repo's own code is Rust and Nix. Upstream C dependencies may
+remain. Handwritten C is forbidden. See *Handwritten C is forbidden*.
+GHC, Haskell, and Python are forbidden, including transitive
+dependencies. An eval that reaches them fails.
+
+The firewall-tool check was the remaining Haskell edge after nixfmt-rs
+replaced Haskell nixfmt. That package is now a non-Haskell script
+(`writeShellScriptBin`). `networking.nftables.enable` and
+`networking.firewall.enable` stay on. Do not construct upstream
+`nixos-firewall-tool`. Referencing `ghc`, `haskellPackages`,
+`haskell.compiler`, `hadrian`, ShellCheck, `python`, `python3`, or
+`pythonPackages` throws during mail-host eval. The mail-host build and
+install closure must contain no derivation whose name or pname contains
+shellcheck, ShellCheck, ghc, hadrian, or haskell, and none whose name or
+pname contains python, including python3, pythonPackages, dbus-python,
+pandas, pip, and json-schema-for-humans. That walk is
+`t73-no-haskell-mail-host-closure` in `tests/module-eval.nix`. An empty
+walk does not pass. Git on the mail host keeps `pythonSupport` false.
+Do not add a replacement Python or Haskell tool.
+
+## Existing Rust or C, and every dry-run root together (operator 2026-11-07)
+
+When a Python program is in the way, use an existing Rust project.
+Operator 2026-11-07, later the same day: prefer Rust over C. An existing
+C project is only the fallback when no Rust project does that job. Do
+not write a new C program to stand in for the Python. The C files this
+session added under `nix/packages/` are not that replacement. Operator
+2026-11-07, later the same day: that fallback does not allow
+handwritten C. See *Handwritten C is forbidden*.
+
+Jinja templates have existing Rust renderers. MiniJinja is one
+(https://github.com/mitsuhiko/minijinja, accessed: 2026-11-07). Do not
+reject a Rust renderer because it is not a line-for-line copy of the
+Python script, and do not write a C renderer in its place.
+
+A `just deploy-dry-run` transcript is one full run. The build line
+already passes `--keep-going`. Fix every builder-failed root from that
+transcript before the next dry-run. Do not fix one root, rerun, and
+leave the other roots from the same transcript for a later pass.
+Dependents of a failed root are not extra roots.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Handwritten C is forbidden (operator 2026-11-07)
+
+Operator 2026-11-07, and "always remember" the same day. Handwritten C
+is forbidden in this repo. That includes a `.c` or `.h` file, and C
+embedded in Nix, bash, a patch, or any other file that emits a C
+program at build time. The operator cannot audit that code. Removing
+Python is to shrink the attack surface. Handwritten C is the same
+class of unauditable code. Upstream projects that are written in C may
+remain as dependencies. Do not replace removed C with new C. Remove
+every `.c` and `.h` file we added.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## No Python script and no C program inside Nix (operator 2026-11-08)
+
+Operator 2026-11-08, always remember. Do not inline a Python script in a
+Nix file. Do not inline a C program in a Nix file. A build-phase string
+must not carry a Python program body or a C program body. Renaming a
+`.py` file, hiding that text in `printf` or `cat`, or stuffing the same
+text into a patch is the same violation. Handwritten C already forbids
+a C program embedded in Nix. This section adds the Python script, and
+it restates that a shortcut which pastes either language into
+`nix/overlays.nix` is not the fix. Use an existing Rust tool, or change
+the build so the missing program is not invoked. Do not add a package
+whose name contains python.
+
+A Nix file we own must not carry a Meson program body. That includes
+meson.build text, a muon rewrite, a dependency() method sentence, an
+install_headers rewrite, or a PKG_CONFIG_PATH prepend whose purpose is
+to patch a Meson lookup. Hiding that text by rename, printf, cat, or a
+patch is the same forbid. Upstream packages may still be built by their
+own upstream build system. Our Nix files do not contain that program
+text. Operator 2026-11-08 stopped the Meson-in-Nix and C-in-Nix
+patching line.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Edge and security (operator direction 2026-07-30)
 
 - **No nginx** as product edge. In-tree nginx is **transitional-to-delete**.
@@ -286,6 +370,14 @@ Living maps: [docs/DNS.md](docs/DNS.md), [docs/SECURITY.md](docs/SECURITY.md),
   Thunderbird, or any other client, from an older mail thread. Read the
   screenshot: Evolution has Mail / Contacts / Calendar / Tasks / Memos.
   Say Evolution when that is what they opened.
+- **End a broken nested agent (operator 2026-11-07).** If an L2 or L3
+  is broken, end it and start a replacement when the work is still owed.
+  Do not spend the turn weighing that choice. Broken includes an early
+  exit with no land report, an L2 that is still reading or editing after
+  it should have spawned an L3, an L2 started with the wrong
+  instructions, and an L3 still on turn 1 with no file save after about
+  15 minutes. A healthy agent that is already doing the assigned work
+  stays up.
 
 ## Agent plans and reports live on the host (2026-08-18)
 
@@ -371,6 +463,30 @@ in the same turn (standing rule + compaction reload table). One file is
 attention dilution. Chat-only is compaction loss. Nix needing an untracked
 file is still not a reason to stage.
 
+## Number parallel items, and name the machine (operator 2026-11-03)
+
+Operator 2026-11-03. Two rules.
+
+1. Number every parallel list in operator-facing chat, reports, and
+   leftover lists. Use 1, 2, 3. A bare stack of services is a miss.
+   Each number is a complete sentence when the item is a leftover or a
+   decision.
+2. Name the machine. **horizon** is this laptop. **surmount-1** is the
+   mail host and the allowed remote Nix builder. Do not say "host-local"
+   as if it were a hostname.
+
+The private Nix overlay that `just deploy` copies is a directory, not a
+machine. On horizon that directory is
+`~/.local/share/surmount/host-local/` and the entry file is
+`default.nix`. The recipe passes that directory as the `--host-local`
+flag and the target is `root@surmount-1`. After the copy, surmount-1
+has the same files at `/root/surmount-server/host-local/`. When a
+sentence needs that directory, name horizon or surmount-1 and the path
+in the same sentence. The flag name `--host-local` stays, because that
+is the deploy argument.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Deploy dry-run is agent work (operator 2026-09-02)
 
 Full command list: [docs/TEST-AND-DEPLOY.md](docs/TEST-AND-DEPLOY.md).
@@ -395,6 +511,34 @@ flags and no `--dry-run` is that same switch. Laptop cargo and
 `BUILD_LOCAL` stay forbidden. Agents may run one `just check-remote`
 at a time. Prove-the-gate leftover law stays: do not list a leftover
 unless the agent cannot do it.
+
+## Do not stop before a passing dry-run (operator 2026-11-09)
+
+Never stop until just deploy-dry-run exits 0. The operator will not run
+just deploy until that dry-run passes. Stopping to ask the operator to
+deploy, or ending the task before a green dry-run, wastes the
+operator's time. The agent runs the dry-run. The agent must not run
+just deploy. just deploy-host without --dry-run is that same switch.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Rebuilds must hit the cache (operator 2026-11-09)
+
+A later dry-run must not recompile a derivation that a previous dry-run
+already built, unless an input that derivation depends on actually
+changed. If the same package builds again with no input change, the
+cache is broken and that is a bug to fix. Do not treat a full rebuild
+of an unchanged package as normal.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Trim dependencies to this host (operator 2026-11-09)
+
+Drop dependencies the mail host configuration does not need. The
+machine is surmount-1. Keep what that configuration uses. Do not add a
+package only because nixpkgs pulls it by default.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
 ## Cargo update and cargo audit are one pair (operator 2026-10-10)
 
@@ -438,12 +582,17 @@ unless the operator asked for that slice.
 
 **surmount-1** is the allowed remote Nix builder (ssh-ng). Mail and
 builder work share that host. That is why niceness and a hard memory
-cap matter. **Lake is optional and default off** (`surmount.lake` in
+cap matter. The private overlay is the directory
+`~/.local/share/surmount/host-local/` on horizon, copied to
+`/root/surmount-server/host-local/` on surmount-1. That directory is
+not a hostname. See *Number parallel items, and name the machine*.
+**Lake is optional and default off** (`surmount.lake` in
 `modules/lake.nix`; operator 2026-08-25 supersedes the 2026-08-18
 "never a lake unit" line). Do **not** start Lake on the live guest
-from an agent. When host-local enables it, the unit must be niced,
-`MemoryMax`-capped on `surmount-lake.service`, and journaled. Do not
-Nice= mail.
+from an agent. When that eval or the private overlay on horizon enables Lake, Lake is
+nice 19 with idle I/O, `MemoryMax`-capped on `surmount-lake.service`,
+and journaled. Mail is nice -20. Do not set builder `Nice=19` on mail
+to deprioritize it.
 
 Dev builds (remote Nix store builds, flake check, hygiene compiles) are
 always maximally nice: `nice -n 19` and idle ionice when practical.
@@ -453,11 +602,17 @@ of **one** CPU (that starves the ssh-ng protocol and parks cores).
 `cpuQuota = "auto"` means 95 percent times online CPUs on the niced
 wrapper, and no one-CPU quota on the slices.
 
-Mail and other critical services (`stalwart`, `management-ui`, `sshd`,
-`arti`, networking) are **not** nice. They stay at normal priority. Do
-**not** set `Nice=` on those units. Do **not** globally starve mail by
-nicing the whole machine. Prefer a niced builder user and a niced
-remote-build path.
+Mail and scram are nice -20 on ordinary CFS. They are not fifo. They
+are not realtime I/O. If a separate mail database unit exists, it is
+also nice -20. scram stays root and its start command still contains
+`--watch`. The HTTP management UI is nice -19. Arti is nice -18. An
+enabled Splora indexer, and the bitcoind or elementsd unit that indexer starts, is nice 5. The Nix daemon is nice 19 with idle
+I/O. Lake, when that eval or the private overlay on horizon enables Lake, is nice 19 with
+idle I/O. sshd stays un-niced (`Nice` unset). Do **not** set `Nice=`
+on sshd. Builds stay nice 19 with idle I/O. No realtime policy on
+product units. Do **not** globally starve mail by nicing the whole
+machine. Prefer a niced builder user and a niced remote-build path.
+Mail is the highest nice priority (-20), not `Nice` unset.
 
 **Hard memory cap (SHC ticket 261, closed 2026-08-18; console evidence
 2026-08-18).** **surmount-1** is mail plus the allowed remote Nix
@@ -476,8 +631,8 @@ cap (systemd `MemoryMax` / cgroup `memory.max`) plus the about-95-percent
 CPU/RAM/storage guards SHC asked for. Those 95 percent guards are a
 **total** ceiling, not "give the builder 95 percent of guest RAM."
 Mail and other critical services must **not** be starved. In-tree:
-`surmount.remoteBuilder` (default off) owns that cap for **ssh-ng /
-nixbuilder only**; enable from host-local. Trusted ssh-ng forwards
+`surmount.remoteBuilder` (default off in the public modules) owns that cap for **ssh-ng /
+nixbuilder only**; the private overlay on horizon turns it on for surmount-1. Trusted ssh-ng forwards
 rustc to **system `nix-daemon.service`**. `MemoryMax` and `Nice=19`
 must apply to **that** unit, not only `user-<uid>.slice`. A
 nixbuilder-only cap is a miss. Job slots (`maxJobs`, laptop machines
@@ -490,9 +645,9 @@ RAM size. Scaffold `maxJobs = 32` is half the measured mail-host CPUs
 builder OOM score, and Nice=19 are why this is no longer 8. Do not
 publish the raw CPU count. The builder is the preferred in-guest OOM
 victim (`OOMScoreAdjust`). Enable `surmount.hardening.qemuGuestAgent`
-from host-local so SHC can inject a command when SSH is stuck. Do **not**
+from the private overlay on horizon so SHC can inject a command when SSH is stuck. Do **not**
 start Lake from an agent. `surmount.lake.enable` stays false until
-host-local turns it on after this generation is live.
+the private overlay on horizon turns it on after this generation is live.
 
 Operator correction 2026-08-18: Nix is **misconfigured** if builds do
 not make maximally nice use of cores **without also OOMing the box**.
