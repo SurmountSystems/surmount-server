@@ -355,3 +355,57 @@ fn staged_mode_scans_index_blob_not_workdir() {
     assert!(err.contains("api-token-shape"), "{err}");
     assert!(!err.contains("ghp_Fake"), "{err}");
 }
+
+#[test]
+fn cli_quoted_upper_env_name_is_not_secret_assignment() {
+    let dir = temp_dir("upper-env");
+    let nix = dir.join("stalwart.nix");
+    fs::write(&nix, "{ secretKey = \"STALWART_RECOVERY_ADMIN\"; }\n").unwrap();
+    let out = run_paths(&[&nix]);
+    assert!(
+        out.status.success(),
+        "a quoted upper-case env name is not a secret: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn cli_quoted_secret_on_secret_key_still_exits_1() {
+    let dir = temp_dir("secret-key-literal");
+    let nix = dir.join("stalwart.nix");
+    fs::write(&nix, "{ secretKey = \"Zq81mXk0Pw\"; }\n").unwrap();
+    let out = run_paths(&[&nix]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("secret-assignment"), "{err}");
+    assert!(
+        !err.contains("Zq81mXk0Pw"),
+        "hit text must not include the literal: {err}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("Zq81mXk0Pw"), "{stdout}");
+}
+
+#[test]
+fn pre_commit_hook_scans_private_data_and_does_not_invoke_nix() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../script/git-hooks/pre-commit");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    assert!(
+        text.contains("surmount-private-data") && text.contains("--staged"),
+        "hook must still run the private-data scan"
+    );
+    for forbidden in [
+        "nix run",
+        "nix build",
+        "nix flake",
+        "nix eval",
+        "nix shell",
+        "perl",
+    ] {
+        assert!(
+            !text.contains(forbidden),
+            "hook must not invoke {forbidden}: {}",
+            path.display()
+        );
+    }
+}

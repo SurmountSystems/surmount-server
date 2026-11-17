@@ -11,8 +11,8 @@ path after GPG checks:
 
 ```text
 ~/.git-hooks/pre-commit  ->  $repo/script/git-hooks/pre-commit
-  -> PATH bin, or crates/target, or nix run .#surmount-private-data -- --staged
-     (BUILD_LOCAL=true skips the remote builder if the guest is down)
+  -> PATH bin, or crates/target/{release,debug}/surmount-private-data --staged
+     A missing binary fails the commit. The hook does not start a build.
 ```
 
 No per-repo `git config core.hooksPath` is required when that global chain is
@@ -21,10 +21,11 @@ global GPG unless you compose both).
 
 ## Manual runs
 
+These commands are not the commit hook. `git commit` does not run them.
+
 ```bash
-nix run .#surmount-private-data -- --staged
-nix run .#surmount-private-data -- --tree
-just check-private-data -- --staged
+surmount-private-data --staged
+surmount-private-data --tree
 ```
 
 ## Rules

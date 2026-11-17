@@ -42,32 +42,40 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     # rustc/cargo for crane packages and the Arti source build. Not host
-    # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable. Not beta 1.100.
-    # Master HEAD 27347cc2965498fa03393739031c9ef8ecd72c0a (2026-10-19)
-    # still has pkgs/development/compilers/rust/1_99.nix at rustcVersion
-    # "1.99.0". The 1.99.1 file is commit
-    # 9ecc0a672e9ef2ca4eec8e87dbee653607a7d332 (message
-    # "rust: 1.99.0 -> 1.99.1"), open as NixOS/nixpkgs pull 574572 against
-    # staging, not merged to master. That file sets rustcVersion = "1.99.1".
-    # Prior lock c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81 was rustc 1.99.0.
+    # nixos-26.05. Not nixos-unstable. Not the 1.100 beta.
+    # Read 2026-11-16: master HEAD
+    # f6d0c65fd4bc20d15fb5c51cbe8d60fa662ab4b7 still has
+    # pkgs/development/compilers/rust/1_99.nix at rustcVersion = "1.99.1".
+    # 1_100.nix is HTTP 404 on master, staging, and nixos-unstable.
+    # The stable 1.100.0 file is commit
+    # fd400cc205c104a499657a82680b6a3eaa8b7d8e (message
+    # "rust: 1.99.1 -> 1.100.0", commit date 2026-11-10), open as
+    # NixOS/nixpkgs pull 586088 against staging, not merged. That file
+    # sets rustcVersion = "1.100.0" and bootstrapVersion = "1.100.0".
+    # Prior lock 9ecc0a672e9ef2ca4eec8e87dbee653607a7d332 was rustc 1.99.1.
     # Crane has no nixpkgs input: mkLib keeps host pkgs and
     # overrideToolchain supplies this rustc.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/9ecc0a672e9ef2ca4eec8e87dbee653607a7d332";
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/fd400cc205c104a499657a82680b6a3eaa8b7d8e";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
     # Crane release v0.24.0 is 692f7e9 (2026-08-21), older than master.
-    # Master tip bd63bf1 (2026-10-11) is one commit after 47b6b27. That
-    # commit only bumps crane's internal flake.lock. The pin follows master.
-    crane.url = "github:ipetkov/crane/bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a";
+    # Master tip 79fd63528501446749c09f08cad486a58c7d173e, read 2026-11-16
+    # (commit date 2026-11-04). Subject: Make  both `name`/`version` take
+    # precedence if in `[workspace.metadata.crane]` (#1099). GitHub checks
+    # "run tests" and "run tests 26.05" succeeded. Not a broken HEAD.
+    # Prior pin bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a.
+    crane.url = "github:ipetkov/crane/79fd63528501446749c09f08cad486a58c7d173e";
     # crane follows its own nixpkgs; we pass pkgs from our nixpkgs in outputs.
 
-    # sops-nix has no versioned GitHub release. 44931708 (2026-10-15) is six
-    # commits after 5efb5a6: nested JSON keys, secrets ordered before
-    # sysinit.target, and clearer key errors. The tip commit is a finished
-    # test, not a broken HEAD.
+    # sops-nix has no versioned GitHub release. Tip
+    # 11e5885d241743ff0193465d533b20e754bc3ce0, read 2026-11-16 (commit
+    # date 2026-11-14). Subject: update vendorHash, after the
+    # go.opentelemetry.io/otel/sdk bump. GitHub check "tests" succeeded.
+    # Not a broken HEAD. Prior pin
+    # 44931708c62937c2b1bf7953902989fa5bb9ee1b.
     sops-nix = {
-      url = "github:Mic92/sops-nix/44931708c62937c2b1bf7953902989fa5bb9ee1b";
+      url = "github:Mic92/sops-nix/11e5885d241743ff0193465d533b20e754bc3ce0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -223,7 +231,7 @@
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
-      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.1).
+      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust rustc 1.100.0).
       mkManagementUiCrane =
         system:
         let
@@ -391,7 +399,9 @@
           stalwart-webui = pkgs.callPackage ./nix/packages/stalwart-webui.nix { };
           stalwart-spam-filter = pkgs.callPackage ./nix/packages/stalwart-spam-filter.nix { };
           # DNS-01 Namecheap helper **code** only (credentials stay Domain A /run).
-          acme-dns-hook-namecheap = pkgs.callPackage ./nix/packages/acme-dns-hook-namecheap.nix { };
+          acme-dns-hook-namecheap = pkgs.callPackage ./nix/packages/acme-dns-hook-namecheap.nix {
+            inherit craneLib pkgsRust;
+          };
           # Apex/www static files from locked github:SurmountSystems/site.
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
@@ -1161,7 +1171,7 @@
         {
           default = pkgs.mkShell {
             packages = [
-              # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.99.1).
+              # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.100.0).
               (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
               pkgs.rust-analyzer
               pkgs.pkg-config

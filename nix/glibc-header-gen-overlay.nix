@@ -243,10 +243,7 @@ in
     let
       functionArgs = prev.glibcLocales.override.__functionArgs or { };
       appliedArgs =
-        if builtins.all builtins.isBool (builtins.attrValues functionArgs) then
-          { }
-        else
-          functionArgs;
+        if builtins.all builtins.isBool (builtins.attrValues functionArgs) then { } else functionArgs;
     in
     prev.lib.makeOverridable (
       attrs: (prev.glibcLocales.override attrs).overrideAttrs localesFromLocaledef

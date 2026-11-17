@@ -41,23 +41,21 @@
 }:
 
 let
-  # Checked 2026-11-03: GitHub releases/latest is still v1.0.2
-  # (published 2026-11-02T15:42:44Z, not a prerelease). Asset names are
-  # unchanged. The gnu tarball still contains one binary named stalwart.
-  # The v1.0.2 notes replace Email.encryptAtRest with Encryption.atRestEnable
-  # and move encryptOnAppend onto the account. This file does not generate
-  # those settings. modules/stalwart-service.nix writes DataStore config.json only.
-  version = "1.0.2";
+  # Checked 2026-11-16 on surmount-1: GitHub releases/latest is v1.1.0
+  # (published 2026-11-09T13:23:08Z, not a prerelease). Gnu asset names are
+  # unchanged. Each tarball contains one binary named stalwart. Hashes are
+  # nix store prefetch-file on the /mnt/hdd store, then nix hash file --sri.
+  version = "1.1.0";
 
   # Release asset hashes (gnu libc). musl variants exist upstream if needed.
   sources = {
     x86_64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-EL03XUVB4v+6/f1dl9iqGlwYhDj9hwD71vB27g/C8k8=";
+      hash = "sha256-Yub9r2j23ftFqg3BwoV4p+BfHl6aDJX8z+Hq5wnU7Lw=";
     };
     aarch64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-eYZKz9BV2PulLmNs3kghRTZpoMwiKXWmB9OSdAvo/a4=";
+      hash = "sha256-4f9kDw04ANcqBJFue0AvGeKOkQbtPtcZqHbSONn3NWc=";
     };
   };
 

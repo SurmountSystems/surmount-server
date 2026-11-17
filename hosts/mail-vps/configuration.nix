@@ -309,6 +309,13 @@
     ];
   };
 
+  # Fish 4 is the Rust rewrite. usePython stays off so the mail-host
+  # closure does not gain a Python build for man pages.
+  programs.fish.enable = true;
+  programs.fish.generateCompletions = false;
+  programs.fish.package = pkgs.fish.override { usePython = false; };
+  users.users.root.shell = config.programs.fish.package;
+
   # ---- Nix -----------------------------------------------------------------
   nix.settings = {
     experimental-features = [
@@ -334,6 +341,10 @@
   # install the NixOS HTML manual or the configuration man page that
   # renderer builds. nftables and the firewall stay enabled.
   documentation.nixos.enable = false;
+
+  # The mail host has no font package. Fontconfig 2.17.1 configure
+  # probes Python.
+  fonts.fontconfig.enable = false;
 
   # ---- Minimal conveniences ------------------------------------------------
   environment.systemPackages = with pkgs; [

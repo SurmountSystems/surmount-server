@@ -18,13 +18,13 @@ stdenv.mkDerivation {
   dontBuild = true;
 
   installPhase = ''
-    mkdir -p "$out/bin"
-    cat > "$out/bin/qemu-ga" <<'EOF'
-#!/bin/sh
-echo "qemu-guest-agent stub: qemu C sources are not in this nixpkgs tree" >&2
-exit 1
-EOF
-    chmod 755 "$out/bin/qemu-ga"
+        mkdir -p "$out/bin"
+        cat > "$out/bin/qemu-ga" <<'EOF'
+    #!/bin/sh
+    echo "qemu-guest-agent stub: qemu C sources are not in this nixpkgs tree" >&2
+    exit 1
+    EOF
+        chmod 755 "$out/bin/qemu-ga"
   '';
 
   # Keeps the src argument live without adding it as a build input.

@@ -489,8 +489,7 @@ let
     # Burst keeps http_request and tls_handshake_failed during a scan.
     LogRateLimitIntervalSec = "30s";
     LogRateLimitBurst = 50000;
-    Environment = envList
-      ++ optional (sploraWebRoot != "") "SURMOUNT_SPLORA_WEB_ROOT=${sploraWebRoot}";
+    Environment = envList ++ optional (sploraWebRoot != "") "SURMOUNT_SPLORA_WEB_ROOT=${sploraWebRoot}";
     NoNewPrivileges = true;
     PrivateTmp = true;
     ProtectSystem = "strict";

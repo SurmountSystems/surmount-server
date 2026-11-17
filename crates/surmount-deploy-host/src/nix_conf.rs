@@ -11,6 +11,10 @@
 pub(crate) const GCCARCH_X86_64_V3: &str = "gccarch-x86-64-v3";
 
 /// Remote-builder feature. The bootstrap must not drop it.
+/// The shell driver inlines the same token. This const is the Rust
+/// oracle the unit tests compare against, so a lib-only clippy build
+/// (no `cfg(test)`) does not need it.
+#[cfg(test)]
 pub(crate) const SURMOUNT_REMOTE: &str = "surmount-remote";
 
 /// Copy target. Never write the store nix.conf in place. A bind of this
@@ -18,6 +22,8 @@ pub(crate) const SURMOUNT_REMOTE: &str = "surmount-remote";
 pub(crate) const RUN_NIX_CONF: &str = "/run/surmount-nix.conf";
 
 /// What to do with the daemon conf before the system build.
+/// Unit tests only. The target runs the shell driver, not this enum.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GccarchConfDecision {
     /// `system-features` already lists [`GCCARCH_X86_64_V3`].
@@ -28,6 +34,7 @@ pub(crate) enum GccarchConfDecision {
     Rewrite(String),
 }
 
+#[cfg(test)]
 impl GccarchConfDecision {
     pub(crate) fn rewrites_conf(&self) -> bool {
         matches!(self, Self::Rewrite(_))
@@ -47,6 +54,7 @@ impl GccarchConfDecision {
 /// `extra-system-features` line gains `surmount-remote` and
 /// `gccarch-x86-64-v3` without dropping tokens already on the line.
 /// The `system-features` line text is copied unchanged.
+#[cfg(test)]
 pub(crate) fn bootstrap_gccarch_conf(conf: &str) -> GccarchConfDecision {
     let lines = conf_lines(conf);
     if last_system_features_value(&lines).is_some_and(|value| value_has_arch(&value)) {
@@ -74,6 +82,7 @@ pub(crate) fn bootstrap_gccarch_conf(conf: &str) -> GccarchConfDecision {
     GccarchConfDecision::Rewrite(out)
 }
 
+#[cfg(test)]
 fn conf_lines(conf: &str) -> Vec<String> {
     if conf.is_empty() {
         return Vec::new();
@@ -85,10 +94,12 @@ fn conf_lines(conf: &str) -> Vec<String> {
     lines
 }
 
+#[cfg(test)]
 fn trim_ascii_ws(s: &str) -> &str {
     s.trim_matches([' ', '\t'])
 }
 
+#[cfg(test)]
 fn assignment_key(line: &str) -> Option<&str> {
     let rest = trim_ascii_ws(line);
     if rest.is_empty() || rest.starts_with('#') {
@@ -106,6 +117,7 @@ fn assignment_key(line: &str) -> Option<&str> {
     Some(key)
 }
 
+#[cfg(test)]
 fn last_system_features_value(lines: &[String]) -> Option<String> {
     let mut last = None;
     for line in lines {
@@ -118,6 +130,7 @@ fn last_system_features_value(lines: &[String]) -> Option<String> {
     last
 }
 
+#[cfg(test)]
 fn ascii_ws_tokens(value: &str) -> Vec<String> {
     let mut trimmed = trim_ascii_ws(value);
     if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
@@ -133,12 +146,14 @@ fn ascii_ws_tokens(value: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn value_has_arch(value: &str) -> bool {
     ascii_ws_tokens(value)
         .iter()
         .any(|tok| tok == GCCARCH_X86_64_V3)
 }
 
+#[cfg(test)]
 fn ensure_extra_tokens(value: &str) -> String {
     let mut toks = ascii_ws_tokens(value);
     if !toks.iter().any(|tok| tok == SURMOUNT_REMOTE) {
@@ -150,6 +165,7 @@ fn ensure_extra_tokens(value: &str) -> String {
     toks.join(" ")
 }
 
+#[cfg(test)]
 fn rewrite_extra_line(line: &str) -> String {
     let eq = line
         .find('=')

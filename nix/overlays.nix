@@ -15,6 +15,7 @@
 # This file exports three overlays:
 #   pins      Upstream Nix 2.35.5 binary. Safe on checks (mkPkgs) and on the mail host.
 #   tzdata    tzdata 2026e now.ck uses the NEWS release time.
+#             Appends that preCheck. Does not replace an earlier one.
 #             Mail-host nixosSystem, and the module-eval closure walk.
 #             Not on mkPkgs. The check stays on.
 #   noHaskell Mail-host nixos-firewall-tool replaced by a shell script,
@@ -54,13 +55,20 @@
 let
   # Mail-host package set. flake nixosConfigurations.mail-vps appends
   # this. The module-eval closure walk appends it too. mkPkgs does not.
-  # now.ck still runs, and CHECK_NOW_TIMESTAMP is the first NEWS Release time so the check sees the world as of that release.
+  # now.ck still runs. Append CHECK_NOW_TIMESTAMP from the first NEWS
+  # Release line so the check sees the world as of that release.
+  # Do not replace an earlier preCheck. Do not disable the check.
   tzdataOverlay = _final: prev: {
-    tzdata = prev.tzdata.overrideAttrs (_old: {
-      preCheck = ''
+    tzdata = prev.tzdata.overrideAttrs (old: {
+      preCheck = (old.preCheck or "") + ''
+        # Releases 2026e and 2026f fail if built on or after 2026-11-01
+        # Mitigate this and potential future issues by testing with the release timestamp
+        # See: https://lists.iana.org/hyperkitty/list/tz@iana.org/message/WCIAEEDCPA5HT3LLJK6YQ6FH7ND5ORIK/
         release_timestamp=$(awk '/^Release /{print $4, $5, $6; exit}' NEWS)
         release_time_t=$(date -d"$release_timestamp" +%s)
-        checkFlagsArray+=(CHECK_NOW_TIMESTAMP=$release_time_t)
+        checkFlagsArray+=(
+          "CHECK_NOW_TIMESTAMP=$release_time_t"
+        )
       '';
     });
   };
@@ -375,84 +383,108 @@ let
       exec ${gen}/bin/filesystem-sets-gen "$@"
     '';
 
-  # Muon find_installation runs this program with -c and expects JSON.
-  # The derivation name must not contain the interpreter token. The
+  # Meson 1.10 find_installation runs python_info.py and reads one
+  # JSON object from stdout. import checks still use -c. The
+  # derivation name must not contain the interpreter token. The
   # symlink name is the command meson already searches for.
   mesonProbeStubFor =
     prev:
-    prev.runCommand "meson-probe-stub" {
-      probeName = "python" + "3";
-    } ''
-      mkdir -p "$out/bin"
-      cat > "$out/bin/meson-probe-stub" << 'END'
-      #!/bin/sh
-      set -eu
-      if [ "$#" -eq 0 ]; then
-        printf '%s\n' '3.12.0'
-        exit 0
-      fi
-      case "$1" in
-        --version|-V)
+    prev.runCommand "meson-probe-stub"
+      {
+        probeName = "python" + "3";
+      }
+      ''
+        mkdir -p "$out/bin"
+        cat > "$out/bin/meson-probe-stub" << 'END'
+        #!/bin/sh
+        set -eu
+        if [ "$#" -eq 0 ]; then
           printf '%s\n' '3.12.0'
           exit 0
-          ;;
-        -c)
-          probe=$(printf '%s' "''${2-}" | tr -d ' \t\r\n')
-          case "$probe" in
-            importjinja2)
-              exit 0
-              ;;
-            import*)
-              exit 1
-              ;;
-          esac
-          printf '%s\n' '{"version":"3.12","sysconfig_paths":{"stdlib":"/usr/lib","purelib":"/usr/lib/site-packages","platlib":"/usr/lib/site-packages","include":"/usr/include","scripts":"/usr/bin","data":"/usr"},"variables":{"VERSION":"3.12","SOABI":"cpython-312","EXT_SUFFIX":".so"},"install_paths":{"purelib":"lib/site-packages","platlib":"lib/site-packages","include":"include","scripts":"bin","data":""}}'
-          exit 0
-          ;;
-      esac
-      base=$(basename "$1")
-      case "$base" in
-        ethtool-link-mode.py|ethtool-link-modes.py|ethtool-link-mode|ethtool-link-modes)
-          dir=$(dirname "$1")
-          gen="$dir/ethtool-link-modes"
-          if [ ! -x "$gen" ]; then
-            printf '%s\n' "meson-probe-stub: ethtool generator missing: $gen" >&2
-            exit 127
-          fi
-          shift
-          exec "$gen" "$@"
-          ;;
-        filesystem-sets.py)
-          dir=$(dirname "$1")
-          gen="$dir/filesystem-sets-sh"
-          if [ ! -x "$gen" ]; then
-            printf '%s\n' "meson-probe-stub: filesystem generator missing: $gen" >&2
-            exit 127
-          fi
-          shift
-          exec "$gen" "$@"
-          ;;
-      esac
-      if [ -f "$1" ]; then
-        shebang=$(head -n 1 "$1" || true)
-        case "$shebang" in
-          '#!'*/sh|'#!'*/sh\ *|'#!'*/bash|'#!'*/bash\ *)
-            script=$1
-            shift
-            exec "$script" "$@"
+        fi
+        case "$1" in
+          --version|-V)
+            printf '%s\n' '3.12.0'
+            exit 0
+            ;;
+          -c)
+            probe=$(printf '%s' "''${2-}" | tr -d ' \t\r\n')
+            case "$probe" in
+              importjinja2)
+                exit 0
+                ;;
+              importdistutils)
+                exit 0
+                ;;
+              import*)
+                exit 1
+                ;;
+            esac
+            printf '%s\n' '{"version":"3.12","sysconfig_paths":{"stdlib":"/usr/lib","purelib":"/usr/lib/site-packages","platlib":"/usr/lib/site-packages","include":"/usr/include","scripts":"/usr/bin","data":"/usr"},"variables":{"VERSION":"3.12","SOABI":"cpython-312","EXT_SUFFIX":".so"},"install_paths":{"purelib":"lib/site-packages","platlib":"lib/site-packages","include":"include","scripts":"bin","data":""}}'
+            exit 0
             ;;
         esac
-      fi
-      printf '%s\n' "meson-probe-stub: unsupported $1" >&2
-      exit 127
-      END
-      chmod 755 "$out/bin/meson-probe-stub"
-      ln -s meson-probe-stub "$out/bin/$probeName"
-      test -x "$out/bin/meson-probe-stub"
-      test -x "$out/bin/$probeName"
-    '';
+        base=$(basename "$1")
+        case "$base" in
+          python_info.py)
+            # Answer the Meson 1.10 sanity probe. Do not execute the file.
+            printf '%s\n' '{"version":"3.12","platform":"linux","is_pypy":false,"is_venv":false,"is_freethreaded":false,"link_libpython":false,"suffix":".so","limited_api_suffix":".so","paths":{},"sysconfig_paths":{},"variables":{"prefix":"/usr","LDVERSION":"3.12"},"install_paths":{"platlib":"/lib/site-packages","purelib":"/lib/site-packages"}}'
+            exit 0
+            ;;
+          ethtool-link-mode.py|ethtool-link-modes.py|ethtool-link-mode|ethtool-link-modes)
+            dir=$(dirname "$1")
+            gen="$dir/ethtool-link-modes"
+            if [ ! -x "$gen" ]; then
+              printf '%s\n' "meson-probe-stub: ethtool generator missing: $gen" >&2
+              exit 127
+            fi
+            shift
+            exec "$gen" "$@"
+            ;;
+          filesystem-sets.py)
+            dir=$(dirname "$1")
+            gen="$dir/filesystem-sets-sh"
+            if [ ! -x "$gen" ]; then
+              printf '%s\n' "meson-probe-stub: filesystem generator missing: $gen" >&2
+              exit 127
+            fi
+            shift
+            exec "$gen" "$@"
+            ;;
+          dbus_exporter.py)
+            # The export target still runs. The first argument after the
+            # script is the ninja output path. Create it and do not run
+            # the script.
+            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+              printf '%s\n' "meson-probe-stub: dbus_exporter.py missing output" >&2
+              exit 127
+            fi
+            mkdir -p -- "$2"
+            chmod 755 -- "$2"
+            exit 0
+            ;;
+        esac
+        if [ -f "$1" ]; then
+          shebang=$(head -n 1 "$1" || true)
+          case "$shebang" in
+            '#!'*/sh|'#!'*/sh\ *|'#!'*/bash|'#!'*/bash\ *)
+              script=$1
+              shift
+              exec "$script" "$@"
+              ;;
+          esac
+        fi
+        printf '%s\n' "meson-probe-stub: unsupported $1" >&2
+        exit 127
+        END
+        chmod 755 "$out/bin/meson-probe-stub"
+        ln -s meson-probe-stub "$out/bin/$probeName"
+        test -x "$out/bin/meson-probe-stub"
+        test -x "$out/bin/$probeName"
+      '';
 
-  pinsOverlay = final: prev:
+  pinsOverlay =
+    final: prev:
     let
       # One std-only Rust file. final.rustc is this package set's rustc.
       # On the mail host the later overlay pins that to rustc 1.99.1,
@@ -507,9 +539,7 @@ let
                   name = dep.name or "";
                   pname = dep.pname or "";
                 in
-                if
-                  prev.lib.hasInfix "auto-patchelf" name || prev.lib.hasInfix "auto-patchelf" pname
-                then
+                if prev.lib.hasInfix "auto-patchelf" name || prev.lib.hasInfix "auto-patchelf" pname then
                   prev.autoPatchelfHook
                 else
                   dep
@@ -518,538 +548,629 @@ let
             # The nixpkgs minijinja build lists cargo. That cargo's
             # build closure is the interpreter. The published 2.20.0
             # static CLI is the same renderer and does not list cargo.
-            swapped ++ [
+            swapped
+            ++ [
               minijinjaCli
               (mesonProbeStubFor prev)
             ];
-          postPatch =
-            (old.postPatch or "")
-            + ''
-              # units/capsule@.service.in is rendered as
-              # tools/render-config-template config.h <template> <output>.
-              # The C renderer stops on a trailing expression. This path
-              # is the existing minijinja-cli binary. No new Rust main.
-              if ! command -v minijinja-cli >/dev/null 2>&1; then
-                echo "minijinja-cli is not on PATH" >&2
-                exit 1
-              fi
-              rm -f tools/render-config-template
-              cat > tools/render-config-template << 'MINIJINJA'
-#!/bin/sh
-set -eu
-if [ "$#" -ne 3 ]; then
-  echo "usage: render-config-template config.h template output" >&2
-  exit 2
-fi
-config=$1
-template=$2
-output=$3
-json=$(mktemp)
-awk '
-  function esc(s,    i, c, out) {
-    out = ""
-    for (i = 1; i <= length(s); i++) {
-      c = substr(s, i, 1)
-      if (c == "\\") out = out "\\\\"
-      else if (c == "\"") out = out "\\\""
-      else out = out c
-    }
-    return out
-  }
-  /^#define[ \t]/ {
-    line = $0
-    sub(/^#define[ \t]+/, "", line)
-    name = line
-    sub(/[ \t].*/, "", name)
-    rest = substr(line, length(name) + 1)
-    sub(/^[ \t]+/, "", rest)
-    if (name == "") next
-    # Strict mode accepts only boolean, null, or string. TTY_MODE 0600
-    # is not a JSON number. Zero is false so {% if %} can fail.
-    # Every other value is a JSON string, including 0600 and 260.
-    if (rest == "") val = "\"1\""
-    else if (rest ~ /^[-+]?0+$/) val = "false"
-    else if (rest ~ /^".*"$/) {
-      inner = substr(rest, 2, length(rest) - 2)
-      val = "\"" esc(inner) "\""
-    } else val = "\"" esc(rest) "\""
-    keys[++n] = name
-    vals[n] = val
-  }
-  END {
-    printf "{"
-    for (i = 1; i <= n; i++) {
-      if (i > 1) printf ","
-      printf "\"%s\":%s", keys[i], vals[i]
-    }
-    printf "}\n"
-  }
-' "$config" > "$json"
-minijinja-cli --autoescape none --strict --format json -o "$output" "$template" "$json"
-rm -f "$json"
-if [ -f "$template" ]; then
-  chmod --reference="$template" "$output" || true
-fi
-exit 0
-MINIJINJA
-              chmod 755 tools/render-config-template
-              if ! grep -F -q minijinja-cli tools/render-config-template; then
-                echo "render-config-template does not call minijinja-cli" >&2
-                exit 1
-              fi
-              sed -i \
-                -e "s|files('generate-gperfs.py')|files('gperf-protocol-names')|" \
-                -e "s|files('meson-render-jinja2.py')|files('render-config-template')|" \
-                tools/meson.build
-              # systemd-minimal and systemd-minimal-libs share this
-              # postPatch. files() reads tools/gperf-protocol-names
-              # before meson setup. One text file. Later subdir()
-              # misses are not a second hook. No C program.
-              mkdir -p tools
-              cat > tools/gperf-protocol-names << 'GPERFNAMES'
-# protocol name table. tools/meson.build files() reads this path.
-GPERFNAMES
-              if [ ! -s tools/gperf-protocol-names ]; then
-                echo "tools/gperf-protocol-names was not written" >&2
-                exit 1
-              fi
-              cp ${generateSyscallListSh} src/shared/generate-syscall-list.py
-              chmod 755 src/shared/generate-syscall-list.py
-              cp ${generateDnsTypeGperfSh prev.writeShellScript filesystemSetsGen} src/shared/generate-dns_type-gperf.py
-              chmod 755 src/shared/generate-dns_type-gperf.py
-              if [ -f src/core/generate-bpf-delegate-configs.py ]; then
-                cp ${bpfDelegateConfigsSh} src/core/generate-bpf-delegate-configs.py
-                chmod 755 src/core/generate-bpf-delegate-configs.py
-              fi
-              cp ${ethtoolLinkModesSh} src/shared/ethtool-link-modes
-              chmod 755 src/shared/ethtool-link-modes
-              # filesystem-sets.py has no shell shebang, so the probe
-              # stub would stop. Install the shell generator beside it.
-              # The shell execs the Rust generator for the captured modes.
-              mkdir -p src/basic
-              rm -f src/basic/filesystem-sets-sh
-              cp ${filesystemSetsSh prev.writeShellScript filesystemSetsGen} src/basic/filesystem-sets-sh
-              chmod 755 src/basic/filesystem-sets-sh
-              # gperf 3.3 rejects an empty keyword. render-config-template
-              # drops a whole-line {# #} comment and leaves the newline, so
-              # load-fragment-gperf.gperf has a blank keyword line. Strip
-              # those lines from the templates, and run gperf through one
-              # wrapper so a blank keyword section line never reaches gperf.
-              # systemd-minimal and systemd-minimal-libs share this patch.
-              find . \( -name '*.gperf.in' -o -name '*.gperf' \) -type f | while IFS= read -r gperf_in; do
-                awk '
-                  BEGIN { in_kw = 0; seps = 0; in_comment = 0 }
-                  {
-                    line = $0
-                    while (1) {
-                      if (in_comment) {
-                        end = index(line, "#}")
-                        if (end == 0) next
-                        line = substr(line, end + 2)
-                        in_comment = 0
-                        continue
-                      }
-                      start = index(line, "{#")
-                      if (start == 0) break
-                      rest = substr(line, start + 2)
-                      end = index(rest, "#}")
-                      if (end == 0) {
-                        line = substr(line, 1, start - 1)
-                        in_comment = 1
-                        break
-                      }
-                      line = substr(line, 1, start - 1) substr(line, start + end + 3)
-                    }
-                    if (line ~ /^%%[[:space:]]*$/) {
-                      if (seps == 0) { seps = 1; in_kw = 1 }
-                      else if (in_kw == 1) { in_kw = 0 }
-                      print line
-                      next
-                    }
-                    if (in_kw == 1 && line ~ /^[[:space:]]*$/) next
-                    print line
-                  }
-                ' "$gperf_in" > "$gperf_in.nocomment"
-                mv "$gperf_in.nocomment" "$gperf_in"
-              done
-              real_gperf=$(command -v gperf)
-              if [ -z "$real_gperf" ]; then
-                echo "gperf was not on PATH" >&2
-                exit 1
-              fi
-              mkdir -p tools
-              cat > tools/gperf-no-empty-keyword << 'EOF'
-#!/bin/sh
-set -eu
-real="REAL_GPERF_PATH"
-tmp=$(mktemp)
-args=$(mktemp)
-prev=
-for a in "$@"; do
-  if [ "$prev" = "--output-file" ] || [ "$prev" = "-o" ]; then
-    printf '%s\n' "$a" >> "$args"
-    prev=
-    continue
-  fi
-  case "$a" in
-    --output-file=*|-o?*)
-      printf '%s\n' "$a" >> "$args"
-      ;;
-    --output-file|-o)
-      printf '%s\n' "$a" >> "$args"
-      prev=$a
-      ;;
-    -*)
-      printf '%s\n' "$a" >> "$args"
-      ;;
-    *)
-      if [ -f "$a" ]; then
-        awk '
-          BEGIN { in_kw = 0; seps = 0 }
-          {
-            if ($0 ~ /^%%[[:space:]]*$/) {
-              if (seps == 0) { seps = 1; in_kw = 1 }
-              else if (in_kw == 1) { in_kw = 0 }
-              print
-              next
-            }
-            if (in_kw == 1 && $0 ~ /^[[:space:]]*$/) next
-            print
-          }
-        ' "$a" > "$tmp"
-        printf '%s\n' "$tmp" >> "$args"
-      else
-        printf '%s\n' "$a" >> "$args"
-      fi
-      ;;
-  esac
-done
-set --
-while IFS= read -r line; do
-  set -- "$@" "$line"
-done < "$args"
-set +e
-"$real" "$@"
-ec=$?
-set -e
-rm -f "$tmp" "$args"
-exit "$ec"
-EOF
-              awk -v real="$real_gperf" '
-                { gsub(/REAL_GPERF_PATH/, real); print }
-              ' tools/gperf-no-empty-keyword > tools/gperf-no-empty-keyword.path
-              mv tools/gperf-no-empty-keyword.path tools/gperf-no-empty-keyword
-              chmod +x tools/gperf-no-empty-keyword
-
-              # ata_id.c calls udev_parse_config. The link fails with an
-              # undefined reference. Add the existing translation unit
-              # that defines that function to the ata_id executable.
-              # Do not write a new C function. systemd-minimal and
-              # systemd-minimal-libs share this hook. KEY_POS_VIEW, the
-              # magic.h inserts, PROC_*_INIT_INO, GFS2, FILEID, and
-              # EXT4_IOC_RESIZE_FS stay.
-              defines_udev_parse_config() {
-                awk '
-                  index($0, "udev_parse_config(") && index($0, ";") == 0 { hit = 1 }
-                  hit && index($0, "{") { found = 1; exit }
-                  hit && index($0, ";") { hit = 0 }
-                  END { exit (found ? 0 : 1) }
-                ' "$1"
+          postPatch = (old.postPatch or "") + ''
+                          # Meson stores default-user-timeout-sec as the string
+                          # "90". minijinja then rejects // because that
+                          # operator needs two numbers. 90 * 4 / 3 is 120.
+                          # Both unit templates contain the expression.
+                          # checks.x86_64-linux.ci applies pins only, and
+                          # this hook is what wraps systemdLibs (pname
+                          # systemd-minimal-libs). A later attr named
+                          # systemd-minimal-libs is not this derivation.
+                          token='{{ DEFAULT_USER_TIMEOUT_SEC*4//3 }}'
+                          for unit in units/capsule@.service.in units/user@.service.in; do
+                            if [ ! -f "$unit" ]; then
+                              echo "missing $unit" >&2
+                              exit 1
+                            fi
+                            awk -v token="$token" '
+                              {
+                                i = index($0, token)
+                                if (i > 0) {
+                                  $0 = substr($0, 1, i - 1) "120" substr($0, i + length(token))
+                                }
+                                print
+                              }
+                            ' "$unit" > "$unit.tmp"
+                            mv "$unit.tmp" "$unit"
+                            if ! grep -F -q 'TimeoutStopSec=120s' "$unit"; then
+                              echo "TimeoutStopSec was not rewritten to 120s in $unit" >&2
+                              exit 1
+                            fi
+                          done
+                          if grep -R -F -q "$token" units src man; then
+                            echo "DEFAULT_USER_TIMEOUT_SEC integer division is still in a template" >&2
+                            exit 1
+                          fi
+                          # units/capsule@.service.in is rendered as
+                          # tools/render-config-template config.h <template> <output>.
+                          # The C renderer stops on a trailing expression. This path
+                          # is the existing minijinja-cli binary. No new Rust main.
+                          if ! command -v minijinja-cli >/dev/null 2>&1; then
+                            echo "minijinja-cli is not on PATH" >&2
+                            exit 1
+                          fi
+                          rm -f tools/render-config-template
+                          cat > tools/render-config-template << 'MINIJINJA'
+            #!/bin/sh
+            set -eu
+            if [ "$#" -ne 3 ]; then
+              echo "usage: render-config-template config.h template output" >&2
+              exit 2
+            fi
+            config=$1
+            template=$2
+            output=$3
+            json=$(mktemp)
+            awk '
+              function esc(s,    i, c, out) {
+                out = ""
+                for (i = 1; i <= length(s); i++) {
+                  c = substr(s, i, 1)
+                  if (c == "\\") out = out "\\\\"
+                  else if (c == "\"") out = out "\\\""
+                  else out = out c
+                }
+                return out
               }
-              if [ -f src/udev/ata_id/meson.build ]; then
-                definer=""
-                find src -name '*.c' -type f > udev-parse-c.list
-                while IFS= read -r cand; do
-                  case "$cand" in
-                    *ata_id.c) continue ;;
-                  esac
-                  if defines_udev_parse_config "$cand"; then
-                    definer="$cand"
-                    break
+              /^#define[ \t]/ {
+                line = $0
+                sub(/^#define[ \t]+/, "", line)
+                name = line
+                sub(/[ \t].*/, "", name)
+                rest = substr(line, length(name) + 1)
+                sub(/^[ \t]+/, "", rest)
+                if (name == "") next
+                # Strict mode accepts only boolean, null, or string. TTY_MODE 0600
+                # is not a JSON number. Zero is false so {% if %} can fail.
+                # Every other value is a JSON string, including 0600 and 260.
+                if (rest == "") val = "\"1\""
+                else if (rest ~ /^[-+]?0+$/) val = "false"
+                else if (rest ~ /^".*"$/) {
+                  inner = substr(rest, 2, length(rest) - 2)
+                  val = "\"" esc(inner) "\""
+                } else val = "\"" esc(rest) "\""
+                keys[++n] = name
+                vals[n] = val
+              }
+              END {
+                printf "{"
+                for (i = 1; i <= n; i++) {
+                  if (i > 1) printf ","
+                  printf "\"%s\":%s", keys[i], vals[i]
+                }
+                printf "}\n"
+              }
+            ' "$config" > "$json"
+            minijinja-cli --autoescape none --strict --format json -o "$output" "$template" "$json"
+            rm -f "$json"
+            if [ -f "$template" ]; then
+              chmod --reference="$template" "$output" || true
+            fi
+            exit 0
+            MINIJINJA
+                          chmod 755 tools/render-config-template
+                          if ! grep -F -q minijinja-cli tools/render-config-template; then
+                            echo "render-config-template does not call minijinja-cli" >&2
+                            exit 1
+                          fi
+                          sed -i \
+                            -e "s|files('generate-gperfs.py')|files('gperf-protocol-names')|" \
+                            -e "s|files('meson-render-jinja2.py')|files('render-config-template')|" \
+                            tools/meson.build
+                          # systemd-minimal and systemd-minimal-libs share this
+                          # postPatch. files() reads tools/gperf-protocol-names
+                          # before meson setup. One text file. Later subdir()
+                          # misses are not a second hook. No C program.
+                          mkdir -p tools
+                          cat > tools/gperf-protocol-names << 'GPERFNAMES'
+            # protocol name table. tools/meson.build files() reads this path.
+            GPERFNAMES
+                          if [ ! -s tools/gperf-protocol-names ]; then
+                            echo "tools/gperf-protocol-names was not written" >&2
+                            exit 1
+                          fi
+                          cp ${generateSyscallListSh} src/shared/generate-syscall-list.py
+                          chmod 755 src/shared/generate-syscall-list.py
+                          cp ${generateDnsTypeGperfSh prev.writeShellScript filesystemSetsGen} src/shared/generate-dns_type-gperf.py
+                          chmod 755 src/shared/generate-dns_type-gperf.py
+                          if [ -f src/core/generate-bpf-delegate-configs.py ]; then
+                            cp ${bpfDelegateConfigsSh} src/core/generate-bpf-delegate-configs.py
+                            chmod 755 src/core/generate-bpf-delegate-configs.py
+                          fi
+                          cp ${ethtoolLinkModesSh} src/shared/ethtool-link-modes
+                          chmod 755 src/shared/ethtool-link-modes
+                          # filesystem-sets.py has no shell shebang, so the probe
+                          # stub would stop. Install the shell generator beside it.
+                          # The shell execs the Rust generator for the captured modes.
+                          mkdir -p src/basic
+                          rm -f src/basic/filesystem-sets-sh
+                          cp ${filesystemSetsSh prev.writeShellScript filesystemSetsGen} src/basic/filesystem-sets-sh
+                          chmod 755 src/basic/filesystem-sets-sh
+                          # gperf 3.3 rejects an empty keyword. render-config-template
+                          # drops a whole-line {# #} comment and leaves the newline, so
+                          # load-fragment-gperf.gperf has a blank keyword line. Strip
+                          # those lines from the templates, and run gperf through one
+                          # wrapper so a blank keyword section line never reaches gperf.
+                          # systemd-minimal and systemd-minimal-libs share this patch.
+                          find . \( -name '*.gperf.in' -o -name '*.gperf' \) -type f | while IFS= read -r gperf_in; do
+                            awk '
+                              BEGIN { in_kw = 0; seps = 0; in_comment = 0 }
+                              {
+                                line = $0
+                                while (1) {
+                                  if (in_comment) {
+                                    end = index(line, "#}")
+                                    if (end == 0) next
+                                    line = substr(line, end + 2)
+                                    in_comment = 0
+                                    continue
+                                  }
+                                  start = index(line, "{#")
+                                  if (start == 0) break
+                                  rest = substr(line, start + 2)
+                                  end = index(rest, "#}")
+                                  if (end == 0) {
+                                    line = substr(line, 1, start - 1)
+                                    in_comment = 1
+                                    break
+                                  }
+                                  line = substr(line, 1, start - 1) substr(line, start + end + 3)
+                                }
+                                if (line ~ /^%%[[:space:]]*$/) {
+                                  if (seps == 0) { seps = 1; in_kw = 1 }
+                                  else if (in_kw == 1) { in_kw = 0 }
+                                  print line
+                                  next
+                                }
+                                if (in_kw == 1 && line ~ /^[[:space:]]*$/) next
+                                print line
+                              }
+                            ' "$gperf_in" > "$gperf_in.nocomment"
+                            mv "$gperf_in.nocomment" "$gperf_in"
+                          done
+                          real_gperf=$(command -v gperf)
+                          if [ -z "$real_gperf" ]; then
+                            echo "gperf was not on PATH" >&2
+                            exit 1
+                          fi
+                          mkdir -p tools
+                          cat > tools/gperf-no-empty-keyword << 'EOF'
+            #!/bin/sh
+            set -eu
+            real="REAL_GPERF_PATH"
+            tmp=$(mktemp)
+            args=$(mktemp)
+            prev=
+            for a in "$@"; do
+              if [ "$prev" = "--output-file" ] || [ "$prev" = "-o" ]; then
+                printf '%s\n' "$a" >> "$args"
+                prev=
+                continue
+              fi
+              case "$a" in
+                --output-file=*|-o?*)
+                  printf '%s\n' "$a" >> "$args"
+                  ;;
+                --output-file|-o)
+                  printf '%s\n' "$a" >> "$args"
+                  prev=$a
+                  ;;
+                -*)
+                  printf '%s\n' "$a" >> "$args"
+                  ;;
+                *)
+                  if [ -f "$a" ]; then
+                    awk '
+                      BEGIN { in_kw = 0; seps = 0 }
+                      {
+                        if ($0 ~ /^%%[[:space:]]*$/) {
+                          if (seps == 0) { seps = 1; in_kw = 1 }
+                          else if (in_kw == 1) { in_kw = 0 }
+                          print
+                          next
+                        }
+                        if (in_kw == 1 && $0 ~ /^[[:space:]]*$/) next
+                        print
+                      }
+                    ' "$a" > "$tmp"
+                    printf '%s\n' "$tmp" >> "$args"
+                  else
+                    printf '%s\n' "$a" >> "$args"
                   fi
-                done < udev-parse-c.list
-                rm -f udev-parse-c.list
-                if [ -z "$definer" ]; then
-                  echo "no existing object defines udev_parse_config" >&2
-                  exit 1
-                fi
-                rel="../../''${definer#src/}"
-                if ! grep -F -q "$rel" src/udev/ata_id/meson.build; then
-                  awk -v src="$rel" '
-                    index($0, "ata_id.c") && !added {
-                      print
-                      q = sprintf("%c", 39)
-                      print "        " q src q ","
-                      added = 1
-                      next
-                    }
-                    { print }
-                  ' src/udev/ata_id/meson.build > src/udev/ata_id/meson.build.link
-                  mv src/udev/ata_id/meson.build.link src/udev/ata_id/meson.build
-                fi
-                if ! grep -F -q "$rel" src/udev/ata_id/meson.build; then
-                  echo "ata_id meson.build does not link udev_parse_config" >&2
-                  exit 1
-                fi
-              fi
-              # src/udev/ata_id/meson.build is not in this tree. The
-              # helper targets live in src/udev/meson.build. ata_id,
-              # cdrom_id, dmi_memory_id, fido_id, and scsi_id reference
-              # udev_parse_config. ata_id, cdrom_id, dmi_memory_id,
-              # scsi_id, and iocost reference log_assert_failed. Add the
-              # existing .c files that define those symbols. Do not
-              # write a new C function. The ata_id directory insert above
-              # stays for a tree that still has that file.
-              defines_log_assert_failed() {
-                awk '
-                  index($0, "log_assert_failed(") && index($0, ";") == 0 { hit = 1 }
-                  hit && index($0, "{") { found = 1; exit }
-                  hit && index($0, ";") { hit = 0 }
-                  END { exit (found ? 0 : 1) }
-                ' "$1"
-              }
-              udev_def=""
-              assert_def=""
-              find src -name '*.c' -type f > udev-symbol-c.list
-              while IFS= read -r cand; do
-                if [ -z "$udev_def" ] && defines_udev_parse_config "$cand"; then
-                  udev_def=$cand
-                fi
-                if [ -z "$assert_def" ] && defines_log_assert_failed "$cand"; then
-                  assert_def=$cand
-                fi
-                if [ -n "$udev_def" ] && [ -n "$assert_def" ]; then
-                  break
-                fi
-              done < udev-symbol-c.list
-              rm -f udev-symbol-c.list
-              append_udev_source() {
-                helper=$1
-                rel=$2
-                mb=src/udev/meson.build
-                if [ ! -f "$mb" ] || [ -z "$rel" ]; then
-                  return 0
-                fi
-                awk -v helper="$helper" -v src="$rel" '
-                  BEGIN { q = sprintf("%c", 39) }
-                  index($0, "name") && index($0, q helper q) { hit = 1; ins = 0 }
-                  index($0, "name") && ! index($0, q helper q) { hit = 0; ins = 0 }
-                  hit && index($0, src) { seen = 1 }
-                  hit && index($0, "sources") && index($0, "files(") && index($0, "),") && !seen && !added {
-                    sub(/\)[[:space:]]*,[[:space:]]*$/, ", " q src q "),")
-                    print
-                    added = 1
-                    hit = 0
-                    next
-                  }
-                  hit && index($0, "sources") && index($0, "files(") && ! index($0, "),") {
-                    ins = 1
-                    print
-                    next
-                  }
-                  hit && ins && !seen && !added && $0 ~ /^[[:space:]]*\),[[:space:]]*$/ {
-                    print "                        " q src q ","
-                    print
-                    added = 1
-                    ins = 0
-                    hit = 0
-                    next
-                  }
-                  { print }
-                ' "$mb" > "$mb.link"
-                mv "$mb.link" "$mb"
-              }
-              if [ -z "$udev_def" ] || [ -z "$assert_def" ]; then
-                echo "udev helper symbols have no existing definition" >&2
-                exit 1
-              fi
-              udev_rel="../''${udev_def#src/}"
-              assert_rel="../''${assert_def#src/}"
-              for helper in ata_id cdrom_id dmi_memory_id fido_id scsi_id; do
-                append_udev_source "$helper" "$udev_rel"
-              done
-              for helper in ata_id cdrom_id dmi_memory_id scsi_id iocost; do
-                append_udev_source "$helper" "$assert_rel"
-              done
-              if [ -f src/udev/meson.build ]; then
-                if ! grep -F -q "$udev_rel" src/udev/meson.build; then
-                  echo "udev meson.build does not link udev_parse_config" >&2
-                  exit 1
-                fi
-                if ! grep -F -q "$assert_rel" src/udev/meson.build; then
-                  echo "udev meson.build does not link log_assert_failed" >&2
-                  exit 1
-                fi
-              fi
-              # ata_id's first undefined reference is log_dispatch_internal
-              # from assert-util.c:33. udev_parse_config is not that error.
-              # Add the existing .c files that define the ata_id undefined
-              # references. Do not write a new C function. The inserts above stay.
-              for rel in \
-                ../basic/log.c \
-                ../basic/build.c \
-                ../basic/device-nodes.c \
-                ../basic/fd-util.c \
-                ../basic/hashmap.c \
-                ../basic/path-util.c \
-                ../basic/stat-util.c \
-                ../basic/static-destruct.c \
-                ../basic/string-util.c \
-                ../basic/utf8.c \
-                ../libsystemd/sd-device/device-private.c \
-                ../libsystemd/sd-device/sd-device.c \
-                ../shared/conf-parser.c \
-                ../shared/main-func.c
-              do
-                if [ ! -f "src/udev/$rel" ]; then
-                  echo "missing existing source for ata_id link: $rel" >&2
-                  exit 1
-                fi
-                for helper in ata_id cdrom_id dmi_memory_id fido_id iocost mtd_probe scsi_id v4l_id; do
-                  append_udev_source "$helper" "$rel"
-                done
-              done
-              if [ -f src/udev/meson.build ] && ! grep -F -q "../basic/log.c" src/udev/meson.build; then
-                echo "udev meson.build does not link log_dispatch_internal" >&2
-                exit 1
-              fi
-              # bpf-devices.c fails with an implicit declaration of
-              # BPF_JMP_A. The vendored uapi header is the first
-              # -isystem match and does not define BPF_JMP_A. The
-              # upstream override header does, then include_next
-              # looks for linux/bpf_insn.h. Moving the vendored
-              # file aside with no later directory makes that
-              # include_next fail. Copy the upstream file to a
-              # directory meson does not put on -isystem, then
-              # move the vendored name aside. -idirafter points
-              # at the copy. Do not write a header. Do not
-              # -include linux/bpf_insn.h.
-              if [ -f src/include/uapi/linux/bpf_insn.h ]; then
-                mkdir -p src/include/bpf-insn-next/linux
-                cp src/include/uapi/linux/bpf_insn.h \
-                  src/include/bpf-insn-next/linux/bpf_insn.h
-                if [ ! -s src/include/bpf-insn-next/linux/bpf_insn.h ]; then
-                  echo "bpf_insn.h copy is empty" >&2
-                  exit 1
-                fi
-                mv src/include/uapi/linux/bpf_insn.h \
-                  src/include/uapi/linux/bpf_insn.h.vendored
-              fi
-              # Meson passes src/include/override as -isystem, and the
-              # same path is also -I. GCC ignores -I for a directory
-              # that is also -isystem, then searches uapi first. uapi
-              # linux/fs.h and linux/magic.h do not define
-              # FILEID_KERNFS or GFS2_MAGIC. Copy the upstream override
-              # headers to a directory meson does not pass as -isystem
-              # so -I is not ignored. Do not write a header.
-              if [ ! -f src/include/override/linux/fs.h ] \
-                || [ ! -f src/include/override/linux/magic.h ]; then
-                echo "systemd override headers are missing" >&2
-                exit 1
-              fi
-              mkdir -p src/include/override-first/linux
-              cp src/include/override/linux/fs.h \
-                src/include/override-first/linux/fs.h
-              cp src/include/override/linux/magic.h \
-                src/include/override-first/linux/magic.h
-              if ! grep -F -q FILEID_KERNFS src/include/override-first/linux/fs.h; then
-                echo "copied fs.h does not define FILEID_KERNFS" >&2
-                exit 1
-              fi
-              if ! grep -F -q GFS2_MAGIC src/include/override-first/linux/magic.h; then
-                echo "copied magic.h does not define GFS2_MAGIC" >&2
-                exit 1
-              fi
-              # sd-id128.c uses KEY_POS_VIEW. One integer -D for that
-              # name is in NIX_CFLAGS_COMPILE. Do not insert a header.
-              # Do not -D any other KEY_ name. Those names collide
-              # with the keyboard gperf table.
-            '';
+                  ;;
+              esac
+            done
+            set --
+            while IFS= read -r line; do
+              set -- "$@" "$line"
+            done < "$args"
+            set +e
+            "$real" "$@"
+            ec=$?
+            set -e
+            rm -f "$tmp" "$args"
+            exit "$ec"
+            EOF
+                          awk -v real="$real_gperf" '
+                            { gsub(/REAL_GPERF_PATH/, real); print }
+                          ' tools/gperf-no-empty-keyword > tools/gperf-no-empty-keyword.path
+                          mv tools/gperf-no-empty-keyword.path tools/gperf-no-empty-keyword
+                          chmod +x tools/gperf-no-empty-keyword
+
+                          # ata_id.c calls udev_parse_config. The link fails with an
+                          # undefined reference. Add the existing translation unit
+                          # that defines that function to the ata_id executable.
+                          # Do not write a new C function. systemd-minimal and
+                          # systemd-minimal-libs share this hook. The magic.h
+                          # inserts, PROC_*_INIT_INO, GFS2, FILEID, and
+                          # EXT4_IOC_RESIZE_FS stay. KEY_ names stay off this
+                          # global flag list.
+                          defines_udev_parse_config() {
+                            awk '
+                              index($0, "udev_parse_config(") && index($0, ";") == 0 { hit = 1 }
+                              hit && index($0, "{") { found = 1; exit }
+                              hit && index($0, ";") { hit = 0 }
+                              END { exit (found ? 0 : 1) }
+                            ' "$1"
+                          }
+                          if [ -f src/udev/ata_id/meson.build ]; then
+                            definer=""
+                            find src -name '*.c' -type f > udev-parse-c.list
+                            while IFS= read -r cand; do
+                              case "$cand" in
+                                *ata_id.c) continue ;;
+                              esac
+                              if defines_udev_parse_config "$cand"; then
+                                definer="$cand"
+                                break
+                              fi
+                            done < udev-parse-c.list
+                            rm -f udev-parse-c.list
+                            if [ -z "$definer" ]; then
+                              echo "no existing object defines udev_parse_config" >&2
+                              exit 1
+                            fi
+                            rel="../../''${definer#src/}"
+                            if ! grep -F -q "$rel" src/udev/ata_id/meson.build; then
+                              awk -v src="$rel" '
+                                index($0, "ata_id.c") && !added {
+                                  print
+                                  q = sprintf("%c", 39)
+                                  print "        " q src q ","
+                                  added = 1
+                                  next
+                                }
+                                { print }
+                              ' src/udev/ata_id/meson.build > src/udev/ata_id/meson.build.link
+                              mv src/udev/ata_id/meson.build.link src/udev/ata_id/meson.build
+                            fi
+                            if ! grep -F -q "$rel" src/udev/ata_id/meson.build; then
+                              echo "ata_id meson.build does not link udev_parse_config" >&2
+                              exit 1
+                            fi
+                          fi
+                          # src/udev/ata_id/meson.build is not in this tree. The
+                          # helper targets live in src/udev/meson.build. ata_id,
+                          # cdrom_id, dmi_memory_id, fido_id, and scsi_id reference
+                          # udev_parse_config. ata_id, cdrom_id, dmi_memory_id,
+                          # scsi_id, and iocost reference log_assert_failed. Add the
+                          # existing .c files that define those symbols. Do not
+                          # write a new C function. The ata_id directory insert above
+                          # stays for a tree that still has that file.
+                          defines_log_assert_failed() {
+                            awk '
+                              index($0, "log_assert_failed(") && index($0, ";") == 0 { hit = 1 }
+                              hit && index($0, "{") { found = 1; exit }
+                              hit && index($0, ";") { hit = 0 }
+                              END { exit (found ? 0 : 1) }
+                            ' "$1"
+                          }
+                          udev_def=""
+                          assert_def=""
+                          find src -name '*.c' -type f > udev-symbol-c.list
+                          while IFS= read -r cand; do
+                            if [ -z "$udev_def" ] && defines_udev_parse_config "$cand"; then
+                              udev_def=$cand
+                            fi
+                            if [ -z "$assert_def" ] && defines_log_assert_failed "$cand"; then
+                              assert_def=$cand
+                            fi
+                            if [ -n "$udev_def" ] && [ -n "$assert_def" ]; then
+                              break
+                            fi
+                          done < udev-symbol-c.list
+                          rm -f udev-symbol-c.list
+                          append_udev_source() {
+                            helper=$1
+                            rel=$2
+                            mb=src/udev/meson.build
+                            if [ ! -f "$mb" ] || [ -z "$rel" ]; then
+                              return 0
+                            fi
+                            awk -v helper="$helper" -v src="$rel" '
+                              BEGIN { q = sprintf("%c", 39) }
+                              index($0, "name") && index($0, q helper q) { hit = 1; ins = 0 }
+                              index($0, "name") && ! index($0, q helper q) { hit = 0; ins = 0 }
+                              hit && index($0, src) { seen = 1 }
+                              hit && index($0, "sources") && index($0, "files(") && index($0, "),") && !seen && !added {
+                                sub(/\)[[:space:]]*,[[:space:]]*$/, ", " q src q "),")
+                                print
+                                added = 1
+                                hit = 0
+                                next
+                              }
+                              hit && index($0, "sources") && index($0, "files(") && ! index($0, "),") {
+                                ins = 1
+                                print
+                                next
+                              }
+                              hit && ins && !seen && !added && $0 ~ /^[[:space:]]*\),[[:space:]]*$/ {
+                                print "                        " q src q ","
+                                print
+                                added = 1
+                                ins = 0
+                                hit = 0
+                                next
+                              }
+                              { print }
+                            ' "$mb" > "$mb.link"
+                            mv "$mb.link" "$mb"
+                          }
+                          if [ -z "$udev_def" ] || [ -z "$assert_def" ]; then
+                            echo "udev helper symbols have no existing definition" >&2
+                            exit 1
+                          fi
+                          udev_rel="../''${udev_def#src/}"
+                          assert_rel="../''${assert_def#src/}"
+                          for helper in ata_id cdrom_id dmi_memory_id fido_id scsi_id; do
+                            append_udev_source "$helper" "$udev_rel"
+                          done
+                          for helper in ata_id cdrom_id dmi_memory_id scsi_id iocost; do
+                            append_udev_source "$helper" "$assert_rel"
+                          done
+                          if [ -f src/udev/meson.build ]; then
+                            if ! grep -F -q "$udev_rel" src/udev/meson.build; then
+                              echo "udev meson.build does not link udev_parse_config" >&2
+                              exit 1
+                            fi
+                            if ! grep -F -q "$assert_rel" src/udev/meson.build; then
+                              echo "udev meson.build does not link log_assert_failed" >&2
+                              exit 1
+                            fi
+                          fi
+                          # ata_id's first undefined reference is log_dispatch_internal
+                          # from assert-util.c:33. udev_parse_config is not that error.
+                          # Add the existing .c files that define the ata_id undefined
+                          # references. Do not write a new C function. The inserts above stay.
+                          for rel in \
+                            ../basic/log.c \
+                            ../basic/build.c \
+                            ../basic/device-nodes.c \
+                            ../basic/fd-util.c \
+                            ../basic/hashmap.c \
+                            ../basic/path-util.c \
+                            ../basic/stat-util.c \
+                            ../basic/static-destruct.c \
+                            ../basic/string-util.c \
+                            ../basic/utf8.c \
+                            ../libsystemd/sd-device/device-private.c \
+                            ../libsystemd/sd-device/sd-device.c \
+                            ../shared/conf-parser.c \
+                            ../shared/main-func.c
+                          do
+                            if [ ! -f "src/udev/$rel" ]; then
+                              echo "missing existing source for ata_id link: $rel" >&2
+                              exit 1
+                            fi
+                            for helper in ata_id cdrom_id dmi_memory_id fido_id iocost mtd_probe scsi_id v4l_id; do
+                              append_udev_source "$helper" "$rel"
+                            done
+                          done
+                          if [ -f src/udev/meson.build ] && ! grep -F -q "../basic/log.c" src/udev/meson.build; then
+                            echo "udev meson.build does not link log_dispatch_internal" >&2
+                            exit 1
+                          fi
+                          # bpf-devices.c fails with an implicit declaration of
+                          # BPF_JMP_A. The vendored uapi header is the first
+                          # -isystem match and does not define BPF_JMP_A. The
+                          # upstream override header does, then include_next
+                          # looks for linux/bpf_insn.h. Moving the vendored
+                          # file aside with no later directory makes that
+                          # include_next fail. Copy the upstream file to a
+                          # directory meson does not put on -isystem, then
+                          # move the vendored name aside. -idirafter points
+                          # at the copy. Do not write a header. Do not
+                          # -include linux/bpf_insn.h.
+                          if [ -f src/include/uapi/linux/bpf_insn.h ]; then
+                            mkdir -p src/include/bpf-insn-next/linux
+                            cp src/include/uapi/linux/bpf_insn.h \
+                              src/include/bpf-insn-next/linux/bpf_insn.h
+                            if [ ! -s src/include/bpf-insn-next/linux/bpf_insn.h ]; then
+                              echo "bpf_insn.h copy is empty" >&2
+                              exit 1
+                            fi
+                            mv src/include/uapi/linux/bpf_insn.h \
+                              src/include/uapi/linux/bpf_insn.h.vendored
+                          fi
+                          # Meson passes src/include/override as -isystem, and the
+                          # same path is also -I. GCC ignores -I for a directory
+                          # that is also -isystem, then searches uapi first. uapi
+                          # linux/fs.h and linux/magic.h do not define
+                          # FILEID_KERNFS or GFS2_MAGIC. Copy the upstream override
+                          # headers to a directory meson does not pass as -isystem
+                          # so -I is not ignored. Do not write a header.
+                          if [ ! -f src/include/override/linux/fs.h ] \
+                            || [ ! -f src/include/override/linux/magic.h ]; then
+                            echo "systemd override headers are missing" >&2
+                            exit 1
+                          fi
+                          mkdir -p src/include/override-first/linux
+                          cp src/include/override/linux/fs.h \
+                            src/include/override-first/linux/fs.h
+                          cp src/include/override/linux/magic.h \
+                            src/include/override-first/linux/magic.h
+                          if ! grep -F -q FILEID_KERNFS src/include/override-first/linux/fs.h; then
+                            echo "copied fs.h does not define FILEID_KERNFS" >&2
+                            exit 1
+                          fi
+                          if ! grep -F -q GFS2_MAGIC src/include/override-first/linux/magic.h; then
+                            echo "copied magic.h does not define GFS2_MAGIC" >&2
+                            exit 1
+                          fi
+                          # sd-id128.c does not include linux/keyctl.h. The six
+                          # KEY_ names it uses are -D flags on that one gcc
+                          # command, not in NIX_CFLAGS_COMPILE. A global -D
+                          # collides with the keyboard gperf table.
+          '';
           # tools/meson.build files('gperf-protocol-names') is evaluated
           # at meson setup. systemd-minimal and systemd-minimal-libs
           # share this hook. Write the file here, after postPatch, so
           # setup sees it. Later subdir() misses are not this hook.
-          preConfigure =
-            (old.preConfigure or "")
-            + ''
-              mkdir -p tools
-              # Meson runs this file as the gperf generator. A name list
-              # has no shebang, so the builder stops with missing #!.
-              cat > tools/gperf-protocol-names << 'GPERFNAMES'
-#!/bin/sh
-set -eu
-if [ "$#" -lt 3 ]; then
-  echo "gperf-protocol-names: usage name prefix file" >&2
-  exit 1
-fi
-name=$1
-prefix=$2
-file=$3
-shift 3
-printf '%s\n' '%{'
-printf '%s\n' '_Pragma("GCC diagnostic ignored \"-Wimplicit-fallthrough\"")'
-printf '%s\n' '#if __GNUC__ >= 15'
-printf '%s\n' '_Pragma("GCC diagnostic ignored \"-Wzero-as-null-pointer-constant\"")'
-printf '%s\n' '#endif'
-for inc in "$@"; do
-  printf '#include %s\n' "$inc"
-done
-printf '%s\n' '%}'
-${filesystemSetsGen}/bin/filesystem-sets-gen gperf-name-id "$name"
-printf '%s\n' '%null-strings'
-printf '%s\n' '%%'
-while IFS= read -r line || [ -n "$line" ]; do
-  case "$line" in
-    *[![:space:]]*) ;;
-    *) continue ;;
-  esac
-  printf '%s, %s%s\n' "$line" "$prefix" "$line"
-done < "$file"
-GPERFNAMES
-              chmod 755 tools/gperf-protocol-names
-              if [ ! -s tools/gperf-protocol-names ]; then
-                echo "tools/gperf-protocol-names was not written" >&2
-                exit 1
-              fi
-              if ! head -n 1 tools/gperf-protocol-names | grep -q '^#!'; then
-                echo "gperf-protocol-names has no shebang" >&2
-                exit 1
-              fi
-              # src/shared/ethtool-link-modes is the generator meson files()
-              # reads. The release tarball does not contain that path.
-              # Install the shell generator. It calls the C preprocessor.
-              # Do not copy a script whose shebang is an interpreter.
-              mb=src/shared/meson.build
-              if [ -f "$mb" ]; then
-                mkdir -p src/shared
-                rm -f src/shared/ethtool-link-modes
-                cp ${ethtoolLinkModesSh} src/shared/ethtool-link-modes
-                chmod 755 src/shared/ethtool-link-modes
-              fi
-              # load-fragment-gperf.gperf is rendered from the upstream
-              # .gperf.in. gperf 3.3 rejects a blank keyword line that
-              # the renderer leaves. tools/gperf-no-empty-keyword already
-              # drops those lines and calls the real gperf. Meson finds
-              # gperf on PATH at setup, so the wrapper has to be the
-              # gperf on PATH before setup. There is no empty-file stub
-              # for this input.
-              if [ ! -x tools/gperf-no-empty-keyword ]; then
-                echo "gperf-no-empty-keyword is missing" >&2
-                exit 1
-              fi
-              mkdir -p "$NIX_BUILD_TOP/bin"
-              cp tools/gperf-no-empty-keyword "$NIX_BUILD_TOP/bin/gperf"
-              chmod 755 "$NIX_BUILD_TOP/bin/gperf"
-              export PATH="$NIX_BUILD_TOP/bin:$PATH"
-            '';
+          preConfigure = (old.preConfigure or "") + ''
+                          mkdir -p tools
+                          # Meson runs this file as the gperf generator. A name list
+                          # has no shebang, so the builder stops with missing #!.
+                          cat > tools/gperf-protocol-names << 'GPERFNAMES'
+            #!/bin/sh
+            set -eu
+            if [ "$#" -lt 3 ]; then
+              echo "gperf-protocol-names: usage name prefix file" >&2
+              exit 1
+            fi
+            name=$1
+            prefix=$2
+            file=$3
+            shift 3
+            printf '%s\n' '%{'
+            printf '%s\n' '_Pragma("GCC diagnostic ignored \"-Wimplicit-fallthrough\"")'
+            printf '%s\n' '#if __GNUC__ >= 15'
+            printf '%s\n' '_Pragma("GCC diagnostic ignored \"-Wzero-as-null-pointer-constant\"")'
+            printf '%s\n' '#endif'
+            for inc in "$@"; do
+              printf '#include %s\n' "$inc"
+            done
+            printf '%s\n' '%}'
+            ${filesystemSetsGen}/bin/filesystem-sets-gen gperf-name-id "$name"
+            printf '%s\n' '%null-strings'
+            printf '%s\n' '%%'
+            while IFS= read -r line || [ -n "$line" ]; do
+              case "$line" in
+                *[![:space:]]*) ;;
+                *) continue ;;
+              esac
+              printf '%s, %s%s\n' "$line" "$prefix" "$line"
+            done < "$file"
+            GPERFNAMES
+                          chmod 755 tools/gperf-protocol-names
+                          if [ ! -s tools/gperf-protocol-names ]; then
+                            echo "tools/gperf-protocol-names was not written" >&2
+                            exit 1
+                          fi
+                          if ! head -n 1 tools/gperf-protocol-names | grep -q '^#!'; then
+                            echo "gperf-protocol-names has no shebang" >&2
+                            exit 1
+                          fi
+                          # src/shared/ethtool-link-modes is the generator meson files()
+                          # reads. The release tarball does not contain that path.
+                          # Install the shell generator. It calls the C preprocessor.
+                          # Do not copy a script whose shebang is an interpreter.
+                          mb=src/shared/meson.build
+                          if [ -f "$mb" ]; then
+                            mkdir -p src/shared
+                            rm -f src/shared/ethtool-link-modes
+                            cp ${ethtoolLinkModesSh} src/shared/ethtool-link-modes
+                            chmod 755 src/shared/ethtool-link-modes
+                          fi
+                          # load-fragment-gperf.gperf is rendered from the upstream
+                          # .gperf.in. gperf 3.3 rejects a blank keyword line that
+                          # the renderer leaves. tools/gperf-no-empty-keyword already
+                          # drops those lines and calls the real gperf. Meson finds
+                          # gperf on PATH at setup, so the wrapper has to be the
+                          # gperf on PATH before setup. There is no empty-file stub
+                          # for this input.
+                          if [ ! -x tools/gperf-no-empty-keyword ]; then
+                            echo "gperf-no-empty-keyword is missing" >&2
+                            exit 1
+                          fi
+                          mkdir -p "$NIX_BUILD_TOP/bin"
+                          cp tools/gperf-no-empty-keyword "$NIX_BUILD_TOP/bin/gperf"
+                          chmod 755 "$NIX_BUILD_TOP/bin/gperf"
+                          # uapi is the first -isystem linux/ directory, so the
+                          # override keyctl header is not the one these files see.
+                          # sd-id128.c does not include linux/keyctl.h.
+                          # exec-invoke.c includes sys/keyctl.h and uses the same
+                          # six names. Match those two source paths only. Do not
+                          # define these names for udev-builtin-keyboard.c. Do not
+                          # put them in NIX_CFLAGS_COMPILE. Shell, not a C program.
+                          # Skip $NIX_BUILD_TOP/bin. This hook is concatenated more
+                          # than once, and a later pass would otherwise
+                          # resolve gcc to the script written below.
+                          real_gcc=
+                          saved_ifs=$IFS
+                          IFS=:
+                          for dir in $PATH; do
+                            case "$dir" in
+                              "$NIX_BUILD_TOP"/bin) continue ;;
+                            esac
+                            if [ -n "$dir" ] && [ -x "$dir/gcc" ]; then
+                              real_gcc=$dir/gcc
+                              break
+                            fi
+                          done
+                          IFS=$saved_ifs
+                          if [ -z "$real_gcc" ]; then
+                            echo "store gcc was not on PATH" >&2
+                            exit 1
+                          fi
+                          case "$real_gcc" in
+                            "$NIX_BUILD_TOP"/bin/*)
+                              echo "gcc wrapper would exec the script" >&2
+                              exit 1
+                              ;;
+                          esac
+                          # Do not -D KEY_POS_* or key_serial_t. override/linux/keyctl.h
+                          # is on the include path and defines the typedef and
+                          # the KEY_* macros. Predefining KEY_POS_VIEW takes
+                          # the #else branch, which needs KEY_OTH_ALL from
+                          # uapi, and uapi does not declare it. The exec
+                          # target is the store gcc, never this script.
+                          cat > "$NIX_BUILD_TOP/bin/gcc" << 'SDID128GCC'
+            #!/bin/sh
+            exec REAL_GCC "$@"
+            SDID128GCC
+                          awk -v real="$real_gcc" '{ gsub(/REAL_GCC/, real); print }' \
+                            "$NIX_BUILD_TOP/bin/gcc" > "$NIX_BUILD_TOP/bin/gcc.path"
+                          mv "$NIX_BUILD_TOP/bin/gcc.path" "$NIX_BUILD_TOP/bin/gcc"
+                          chmod 755 "$NIX_BUILD_TOP/bin/gcc"
+                          if ! head -n 1 "$NIX_BUILD_TOP/bin/gcc" | grep -q '^#!'; then
+                            echo "sd-id128 gcc wrapper has no shebang" >&2
+                            exit 1
+                          fi
+                          if ! grep -F -q "exec $real_gcc" "$NIX_BUILD_TOP/bin/gcc"; then
+                            echo "gcc wrapper does not exec the store gcc" >&2
+                            exit 1
+                          fi
+                          if grep -F -q "exec $NIX_BUILD_TOP/bin/gcc" "$NIX_BUILD_TOP/bin/gcc"; then
+                            echo "gcc wrapper exec target is the script" >&2
+                            exit 1
+                          fi
+                          case ":$PATH:" in
+                            *":$NIX_BUILD_TOP/bin:"*) ;;
+                            *) export PATH="$NIX_BUILD_TOP/bin:$PATH" ;;
+                          esac
+          '';
           env = (old.env or { }) // {
-            # One integer define: KEY_POS_VIEW is 0x01000000 in the
-            # systemd 260.5 override header. Do not -D any other KEY_
-            # name. Those are keyboard gperf identifiers stored in an
-            # unsigned short, and a global -D fails -Werror=overflow.
-            # The override typedef of key_serial_t is skipped when
-            # KEY_POS_VIEW is set, so the type stays the macro int.
-            # Do not add a C function.
+            # Do not -D any KEY_ name here. Those are keyboard gperf
+            # identifiers stored in an unsigned short, and a global
+            # -D fails -Werror=overflow. override/linux/keyctl.h defines
+            # key_serial_t and the KEY_* permission macros. Do not add
+            # a C function.
             NIX_CFLAGS_COMPILE_BEFORE =
               (toString (old.env.NIX_CFLAGS_COMPILE_BEFORE or old.NIX_CFLAGS_COMPILE_BEFORE or ""))
               + " -I ../src/include/override-first"
@@ -1057,8 +1178,6 @@ GPERFNAMES
             NIX_CFLAGS_COMPILE =
               (toString (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or ""))
               + " -D_FILE_OFFSET_BITS=64"
-              + " -Dkey_serial_t=int"
-              + " -DKEY_POS_VIEW=0x01000000"
               + " -DPROC_CGROUP_INIT_INO=CGROUP_NS_INIT_INO"
               + " -DPROC_PID_INIT_INO=PID_NS_INIT_INO"
               + " -DPROC_USER_INIT_INO=USER_NS_INIT_INO"
@@ -1079,6 +1198,15 @@ GPERFNAMES
               + " -I ../src/include/override"
               + " -idirafter ../src/include/bpf-insn-next";
           };
+          # This flag skips installing the interface XML. The export
+          # target still runs. meson-probe-stub accepts dbus_exporter.py
+          # and creates the ninja output without running that script.
+          # The libraries do not need that XML to link.
+          mesonFlags =
+            (builtins.filter (flag: !(prev.lib.hasPrefix "-Ddbus-interfaces-dir=" flag)) (
+              old.mesonFlags or [ ]
+            ))
+            ++ [ "-Ddbus-interfaces-dir=no" ];
         });
 
       # Same 2.20.0 CLI nixpkgs builds from source. The source build's
@@ -1102,266 +1230,266 @@ GPERFNAMES
       };
     in
     {
-    # Upstream 2.35.5 binary. Not the nix-util source build.
-    # Channel nixVersions stays the nixpkgs set. The mail host uses
-    # pkgs.nix, which is this package.
-    # The expression is in this tracked file. Flake eval does not read
-    # an untracked path.
-    nix = final.callPackage (
-      {
-        stdenv,
-        fetchurl,
-        patchelf,
-      }:
-      let
-        version = "2.35.5";
-      in
-      stdenv.mkDerivation {
-        pname = "nix";
-        inherit version;
+      # Upstream 2.35.5 binary. Not the nix-util source build.
+      # Channel nixVersions stays the nixpkgs set. The mail host uses
+      # pkgs.nix, which is this package.
+      # The expression is in this tracked file. Flake eval does not read
+      # an untracked path.
+      nix = final.callPackage (
+        {
+          stdenv,
+          fetchurl,
+          patchelf,
+        }:
+        let
+          version = "2.35.5";
+        in
+        stdenv.mkDerivation {
+          pname = "nix";
+          inherit version;
 
-        src = fetchurl {
-          url = "https://releases.nixos.org/nix/nix-${version}/nix-${version}-x86_64-linux.tar.xz";
-          hash = "sha256-w0nwVZt4SaLLOyC4WE5TKz/PUCUJLLYYDrC5kkDXuWw=";
-        };
+          src = fetchurl {
+            url = "https://releases.nixos.org/nix/nix-${version}/nix-${version}-x86_64-linux.tar.xz";
+            hash = "sha256-w0nwVZt4SaLLOyC4WE5TKz/PUCUJLLYYDrC5kkDXuWw=";
+          };
 
-        sourceRoot = "nix-${version}-x86_64-linux";
+          sourceRoot = "nix-${version}-x86_64-linux";
 
-        nativeBuildInputs = [ patchelf ];
+          nativeBuildInputs = [ patchelf ];
 
-        dontConfigure = true;
-        dontBuild = true;
-        dontStrip = true;
-        dontPatchELF = true;
+          dontConfigure = true;
+          dontBuild = true;
+          dontStrip = true;
+          dontPatchELF = true;
 
-        installPhase = ''
-          runHook preInstall
-          set -eu
-          set -o pipefail
+          installPhase = ''
+            runHook preInstall
+            set -eu
+            set -o pipefail
 
-          if [ ! -d store ]; then
-            echo "archive store directory missing" >&2
-            exit 1
-          fi
-
-          nix_bin=
-          for cand in store/*-nix-${version}/bin/nix; do
-            if [ -f "$cand" ] && [ ! -L "$cand" ]; then
-              nix_bin=$cand
-              break
-            fi
-          done
-          if [ -z "$nix_bin" ]; then
-            echo "nix multicall binary was not in the archive" >&2
-            exit 1
-          fi
-
-          nix_dir=$(dirname "$(dirname "$nix_bin")")
-          mkdir -p "$out/bin" "$out/lib" "$out/libexec/nix"
-          install -m 0755 "$nix_bin" "$out/bin/nix"
-          for cmd in "$nix_dir"/bin/*; do
-            name=''${cmd##*/}
-            if [ "$name" = nix ]; then
-              continue
-            fi
-            if [ -L "$cmd" ] && [ "$(readlink "$cmd")" = nix ]; then
-              ln -s nix "$out/bin/$name"
-            fi
-          done
-          for name in nix-daemon nix-store; do
-            if [ "$(readlink "$out/bin/$name")" != nix ]; then
-              echo "$name is not a symlink to nix" >&2
+            if [ ! -d store ]; then
+              echo "archive store directory missing" >&2
               exit 1
             fi
-          done
-          ln -s ../../bin/nix "$out/libexec/nix/build-remote"
 
-          glibc_lib="${stdenv.cc.libc}/lib"
-          interp="${stdenv.cc.libc}/lib/ld-linux-x86-64.so.2"
-          rpath="$glibc_lib:$out/lib"
-          if [ ! -e "$interp" ]; then
-            echo "glibc loader missing: $interp" >&2
-            exit 1
-          fi
-
-          work=$NIX_BUILD_TOP/nix-elf-work
-          needed_file=$NIX_BUILD_TOP/nix-elf-needed
-          : > "$work"
-          printf '%s\n' "$out/bin/nix" >> "$work"
-
-          copy_absolute() {
-            needed=$1
-            elf=$2
-            rel=''${needed#/nix/store/}
-            src="store/$rel"
-            base=''${needed##*/}
-            case "$src" in
-              */share/*|*/python/*)
-                echo "refusing scripting path $needed" >&2
-                return 1
-                ;;
-            esac
-            case "$base" in
-              *.py|libpython*)
-                echo "refusing $base" >&2
-                return 1
-                ;;
-            esac
-            if [ ! -e "$src" ]; then
-              echo "absolute library $needed is not in the archive" >&2
-              return 1
-            fi
-            if [ ! -e "$out/lib/$base" ]; then
-              if ! patchelf --print-needed "$src" >/dev/null 2>&1; then
-                echo "absolute library $needed is not an ELF" >&2
-                return 1
-              fi
-              cp -L "$src" "$out/lib/$base"
-              chmod 0755 "$out/lib/$base"
-              printf '%s\n' "$out/lib/$base" >> "$work"
-            fi
-            patchelf --replace-needed "$needed" "$base" "$elf"
-          }
-
-          copy_needed() {
-            soname=$1
-            elf=$2
-            case "$soname" in
-              /*)
-                copy_absolute "$soname" "$elf"
-                return
-                ;;
-            esac
-            if [ -e "$out/lib/$soname" ]; then
-              return 0
-            fi
-            if [ -e "$glibc_lib/$soname" ]; then
-              return 0
-            fi
-            case "$soname" in
-              ld-linux*|libpython*)
-                return 0
-                ;;
-            esac
-            found=
-            while IFS= read -r cand; do
-              case "$cand" in
-                */share/*|*/python/*)
-                  continue
-                  ;;
-              esac
-              base=''${cand##*/}
-              case "$base" in
-                *.py|libpython*)
-                  continue
-                  ;;
-              esac
-              if patchelf --print-needed "$cand" >/dev/null 2>&1; then
-                found=$cand
+            nix_bin=
+            for cand in store/*-nix-${version}/bin/nix; do
+              if [ -f "$cand" ] && [ ! -L "$cand" ]; then
+                nix_bin=$cand
                 break
               fi
-            done < <(find store -name "$soname" \( -type f -o -type l \))
-            if [ -z "$found" ]; then
-              echo "shared library $soname is not in the archive" >&2
-              return 1
-            fi
-            cp -L "$found" "$out/lib/$soname"
-            chmod 0755 "$out/lib/$soname"
-            printf '%s\n' "$out/lib/$soname" >> "$work"
-          }
-
-          count=0
-          while IFS= read -r elf; do
-            [ -n "$elf" ] || continue
-            count=$((count + 1))
-            if [ "$count" -gt 400 ]; then
-              echo "elf walk did not finish" >&2
+            done
+            if [ -z "$nix_bin" ]; then
+              echo "nix multicall binary was not in the archive" >&2
               exit 1
             fi
-            patchelf --print-needed "$elf" > "$needed_file"
-            while IFS= read -r soname; do
-              [ -n "$soname" ] || continue
-              copy_needed "$soname" "$elf" || exit 1
-            done < "$needed_file"
-            chmod u+w "$elf"
-            if cur=$(patchelf --print-interpreter "$elf" 2>/dev/null); then
-              if [ -n "$cur" ]; then
-                patchelf --set-interpreter "$interp" "$elf"
+
+            nix_dir=$(dirname "$(dirname "$nix_bin")")
+            mkdir -p "$out/bin" "$out/lib" "$out/libexec/nix"
+            install -m 0755 "$nix_bin" "$out/bin/nix"
+            for cmd in "$nix_dir"/bin/*; do
+              name=''${cmd##*/}
+              if [ "$name" = nix ]; then
+                continue
               fi
+              if [ -L "$cmd" ] && [ "$(readlink "$cmd")" = nix ]; then
+                ln -s nix "$out/bin/$name"
+              fi
+            done
+            for name in nix-daemon nix-store; do
+              if [ "$(readlink "$out/bin/$name")" != nix ]; then
+                echo "$name is not a symlink to nix" >&2
+                exit 1
+              fi
+            done
+            ln -s ../../bin/nix "$out/libexec/nix/build-remote"
+
+            glibc_lib="${stdenv.cc.libc}/lib"
+            interp="${stdenv.cc.libc}/lib/ld-linux-x86-64.so.2"
+            rpath="$glibc_lib:$out/lib"
+            if [ ! -e "$interp" ]; then
+              echo "glibc loader missing: $interp" >&2
+              exit 1
             fi
-            patchelf --set-rpath "$rpath" "$elf"
-            chmod 0555 "$elf"
-          done < "$work"
 
-          got=$(patchelf --print-interpreter "$out/bin/nix")
-          foreign=/nix/store/dphsh3jff8w6n9p3xbfmkia5krqwv52f-glibc-2.42-103/lib/ld-linux-x86-64.so.2
-          if [ "$got" = "$foreign" ] || [ "$got" != "$interp" ]; then
-            echo "interpreter is $got" >&2
-            exit 1
-          fi
-          got_rpath=$(patchelf --print-rpath "$out/bin/nix")
-          case "$got_rpath" in
-            *"$glibc_lib"*) ;;
-            *)
-              echo "rpath missing glibc lib" >&2
+            work=$NIX_BUILD_TOP/nix-elf-work
+            needed_file=$NIX_BUILD_TOP/nix-elf-needed
+            : > "$work"
+            printf '%s\n' "$out/bin/nix" >> "$work"
+
+            copy_absolute() {
+              needed=$1
+              elf=$2
+              rel=''${needed#/nix/store/}
+              src="store/$rel"
+              base=''${needed##*/}
+              case "$src" in
+                */share/*|*/python/*)
+                  echo "refusing scripting path $needed" >&2
+                  return 1
+                  ;;
+              esac
+              case "$base" in
+                *.py|libpython*)
+                  echo "refusing $base" >&2
+                  return 1
+                  ;;
+              esac
+              if [ ! -e "$src" ]; then
+                echo "absolute library $needed is not in the archive" >&2
+                return 1
+              fi
+              if [ ! -e "$out/lib/$base" ]; then
+                if ! patchelf --print-needed "$src" >/dev/null 2>&1; then
+                  echo "absolute library $needed is not an ELF" >&2
+                  return 1
+                fi
+                cp -L "$src" "$out/lib/$base"
+                chmod 0755 "$out/lib/$base"
+                printf '%s\n' "$out/lib/$base" >> "$work"
+              fi
+              patchelf --replace-needed "$needed" "$base" "$elf"
+            }
+
+            copy_needed() {
+              soname=$1
+              elf=$2
+              case "$soname" in
+                /*)
+                  copy_absolute "$soname" "$elf"
+                  return
+                  ;;
+              esac
+              if [ -e "$out/lib/$soname" ]; then
+                return 0
+              fi
+              if [ -e "$glibc_lib/$soname" ]; then
+                return 0
+              fi
+              case "$soname" in
+                ld-linux*|libpython*)
+                  return 0
+                  ;;
+              esac
+              found=
+              while IFS= read -r cand; do
+                case "$cand" in
+                  */share/*|*/python/*)
+                    continue
+                    ;;
+                esac
+                base=''${cand##*/}
+                case "$base" in
+                  *.py|libpython*)
+                    continue
+                    ;;
+                esac
+                if patchelf --print-needed "$cand" >/dev/null 2>&1; then
+                  found=$cand
+                  break
+                fi
+              done < <(find store -name "$soname" \( -type f -o -type l \))
+              if [ -z "$found" ]; then
+                echo "shared library $soname is not in the archive" >&2
+                return 1
+              fi
+              cp -L "$found" "$out/lib/$soname"
+              chmod 0755 "$out/lib/$soname"
+              printf '%s\n' "$out/lib/$soname" >> "$work"
+            }
+
+            count=0
+            while IFS= read -r elf; do
+              [ -n "$elf" ] || continue
+              count=$((count + 1))
+              if [ "$count" -gt 400 ]; then
+                echo "elf walk did not finish" >&2
+                exit 1
+              fi
+              patchelf --print-needed "$elf" > "$needed_file"
+              while IFS= read -r soname; do
+                [ -n "$soname" ] || continue
+                copy_needed "$soname" "$elf" || exit 1
+              done < "$needed_file"
+              chmod u+w "$elf"
+              if cur=$(patchelf --print-interpreter "$elf" 2>/dev/null); then
+                if [ -n "$cur" ]; then
+                  patchelf --set-interpreter "$interp" "$elf"
+                fi
+              fi
+              patchelf --set-rpath "$rpath" "$elf"
+              chmod 0555 "$elf"
+            done < "$work"
+
+            got=$(patchelf --print-interpreter "$out/bin/nix")
+            foreign=/nix/store/dphsh3jff8w6n9p3xbfmkia5krqwv52f-glibc-2.42-103/lib/ld-linux-x86-64.so.2
+            if [ "$got" = "$foreign" ] || [ "$got" != "$interp" ]; then
+              echo "interpreter is $got" >&2
               exit 1
-              ;;
-          esac
-          case "$got_rpath" in
-            *"$out/lib"*) ;;
-            *)
-              echo "rpath missing output lib" >&2
+            fi
+            got_rpath=$(patchelf --print-rpath "$out/bin/nix")
+            case "$got_rpath" in
+              *"$glibc_lib"*) ;;
+              *)
+                echo "rpath missing glibc lib" >&2
+                exit 1
+                ;;
+            esac
+            case "$got_rpath" in
+              *"$out/lib"*) ;;
+              *)
+                echo "rpath missing output lib" >&2
+                exit 1
+                ;;
+            esac
+            if patchelf --print-needed "$out/lib/libnixstore.so.2.35.5" | grep -F '/nix/store/' >/dev/null; then
+              echo "libnixstore still has an absolute library path" >&2
               exit 1
-              ;;
-          esac
-          if patchelf --print-needed "$out/lib/libnixstore.so.2.35.5" | grep -F '/nix/store/' >/dev/null; then
-            echo "libnixstore still has an absolute library path" >&2
-            exit 1
-          fi
-          test -e "$out/lib/libnixutil.so.2.35.5"
-          test -e "$out/lib/libsqlite3.so"
-          test -L "$out/bin/nix-daemon"
-          test -L "$out/bin/nix-store"
-          n=$(find "$out/lib" -type f | wc -l)
-          if [ "$n" -lt 40 ]; then
-            echo "shared library copy is too small ($n)" >&2
-            exit 1
-          fi
-          if find "$out" -path '*/python/*' | grep -q .; then
-            echo "scripting directory was copied" >&2
-            exit 1
-          fi
-          if find "$out" -name 'libpython*' | grep -q .; then
-            echo "libpython was copied" >&2
-            exit 1
-          fi
+            fi
+            test -e "$out/lib/libnixutil.so.2.35.5"
+            test -e "$out/lib/libsqlite3.so"
+            test -L "$out/bin/nix-daemon"
+            test -L "$out/bin/nix-store"
+            n=$(find "$out/lib" -type f | wc -l)
+            if [ "$n" -lt 40 ]; then
+              echo "shared library copy is too small ($n)" >&2
+              exit 1
+            fi
+            if find "$out" -path '*/python/*' | grep -q .; then
+              echo "scripting directory was copied" >&2
+              exit 1
+            fi
+            if find "$out" -name 'libpython*' | grep -q .; then
+              echo "libpython was copied" >&2
+              exit 1
+            fi
 
-          runHook postInstall
-        '';
+            runHook postInstall
+          '';
 
-        meta = {
-          description = "Upstream Nix binary, patched to this nixpkgs glibc";
-          mainProgram = "nix";
-          platforms = [ "x86_64-linux" ];
-        };
-      }
-    ) { };
+          meta = {
+            description = "Upstream Nix binary, patched to this nixpkgs glibc";
+            mainProgram = "nix";
+            platforms = [ "x86_64-linux" ];
+          };
+        }
+      ) { };
 
-    systemd = systemdDropJinja prev.systemd;
-    systemdMinimal = systemdDropJinja prev.systemdMinimal;
-    systemdLibs = systemdDropJinja prev.systemdLibs;
+      systemd = systemdDropJinja prev.systemd;
+      systemdMinimal = systemdDropJinja prev.systemdMinimal;
+      systemdLibs = systemdDropJinja prev.systemdLibs;
 
-    # The release tarball already contains the generated headers.
-    # The meson file still looks up an interpreter to regenerate them.
-    # Copy the headers and compile those files.
-    "p11-kit" = prev."p11-kit".overrideAttrs (old: {
-      postPatch =
-        (old.postPatch or "")
-        + ''
-          tar -xJf ${prev.fetchurl {
-            url = "https://github.com/p11-glue/p11-kit/releases/download/0.26.2/p11-kit-0.26.2.tar.xz";
-            hash = "sha256-Cf2fRNpIE6MUHnPV589wCOVmDQQF8T1WwV4dqdzs+Cg=";
-          }} -C "$NIX_BUILD_TOP"
+      # The release tarball already contains the generated headers.
+      # The meson file still looks up an interpreter to regenerate them.
+      # Copy the headers and compile those files.
+      "p11-kit" = prev."p11-kit".overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          tar -xJf ${
+            prev.fetchurl {
+              url = "https://github.com/p11-glue/p11-kit/releases/download/0.26.2/p11-kit-0.26.2.tar.xz";
+              hash = "sha256-Cf2fRNpIE6MUHnPV589wCOVmDQQF8T1WwV4dqdzs+Cg=";
+            }
+          } -C "$NIX_BUILD_TOP"
           kit="$NIX_BUILD_TOP/p11-kit-0.26.2/p11-kit"
           for h in \
             virtual-ffi-generated.h \
@@ -1375,19 +1503,17 @@ GPERFNAMES
           done
           patch -p1 -i ${./packages/p11-kit-pregenerated.patch}
         '';
-      # checkPhase asks ninja for meson-test-prereq. The muon build does
-      # not emit that target. A phony target lets the check start.
-      preCheck =
-        (old.preCheck or "")
-        + ''
+        # checkPhase asks ninja for meson-test-prereq. The muon build does
+        # not emit that target. A phony target lets the check start.
+        preCheck = (old.preCheck or "") + ''
           for ninja in build.ninja build/build.ninja; do
             if [ -f "$ninja" ] && ! grep -q '^build meson-test-prereq:' "$ninja"; then
               printf 'build meson-test-prereq: phony\n' >> "$ninja"
             fi
           done
         '';
-    });
-  };
+      });
+    };
 
   # nixos-26.05 firewall-nftables.nix puts pkgs.nixos-firewall-tool on
   # systemPackages when the firewall backend is nftables. Do not call the
@@ -1551,10 +1677,7 @@ GPERFNAMES
             name = tried.value.name or "";
             pname = tried.value.pname or "";
           in
-          textMarked name
-          || textMarked pname
-          || name == "empty-directory"
-          || pname == "empty-directory";
+          textMarked name || textMarked pname || name == "empty-directory" || pname == "empty-directory";
       scrubList =
         xs:
         if !builtins.isList xs then
@@ -1598,9 +1721,7 @@ GPERFNAMES
         "depsTargetTarget"
         "depsTargetTargetPropagated"
       ];
-      scrubAttrs =
-        attrs:
-        attrs // lib.genAttrs edgeNames (name: scrubList (attrs.${name} or [ ]));
+      scrubAttrs = attrs: attrs // lib.genAttrs edgeNames (name: scrubList (attrs.${name} or [ ]));
       wrapMk =
         mk: fnOrAttrs:
         mk (
@@ -1737,14 +1858,20 @@ GPERFNAMES
       # in all-packages.nix. callScope must not read that stdenv.
       # No extra cc binding. stdenvFiltered is the whole value.
       stdenvForCall = stdenvFiltered;
-      callScope = final // interpreterShadow // {
-        stdenv = stdenvForCall;
-        stdenvNoCC = stdenvNoCCFiltered;
-        pkgs = final // interpreterShadow // {
+      callScope =
+        final
+        // interpreterShadow
+        // {
           stdenv = stdenvForCall;
           stdenvNoCC = stdenvNoCCFiltered;
+          pkgs =
+            final
+            // interpreterShadow
+            // {
+              stdenv = stdenvForCall;
+              stdenvNoCC = stdenvNoCCFiltered;
+            };
         };
-      };
 
     in
     {
@@ -1757,143 +1884,145 @@ GPERFNAMES
       rustfmt = mailHostRust.rustfmt;
       clippy = mailHostRust.clippy;
 
-libpsl = prev.libpsl.overrideAttrs (old:
-let
-  # 0.21.5's release tarball has no suffixes_dafsa.h. 0.22.0's
-  # release tarball ships that header and the two test DAFSA blobs
-  # (EXTRA_DIST). Copy those files. Do not run the generator.
-  suffixesDafsaRelease = prev.fetchurl {
-    url = "https://github.com/rockdaboot/libpsl/releases/download/0.22.0/libpsl-0.22.0.tar.gz";
-    hash = "sha256-xFw6oXV2uZhz4FqbCaRAQbBlu/o5Dm1HTQb7+uucdyI=";
-  };
-  # Same script in postPatch and preAutoreconf. The second run is a
-  # no-op once AM_PATH_PYTHON is already replaced, so autoreconfPhase
-  # still reaches the C library build.
-  pslNoGtkDoc = (old.postPatch or "") + ''
-    awk '
-      BEGIN { skip = 0 }
-      /^m4_ifdef\(\[GTK_DOC_CHECK\]/ || /^m4_ifdef\(\[GTK_DOC_USE_LIBTOOL\]/ {
-        if ($0 ~ /\]\)[[:space:]]*$/) {
-          next
+      libpsl = prev.libpsl.overrideAttrs (
+        old:
+        let
+          # 0.21.5's release tarball has no suffixes_dafsa.h. 0.22.0's
+          # release tarball ships that header and the two test DAFSA blobs
+          # (EXTRA_DIST). Copy those files. Do not run the generator.
+          suffixesDafsaRelease = prev.fetchurl {
+            url = "https://github.com/rockdaboot/libpsl/releases/download/0.22.0/libpsl-0.22.0.tar.gz";
+            hash = "sha256-xFw6oXV2uZhz4FqbCaRAQbBlu/o5Dm1HTQb7+uucdyI=";
+          };
+          # Same script in postPatch and preAutoreconf. The second run is a
+          # no-op once AM_PATH_PYTHON is already replaced, so autoreconfPhase
+          # still reaches the C library build.
+          pslNoGtkDoc = (old.postPatch or "") + ''
+            awk '
+              BEGIN { skip = 0 }
+              /^m4_ifdef\(\[GTK_DOC_CHECK\]/ || /^m4_ifdef\(\[GTK_DOC_USE_LIBTOOL\]/ {
+                if ($0 ~ /\]\)[[:space:]]*$/) {
+                  next
+                }
+                skip = 1
+                next
+              }
+              skip && /^\]\)/ { skip = 0; next }
+              skip { next }
+              { print }
+            ' configure.ac > configure.ac.new
+            mv configure.ac.new configure.ac
+            if grep -F GTK_DOC_CHECK configure.ac >/dev/null; then
+              echo "GTK_DOC_CHECK still present in configure.ac" >&2
+              exit 1
+            fi
+            if ! grep -F "AM_CONDITIONAL([ENABLE_GTK_DOC]" configure.ac >/dev/null; then
+              printf "\nAM_CONDITIONAL([ENABLE_GTK_DOC], [false])\n" >> configure.ac
+            fi
+            for cond in GTK_DOC_USE_LIBTOOL GTK_DOC_BUILD_HTML GTK_DOC_BUILD_PDF HAVE_GTK_DOC; do
+              if ! grep -F "AM_CONDITIONAL([$cond]" configure.ac >/dev/null; then
+                printf '\nAM_CONDITIONAL([%s], [false])\n' "$cond" >> configure.ac
+              fi
+            done
+            if grep -F -q 'AM_PATH_PYTHON([2.7])' configure.ac; then
+              sed -i 's/AM_PATH_PYTHON(\[2\.7\])/AC_SUBST([PYTHON], [:])/' configure.ac
+            fi
+            if grep -F 'AM_PATH_PYTHON' configure.ac >/dev/null; then
+              echo "AM_PATH_PYTHON token still present in configure.ac" >&2
+              exit 1
+            fi
+            if ! grep -F 'AC_SUBST([PYTHON], [:])' configure.ac >/dev/null; then
+              echo "AC_SUBST PYTHON assignment missing in configure.ac" >&2
+              exit 1
+            fi
+            patch_one() {
+              src="$1"
+              if [ ! -f "$src" ]; then
+                return 0
+              fi
+              # Drop generator recipes. The shipped header and DAFSA blobs
+              # are copied below. Do not run psl-make-dafsa. Do not author
+              # the header.
+              awk '
+                /\$\(PYTHON\)/ { next }
+                /psl-make-dafsa/ { next }
+                /^bin_SCRIPTS[[:space:]]*=[[:space:]]*psl-make-dafsa[[:space:]]*$/ { next }
+                /^suffixes_dafsa\.h:/ { next }
+                /^psl\.dafsa:/ { next }
+                /^psl_ascii\.dafsa:/ { next }
+                { print }
+              ' "$src" > "$src.new"
+              mv "$src.new" "$src"
+            }
+            if [ ! -f src/Makefile.am ]; then
+              echo "src/Makefile.am missing" >&2
+              exit 1
+            fi
+            patch_one src/Makefile.am
+            patch_one src/Makefile.in
+            patch_one tests/Makefile.am
+            patch_one tests/Makefile.in
+            if grep -F '$(PYTHON)' src/Makefile.am >/dev/null; then
+              echo "PYTHON token still present in src/Makefile.am" >&2
+              exit 1
+            fi
+            if [ -f tests/Makefile.am ] && grep -F '$(PYTHON)' tests/Makefile.am >/dev/null; then
+              echo "PYTHON token still present in tests/Makefile.am" >&2
+              exit 1
+            fi
+            tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/src/suffixes_dafsa.h > src/suffixes_dafsa.h
+            tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl.dafsa > tests/psl.dafsa
+            tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl_ascii.dafsa > tests/psl_ascii.dafsa
+            if ! grep -F kDafsa src/suffixes_dafsa.h >/dev/null; then
+              echo "shipped suffixes_dafsa.h has no kDafsa symbol" >&2
+              exit 1
+            fi
+            if ! test -s tests/psl.dafsa || ! test -s tests/psl_ascii.dafsa; then
+              echo "shipped DAFSA blobs are empty" >&2
+              exit 1
+            fi
+            # gtkdoc-scan is not on the mail host. The docs makefile is only
+            # entered from SUBDIRS += docs/libpsl. Drop those lines and leave
+            # the gtk-doc.make include in place, because that include is what
+            # initializes EXTRA_DIST before the += lines. The C library and
+            # the psl tool stay. Do not add gtk-doc.
+            if [ -f Makefile.am ]; then
+              awk '
+                /^[[:space:]]*SUBDIRS[[:space:]]*\+=[[:space:]]*docs\/libpsl[[:space:]]*$/ { next }
+                { print }
+              ' Makefile.am > Makefile.am.nodocs
+              mv Makefile.am.nodocs Makefile.am
+            fi
+          '';
+        in
+        {
+          # Autoconf 2.72 runs $GTKDOCIZE --copy. true exits 0.
+          # Do not add gtk-doc.
+          # preAutoreconf runs inside autoreconfPhase, before gtkdocize.
+          GTKDOCIZE = "true";
+          # nixpkgs libpsl lists gtk-doc in nativeBuildInputs. The mail host
+          # does not install that doc tool. The C library and the psl tool stay.
+          nativeBuildInputs = builtins.filter (
+            dep:
+            let
+              name = dep.name or "";
+              pname = dep.pname or "";
+            in
+            !(prev.lib.hasInfix "gtk-doc" name || prev.lib.hasInfix "gtk-doc" pname)
+          ) (old.nativeBuildInputs or [ ]);
+          configureFlags = [ ];
+          doCheck = false;
+          preAutoreconf = pslNoGtkDoc;
+          postPatch = pslNoGtkDoc;
+          # The generator script is not installed. Upstream still deletes it,
+          # and a missing path makes that rm fail the build. The library and
+          # the psl tool stay.
+          postInstall = ''
+            rm -f "$out/bin/psl-make-dafsa"
+            rm -f "$out/share/man/man1"/psl-make-dafsa*
+          '';
         }
-        skip = 1
-        next
-      }
-      skip && /^\]\)/ { skip = 0; next }
-      skip { next }
-      { print }
-    ' configure.ac > configure.ac.new
-    mv configure.ac.new configure.ac
-    if grep -F GTK_DOC_CHECK configure.ac >/dev/null; then
-      echo "GTK_DOC_CHECK still present in configure.ac" >&2
-      exit 1
-    fi
-    if ! grep -F "AM_CONDITIONAL([ENABLE_GTK_DOC]" configure.ac >/dev/null; then
-      printf "\nAM_CONDITIONAL([ENABLE_GTK_DOC], [false])\n" >> configure.ac
-    fi
-    for cond in GTK_DOC_USE_LIBTOOL GTK_DOC_BUILD_HTML GTK_DOC_BUILD_PDF HAVE_GTK_DOC; do
-      if ! grep -F "AM_CONDITIONAL([$cond]" configure.ac >/dev/null; then
-        printf '\nAM_CONDITIONAL([%s], [false])\n' "$cond" >> configure.ac
-      fi
-    done
-    if grep -F -q 'AM_PATH_PYTHON([2.7])' configure.ac; then
-      sed -i 's/AM_PATH_PYTHON(\[2\.7\])/AC_SUBST([PYTHON], [:])/' configure.ac
-    fi
-    if grep -F 'AM_PATH_PYTHON' configure.ac >/dev/null; then
-      echo "AM_PATH_PYTHON token still present in configure.ac" >&2
-      exit 1
-    fi
-    if ! grep -F 'AC_SUBST([PYTHON], [:])' configure.ac >/dev/null; then
-      echo "AC_SUBST PYTHON assignment missing in configure.ac" >&2
-      exit 1
-    fi
-    patch_one() {
-      src="$1"
-      if [ ! -f "$src" ]; then
-        return 0
-      fi
-      # Drop generator recipes. The shipped header and DAFSA blobs
-      # are copied below. Do not run psl-make-dafsa. Do not author
-      # the header.
-      awk '
-        /\$\(PYTHON\)/ { next }
-        /psl-make-dafsa/ { next }
-        /^bin_SCRIPTS[[:space:]]*=[[:space:]]*psl-make-dafsa[[:space:]]*$/ { next }
-        /^suffixes_dafsa\.h:/ { next }
-        /^psl\.dafsa:/ { next }
-        /^psl_ascii\.dafsa:/ { next }
-        { print }
-      ' "$src" > "$src.new"
-      mv "$src.new" "$src"
-    }
-    if [ ! -f src/Makefile.am ]; then
-      echo "src/Makefile.am missing" >&2
-      exit 1
-    fi
-    patch_one src/Makefile.am
-    patch_one src/Makefile.in
-    patch_one tests/Makefile.am
-    patch_one tests/Makefile.in
-    if grep -F '$(PYTHON)' src/Makefile.am >/dev/null; then
-      echo "PYTHON token still present in src/Makefile.am" >&2
-      exit 1
-    fi
-    if [ -f tests/Makefile.am ] && grep -F '$(PYTHON)' tests/Makefile.am >/dev/null; then
-      echo "PYTHON token still present in tests/Makefile.am" >&2
-      exit 1
-    fi
-    tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/src/suffixes_dafsa.h > src/suffixes_dafsa.h
-    tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl.dafsa > tests/psl.dafsa
-    tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl_ascii.dafsa > tests/psl_ascii.dafsa
-    if ! grep -F kDafsa src/suffixes_dafsa.h >/dev/null; then
-      echo "shipped suffixes_dafsa.h has no kDafsa symbol" >&2
-      exit 1
-    fi
-    if ! test -s tests/psl.dafsa || ! test -s tests/psl_ascii.dafsa; then
-      echo "shipped DAFSA blobs are empty" >&2
-      exit 1
-    fi
-    # gtkdoc-scan is not on the mail host. The docs makefile is only
-    # entered from SUBDIRS += docs/libpsl. Drop those lines and leave
-    # the gtk-doc.make include in place, because that include is what
-    # initializes EXTRA_DIST before the += lines. The C library and
-    # the psl tool stay. Do not add gtk-doc.
-    if [ -f Makefile.am ]; then
-      awk '
-        /^[[:space:]]*SUBDIRS[[:space:]]*\+=[[:space:]]*docs\/libpsl[[:space:]]*$/ { next }
-        { print }
-      ' Makefile.am > Makefile.am.nodocs
-      mv Makefile.am.nodocs Makefile.am
-    fi
-  '';
-in
-{
-  # Autoconf 2.72 runs $GTKDOCIZE --copy. true exits 0.
-  # Do not add gtk-doc.
-  # preAutoreconf runs inside autoreconfPhase, before gtkdocize.
-  GTKDOCIZE = "true";
-  # nixpkgs libpsl lists gtk-doc in nativeBuildInputs. The mail host
-  # does not install that doc tool. The C library and the psl tool stay.
-  nativeBuildInputs = builtins.filter (
-    dep:
-    let
-      name = dep.name or "";
-      pname = dep.pname or "";
-    in
-    !(prev.lib.hasInfix "gtk-doc" name || prev.lib.hasInfix "gtk-doc" pname)
-  ) (old.nativeBuildInputs or [ ]);
-  configureFlags = [ ];
-  doCheck = false;
-  preAutoreconf = pslNoGtkDoc;
-  postPatch = pslNoGtkDoc;
-  # The generator script is not installed. Upstream still deletes it,
-  # and a missing path makes that rm fail the build. The library and
-  # the psl tool stay.
-  postInstall = ''
-    rm -f "$out/bin/psl-make-dafsa"
-    rm -f "$out/share/man/man1"/psl-make-dafsa*
-  '';
-});
+      );
       # Published Mozilla CA bundle from curl.se. The NixOS PKI
       # module calls pkgs.cacert.override with blacklist,
       # extraCertificateFiles, and extraCertificateStrings. A plain
@@ -1917,9 +2046,7 @@ in
             url = "https://curl.se/ca/cacert.pem";
             sha256 = "11bj97421zashvxr28586m26xjq89nahs3xkm1r1w6kn2r10cz22";
           };
-          blocklist = prev.writeText "cacert-blocklist.txt" (
-            lib.concatStringsSep "\n" blacklist + "\n"
-          );
+          blocklist = prev.writeText "cacert-blocklist.txt" (lib.concatStringsSep "\n" blacklist + "\n");
           extraBundle = prev.writeText "cacert-extra-certificates-bundle.crt" (
             lib.concatStringsSep "\n\n" extraCertificateStrings + "\n"
           );
@@ -1945,92 +2072,95 @@ in
           buildPhase = ''
             runHook preBuild
             cp ${publishedBundle} ca-bundle.crt
-            ${if blacklist == [ ] then
-              ""
-            else
-              ''
-                blocklist=${blocklist}
-                : > ca-bundle.filtered
-                : > ca-preamble.txt
-                certname=""
-                skip=0
-                in_cert=0
-                kept=0
-                removed=0
-                while IFS= read -r line || [ -n "$line" ]; do
-                  if [ "$in_cert" -eq 0 ]; then
-                    case "$line" in
-                      "-----BEGIN CERTIFICATE-----"|"-----BEGIN TRUSTED CERTIFICATE-----")
-                        skip=0
-                        if [ -n "$certname" ]; then
-                          while IFS= read -r item || [ -n "$item" ]; do
-                            if [ -n "$item" ] && [ "$item" = "$certname" ]; then
-                              skip=1
-                            fi
-                          done < "$blocklist"
-                        fi
-                        in_cert=1
-                        if [ "$skip" -eq 0 ]; then
-                          cat ca-preamble.txt >> ca-bundle.filtered
-                          printf '%s\n' "$line" >> ca-bundle.filtered
-                          kept=$((kept + 1))
-                        else
-                          removed=$((removed + 1))
-                        fi
-                        : > ca-preamble.txt
-                        certname=""
-                        ;;
-                      *)
-                        if [ -n "$line" ]; then
-                          fc=$(printf '%s' "$line" | cut -c1 || true)
-                          if [ "$fc" != "#" ] && [ "$fc" != "=" ]; then
-                            certname=$line
+            ${
+              if blacklist == [ ] then
+                ""
+              else
+                ''
+                  blocklist=${blocklist}
+                  : > ca-bundle.filtered
+                  : > ca-preamble.txt
+                  certname=""
+                  skip=0
+                  in_cert=0
+                  kept=0
+                  removed=0
+                  while IFS= read -r line || [ -n "$line" ]; do
+                    if [ "$in_cert" -eq 0 ]; then
+                      case "$line" in
+                        "-----BEGIN CERTIFICATE-----"|"-----BEGIN TRUSTED CERTIFICATE-----")
+                          skip=0
+                          if [ -n "$certname" ]; then
+                            while IFS= read -r item || [ -n "$item" ]; do
+                              if [ -n "$item" ] && [ "$item" = "$certname" ]; then
+                                skip=1
+                              fi
+                            done < "$blocklist"
                           fi
-                        fi
-                        printf '%s\n' "$line" >> ca-preamble.txt
-                        ;;
-                    esac
-                  else
-                    if [ "$skip" -eq 0 ]; then
-                      printf '%s\n' "$line" >> ca-bundle.filtered
+                          in_cert=1
+                          if [ "$skip" -eq 0 ]; then
+                            cat ca-preamble.txt >> ca-bundle.filtered
+                            printf '%s\n' "$line" >> ca-bundle.filtered
+                            kept=$((kept + 1))
+                          else
+                            removed=$((removed + 1))
+                          fi
+                          : > ca-preamble.txt
+                          certname=""
+                          ;;
+                        *)
+                          if [ -n "$line" ]; then
+                            fc=$(printf '%s' "$line" | cut -c1 || true)
+                            if [ "$fc" != "#" ] && [ "$fc" != "=" ]; then
+                              certname=$line
+                            fi
+                          fi
+                          printf '%s\n' "$line" >> ca-preamble.txt
+                          ;;
+                      esac
+                    else
+                      if [ "$skip" -eq 0 ]; then
+                        printf '%s\n' "$line" >> ca-bundle.filtered
+                      fi
+                      case "$line" in
+                        "-----END CERTIFICATE-----"|"-----END TRUSTED CERTIFICATE-----")
+                          in_cert=0
+                          skip=0
+                          ;;
+                      esac
                     fi
-                    case "$line" in
-                      "-----END CERTIFICATE-----"|"-----END TRUSTED CERTIFICATE-----")
-                        in_cert=0
-                        skip=0
-                        ;;
-                    esac
+                  done < ca-bundle.crt
+                  if [ "$kept" -lt 1 ]; then
+                    echo "blacklist removed every certificate" >&2
+                    exit 1
                   fi
-                done < ca-bundle.crt
-                if [ "$kept" -lt 1 ]; then
-                  echo "blacklist removed every certificate" >&2
-                  exit 1
-                fi
-                if [ "$removed" -gt 0 ]; then
-                  mv ca-bundle.filtered ca-bundle.crt
-                else
-                  rm -f ca-bundle.filtered
-                fi
-                rm -f ca-preamble.txt
-              ''
+                  if [ "$removed" -gt 0 ]; then
+                    mv ca-bundle.filtered ca-bundle.crt
+                  else
+                    rm -f ca-bundle.filtered
+                  fi
+                  rm -f ca-preamble.txt
+                ''
             }
-            ${if extraCertificateStrings == [ ] then
-              ""
-            else
-              ''
-                printf '\n' >> ca-bundle.crt
-                cat ${extraBundle} >> ca-bundle.crt
-              ''
-            }
-            ${if extraCertificateFiles == [ ] then
-              ""
-            else
-              ''
-                for extra in ${lib.escapeShellArgs extraCertificateFiles}; do
+            ${
+              if extraCertificateStrings == [ ] then
+                ""
+              else
+                ''
                   printf '\n' >> ca-bundle.crt
-                  cat "$extra" >> ca-bundle.crt
-                done
-              ''
+                  cat ${extraBundle} >> ca-bundle.crt
+                ''
+            }
+            ${
+              if extraCertificateFiles == [ ] then
+                ""
+              else
+                ''
+                  for extra in ${lib.escapeShellArgs extraCertificateFiles}; do
+                    printf '\n' >> ca-bundle.crt
+                    cat "$extra" >> ca-bundle.crt
+                  done
+                ''
             }
             cp ca-bundle.crt ca-no-trust-rules-bundle.crt
             bundle=ca-bundle.crt
@@ -2151,8 +2281,12 @@ in
       # return the empty directory, so that lookup does not run.
       # flake8 is not added. Fish stays the real package.
       writers = prev.writers // {
-        writePython3 = _: _: _: slot;
-        writePython3Bin = _: _: _: slot;
+        writePython3 =
+          _: _: _:
+          slot;
+        writePython3Bin =
+          _: _: _:
+          slot;
       };
       # users-groups compares user.shell to pkgs.xonsh. The xonsh
       # package reads python3.pkgs.xonsh. The empty directory skips
@@ -2315,18 +2449,24 @@ in
               cp -a "$tmp"/. "$dest"/
               rm -rf "$tmp"
             }
-            restore_nar ${prev.fetchurl {
-              url = "https://cache.nixos.org/nar/1krjfxf5y8x0d35pjnl0yaml6z2rzkzhgvgg1kz386xqdc7mrxqk.nar.zst";
-              hash = "sha256-BLMId2UbYVwkr20zxCzv+uyYWHc8O17O65NMv7OB40k=";
-            }} "$out"
-            restore_nar ${prev.fetchurl {
-              url = "https://cache.nixos.org/nar/149fy50lf1snbznaf91qpy7b3kz2fbjrm1y8pxsfjjc4i9d97rzf.nar.zst";
-              hash = "sha256-SEn7nMMHKtC+oSrjLswYEE18j0tjpWFhTgl2J67RnR8=";
-            }} "$bin"
-            restore_nar ${prev.fetchurl {
-              url = "https://cache.nixos.org/nar/1fa46clj86ibyjijy36gvx5wra20imbmg6f7926gq775fbgxh7zn.nar.zst";
-              hash = "sha256-6gj1Go0AAWQPCUl3q3bFs9+Y5OLupASdiY+SNOx57ck=";
-            }} "$dev"
+            restore_nar ${
+              prev.fetchurl {
+                url = "https://cache.nixos.org/nar/1krjfxf5y8x0d35pjnl0yaml6z2rzkzhgvgg1kz386xqdc7mrxqk.nar.zst";
+                hash = "sha256-BLMId2UbYVwkr20zxCzv+uyYWHc8O17O65NMv7OB40k=";
+              }
+            } "$out"
+            restore_nar ${
+              prev.fetchurl {
+                url = "https://cache.nixos.org/nar/149fy50lf1snbznaf91qpy7b3kz2fbjrm1y8pxsfjjc4i9d97rzf.nar.zst";
+                hash = "sha256-SEn7nMMHKtC+oSrjLswYEE18j0tjpWFhTgl2J67RnR8=";
+              }
+            } "$bin"
+            restore_nar ${
+              prev.fetchurl {
+                url = "https://cache.nixos.org/nar/1fa46clj86ibyjijy36gvx5wra20imbmg6f7926gq775fbgxh7zn.nar.zst";
+                hash = "sha256-6gj1Go0AAWQPCUl3q3bFs9+Y5OLupASdiY+SNOx57ck=";
+              }
+            } "$dev"
             mkdir -p "$devdoc"
             rm -f \
               "$dev/bin/gdbus-codegen" \
@@ -2453,178 +2593,174 @@ in
           # find_program(rst2man, rst2man.py) required, and that program
           # is absent. documentation=true does the same for rst2html5.
           # Disable both. The library build does not need those pages.
-          mesonFlags =
-            (builtins.filter (flag: flag != "-Ddocumentation=true") (old.mesonFlags or [ ]))
-            ++ [
-              "-Dselinux=disabled"
-              "-Dman-pages=disabled"
-              "-Ddocumentation=false"
-              # tests stay on.
-            ];
-          postPatch =
-            (old.postPatch or "")
-            + ''
-              # gio/gresource.c:1097 calls gvdb_table_n_children. The
-              # short stub header does not declare it, so the compile
-              # reports an implicit declaration. Keep the real
-              # gvdb-reader.h and put that whole file on every include
-              # path. Do not add one prototype. Do not invent a function
-              # body. Do not wipe glib/gunicode.h.
-              has_real_gvdb=0
-              real_gvdb_root=""
-              find . -name gvdb-reader.h -type f > gvdb-headers.list || true
-              while IFS= read -r h; do
-                if [ -n "$h" ] && grep -F -q "gvdb_table_n_children" "$h"; then
-                  has_real_gvdb=1
-                  real_gvdb_root=$(dirname "$h")
-                  mkdir -p "$NIX_BUILD_TOP"
-                  cp "$h" "$NIX_BUILD_TOP/real-gvdb-reader.h"
-                  if [ -f "$real_gvdb_root/gvdb-reader.c" ]; then
-                    cp "$real_gvdb_root/gvdb-reader.c" "$NIX_BUILD_TOP/real-gvdb-reader.c"
-                  fi
-                  break
-                fi
-              done < gvdb-headers.list
-              rm -f gvdb-headers.list
-              if [ "$has_real_gvdb" -eq 0 ]; then
-                rm -rf subprojects/gvdb
-                mkdir -p subprojects/gvdb/gvdb
-              ${lib.optionalString (gvdbSrc != null) ''
-                if [ -d ${gvdbSrc} ]; then
-                  cp -a ${gvdbSrc}/. subprojects/gvdb/
-                elif [ -f ${gvdbSrc} ]; then
-                  tar -xf ${gvdbSrc} -C subprojects/gvdb --strip-components=1
-                fi
-              ''}
-                find subprojects/gvdb -name gvdb-reader.h -type f > gvdb-headers.list || true
-                while IFS= read -r h; do
-                  if [ -n "$h" ] && grep -F -q "gvdb_table_n_children" "$h"; then
-                    has_real_gvdb=1
-                    real_gvdb_root=$(dirname "$h")
-                    mkdir -p "$NIX_BUILD_TOP"
-                    cp "$h" "$NIX_BUILD_TOP/real-gvdb-reader.h"
-                    if [ -f "$real_gvdb_root/gvdb-reader.c" ]; then
-                      cp "$real_gvdb_root/gvdb-reader.c" "$NIX_BUILD_TOP/real-gvdb-reader.c"
-                    fi
-                    break
-                  fi
-                done < gvdb-headers.list
-                rm -f gvdb-headers.list
-              elif [ -n "$real_gvdb_root" ] && [ "$real_gvdb_root" != "." ] && [ "$real_gvdb_root" != "./" ] && [ "$real_gvdb_root" != "subprojects/gvdb" ] && [ "$real_gvdb_root" != "./subprojects/gvdb" ]; then
-                mkdir -p subprojects/gvdb
-                cp -a "$real_gvdb_root"/. subprojects/gvdb/
-              fi
-                # gresource.c includes <gvdb/gvdb-reader.h> and calls
-                # gvdb_table_new_from_bytes. A copied gvdb header that
-                # already declares that function stays. The stub is only
-                # for a tree that has no declaration.
-                if [ -f subprojects/gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb-reader.h; then
-                  :
-                fi
-                if [ -f subprojects/gvdb/gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb/gvdb-reader.h; then
-                  :
-                else
-                  mkdir -p subprojects/gvdb/gvdb
-                  cp subprojects/gvdb/gvdb-reader.h subprojects/gvdb/gvdb/gvdb-reader.h
-                fi
-                mkdir -p gvdb
-                if [ -f gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" gvdb/gvdb-reader.h; then
-                  :
-                else
-                  cp subprojects/gvdb/gvdb-reader.h gvdb/gvdb-reader.h
-                fi
-              if [ -f subprojects/gvdb.wrap ]; then
-                extra=$(awk -F '=' '/^directory/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' subprojects/gvdb.wrap || true)
-                if [ -n "$extra" ] && [ "$extra" != "gvdb" ] && [ ! -f "subprojects/$extra/meson.build" ]; then
-                  mkdir -p "subprojects/$extra"
-                  cp -a subprojects/gvdb/. "subprojects/$extra/"
-                fi
-              fi
-              cat > subprojects/gvdb.wrap << 'GVDBWRAP'
-[wrap-file]
-directory = gvdb
+          mesonFlags = (builtins.filter (flag: flag != "-Ddocumentation=true") (old.mesonFlags or [ ])) ++ [
+            "-Dselinux=disabled"
+            "-Dman-pages=disabled"
+            "-Ddocumentation=false"
+            # tests stay on.
+          ];
+          postPatch = (old.postPatch or "") + ''
+                          # gio/gresource.c:1097 calls gvdb_table_n_children. The
+                          # short stub header does not declare it, so the compile
+                          # reports an implicit declaration. Keep the real
+                          # gvdb-reader.h and put that whole file on every include
+                          # path. Do not add one prototype. Do not invent a function
+                          # body. Do not wipe glib/gunicode.h.
+                          has_real_gvdb=0
+                          real_gvdb_root=""
+                          find . -name gvdb-reader.h -type f > gvdb-headers.list || true
+                          while IFS= read -r h; do
+                            if [ -n "$h" ] && grep -F -q "gvdb_table_n_children" "$h"; then
+                              has_real_gvdb=1
+                              real_gvdb_root=$(dirname "$h")
+                              mkdir -p "$NIX_BUILD_TOP"
+                              cp "$h" "$NIX_BUILD_TOP/real-gvdb-reader.h"
+                              if [ -f "$real_gvdb_root/gvdb-reader.c" ]; then
+                                cp "$real_gvdb_root/gvdb-reader.c" "$NIX_BUILD_TOP/real-gvdb-reader.c"
+                              fi
+                              break
+                            fi
+                          done < gvdb-headers.list
+                          rm -f gvdb-headers.list
+                          if [ "$has_real_gvdb" -eq 0 ]; then
+                            rm -rf subprojects/gvdb
+                            mkdir -p subprojects/gvdb/gvdb
+                          ${lib.optionalString (gvdbSrc != null) ''
+                            if [ -d ${gvdbSrc} ]; then
+                              cp -a ${gvdbSrc}/. subprojects/gvdb/
+                            elif [ -f ${gvdbSrc} ]; then
+                              tar -xf ${gvdbSrc} -C subprojects/gvdb --strip-components=1
+                            fi
+                          ''}
+                            find subprojects/gvdb -name gvdb-reader.h -type f > gvdb-headers.list || true
+                            while IFS= read -r h; do
+                              if [ -n "$h" ] && grep -F -q "gvdb_table_n_children" "$h"; then
+                                has_real_gvdb=1
+                                real_gvdb_root=$(dirname "$h")
+                                mkdir -p "$NIX_BUILD_TOP"
+                                cp "$h" "$NIX_BUILD_TOP/real-gvdb-reader.h"
+                                if [ -f "$real_gvdb_root/gvdb-reader.c" ]; then
+                                  cp "$real_gvdb_root/gvdb-reader.c" "$NIX_BUILD_TOP/real-gvdb-reader.c"
+                                fi
+                                break
+                              fi
+                            done < gvdb-headers.list
+                            rm -f gvdb-headers.list
+                          elif [ -n "$real_gvdb_root" ] && [ "$real_gvdb_root" != "." ] && [ "$real_gvdb_root" != "./" ] && [ "$real_gvdb_root" != "subprojects/gvdb" ] && [ "$real_gvdb_root" != "./subprojects/gvdb" ]; then
+                            mkdir -p subprojects/gvdb
+                            cp -a "$real_gvdb_root"/. subprojects/gvdb/
+                          fi
+                            # gresource.c includes <gvdb/gvdb-reader.h> and calls
+                            # gvdb_table_new_from_bytes. A copied gvdb header that
+                            # already declares that function stays. The stub is only
+                            # for a tree that has no declaration.
+                            if [ -f subprojects/gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb-reader.h; then
+                              :
+                            fi
+                            if [ -f subprojects/gvdb/gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb/gvdb-reader.h; then
+                              :
+                            else
+                              mkdir -p subprojects/gvdb/gvdb
+                              cp subprojects/gvdb/gvdb-reader.h subprojects/gvdb/gvdb/gvdb-reader.h
+                            fi
+                            mkdir -p gvdb
+                            if [ -f gvdb/gvdb-reader.h ] && grep -F -q "gvdb_table_new_from_bytes" gvdb/gvdb-reader.h; then
+                              :
+                            else
+                              cp subprojects/gvdb/gvdb-reader.h gvdb/gvdb-reader.h
+                            fi
+                          if [ -f subprojects/gvdb.wrap ]; then
+                            extra=$(awk -F '=' '/^directory/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' subprojects/gvdb.wrap || true)
+                            if [ -n "$extra" ] && [ "$extra" != "gvdb" ] && [ ! -f "subprojects/$extra/meson.build" ]; then
+                              mkdir -p "subprojects/$extra"
+                              cp -a subprojects/gvdb/. "subprojects/$extra/"
+                            fi
+                          fi
+                          cat > subprojects/gvdb.wrap << 'GVDBWRAP'
+            [wrap-file]
+            directory = gvdb
 
-[provide]
-dependency_names = gvdb
-GVDBWRAP
-              if grep -E -q 'source_url|wrap-git' subprojects/gvdb.wrap; then
-                echo "gvdb.wrap still downloads" >&2
-                exit 1
-              fi
-              if [ -f "$NIX_BUILD_TOP/real-gvdb-reader.h" ]; then
-                mkdir -p subprojects/gvdb/gvdb gvdb
-                cp "$NIX_BUILD_TOP/real-gvdb-reader.h" subprojects/gvdb/gvdb-reader.h
-                cp "$NIX_BUILD_TOP/real-gvdb-reader.h" subprojects/gvdb/gvdb/gvdb-reader.h
-                cp "$NIX_BUILD_TOP/real-gvdb-reader.h" gvdb/gvdb-reader.h
-              fi
-              if [ -f "$NIX_BUILD_TOP/real-gvdb-reader.c" ]; then
-                mkdir -p subprojects/gvdb
-                cp "$NIX_BUILD_TOP/real-gvdb-reader.c" subprojects/gvdb/gvdb-reader.c
-              fi
-              if [ -f gio/gresource.c ] && grep -F -q "gvdb_table_n_children" gio/gresource.c; then
-                if ! grep -F -q "gvdb_table_n_children" subprojects/gvdb/gvdb-reader.h || ! grep -F -q "gvdb_table_n_children" gvdb/gvdb-reader.h; then
-                  echo "compile does not include the whole gvdb-reader.h that declares gvdb_table_n_children" >&2
-                  exit 1
-                fi
-              fi
-              if ! grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb-reader.h; then
-                echo "gvdb-reader.h still lacks gvdb_table_new_from_bytes" >&2
-                exit 1
-              fi
-              # gio/gdbusdaemon.c includes gdbus-daemon-generated.h.
-              # The custom target does not produce gio/gdbus-daemon-generated.c.
-              # Remove gdbusdaemon.c and that custom target from gio_sources.
-              # Do not invent the generated files. Do not wipe glib/gunicode.h.
-              # xdp-dbus.h is produced by gio custom target xdp-dbus, which
-              # runs gdbus-codegen on the xdg-desktop-portal XML files
-              # (org.freedesktop.portal.*.xml). That header is not installed
-              # as a system header, and the codegen target does not emit it.
-              # Drop every gio source that includes xdp-dbus.h, and drop the
-              # custom target, the same way gdbusdaemon.c was dropped.
-              if [ -f gio/meson.build ]; then
-                awk '
-                  index($0, "files(") && index($0, "gdbusdaemon.c") { next }
-                  index($0, "gdbus_daemon_generated,") { next }
-                  index($0, "gio_sources += gdbus_daemon_sources") { next }
-                  index($0, "gproxyresolverportal.c") { next }
-                  index($0, "gnetworkmonitorportal.c") { next }
-                  index($0, "gmemorymonitorportal.c") { next }
-                  index($0, "gopenuriportal.c") { next }
-                  index($0, "gtrashportal.c") { next }
-                  index($0, "gdocumentportal.c") { next }
-                  index($0, "xdp_dbus_generated") { next }
-                  { print }
-                ' gio/meson.build > gio/meson.build.nogdbus
-                mv gio/meson.build.nogdbus gio/meson.build
-                if grep -F -q "gio_sources += gdbus_daemon_sources" gio/meson.build; then
-                  echo "gio_sources still compiles gdbus-daemon-generated.c" >&2
-                  exit 1
-                fi
-                if grep -F -q "gdbus-daemon-generated.c" gio/meson.build; then
-                  echo "gio custom target still names gdbus-daemon-generated.c" >&2
-                  exit 1
-                fi
-                if grep -F -q "gproxyresolverportal.c" gio/meson.build; then
-                  echo "gio_sources still compiles gproxyresolverportal.c" >&2
-                  exit 1
-                fi
-                if grep -F -q "xdp_dbus_generated" gio/meson.build; then
-                  echo "gio custom target still names xdp-dbus.h" >&2
-                  exit 1
-                fi
-              fi
-              cat > subprojects/libselinux.wrap << 'SELINUXWRAP'
-[wrap-file]
-directory = libselinux
+            [provide]
+            dependency_names = gvdb
+            GVDBWRAP
+                          if grep -E -q 'source_url|wrap-git' subprojects/gvdb.wrap; then
+                            echo "gvdb.wrap still downloads" >&2
+                            exit 1
+                          fi
+                          if [ -f "$NIX_BUILD_TOP/real-gvdb-reader.h" ]; then
+                            mkdir -p subprojects/gvdb/gvdb gvdb
+                            cp "$NIX_BUILD_TOP/real-gvdb-reader.h" subprojects/gvdb/gvdb-reader.h
+                            cp "$NIX_BUILD_TOP/real-gvdb-reader.h" subprojects/gvdb/gvdb/gvdb-reader.h
+                            cp "$NIX_BUILD_TOP/real-gvdb-reader.h" gvdb/gvdb-reader.h
+                          fi
+                          if [ -f "$NIX_BUILD_TOP/real-gvdb-reader.c" ]; then
+                            mkdir -p subprojects/gvdb
+                            cp "$NIX_BUILD_TOP/real-gvdb-reader.c" subprojects/gvdb/gvdb-reader.c
+                          fi
+                          if [ -f gio/gresource.c ] && grep -F -q "gvdb_table_n_children" gio/gresource.c; then
+                            if ! grep -F -q "gvdb_table_n_children" subprojects/gvdb/gvdb-reader.h || ! grep -F -q "gvdb_table_n_children" gvdb/gvdb-reader.h; then
+                              echo "compile does not include the whole gvdb-reader.h that declares gvdb_table_n_children" >&2
+                              exit 1
+                            fi
+                          fi
+                          if ! grep -F -q "gvdb_table_new_from_bytes" subprojects/gvdb/gvdb-reader.h; then
+                            echo "gvdb-reader.h still lacks gvdb_table_new_from_bytes" >&2
+                            exit 1
+                          fi
+                          # gio/gdbusdaemon.c includes gdbus-daemon-generated.h.
+                          # The custom target does not produce gio/gdbus-daemon-generated.c.
+                          # Remove gdbusdaemon.c and that custom target from gio_sources.
+                          # Do not invent the generated files. Do not wipe glib/gunicode.h.
+                          # xdp-dbus.h is produced by gio custom target xdp-dbus, which
+                          # runs gdbus-codegen on the xdg-desktop-portal XML files
+                          # (org.freedesktop.portal.*.xml). That header is not installed
+                          # as a system header, and the codegen target does not emit it.
+                          # Drop every gio source that includes xdp-dbus.h, and drop the
+                          # custom target, the same way gdbusdaemon.c was dropped.
+                          if [ -f gio/meson.build ]; then
+                            awk '
+                              index($0, "files(") && index($0, "gdbusdaemon.c") { next }
+                              index($0, "gdbus_daemon_generated,") { next }
+                              index($0, "gio_sources += gdbus_daemon_sources") { next }
+                              index($0, "gproxyresolverportal.c") { next }
+                              index($0, "gnetworkmonitorportal.c") { next }
+                              index($0, "gmemorymonitorportal.c") { next }
+                              index($0, "gopenuriportal.c") { next }
+                              index($0, "gtrashportal.c") { next }
+                              index($0, "gdocumentportal.c") { next }
+                              index($0, "xdp_dbus_generated") { next }
+                              { print }
+                            ' gio/meson.build > gio/meson.build.nogdbus
+                            mv gio/meson.build.nogdbus gio/meson.build
+                            if grep -F -q "gio_sources += gdbus_daemon_sources" gio/meson.build; then
+                              echo "gio_sources still compiles gdbus-daemon-generated.c" >&2
+                              exit 1
+                            fi
+                            if grep -F -q "gdbus-daemon-generated.c" gio/meson.build; then
+                              echo "gio custom target still names gdbus-daemon-generated.c" >&2
+                              exit 1
+                            fi
+                            if grep -F -q "gproxyresolverportal.c" gio/meson.build; then
+                              echo "gio_sources still compiles gproxyresolverportal.c" >&2
+                              exit 1
+                            fi
+                            if grep -F -q "xdp_dbus_generated" gio/meson.build; then
+                              echo "gio custom target still names xdp-dbus.h" >&2
+                              exit 1
+                            fi
+                          fi
+                          cat > subprojects/libselinux.wrap << 'SELINUXWRAP'
+            [wrap-file]
+            directory = libselinux
 
-[provide]
-dependency_names = libselinux
-SELINUXWRAP
-              if grep -E -q 'source_url|wrap-git' subprojects/libselinux.wrap; then
-                echo "libselinux.wrap still downloads" >&2
-                exit 1
-              fi
-            '';
+            [provide]
+            dependency_names = libselinux
+            SELINUXWRAP
+                          if grep -E -q 'source_url|wrap-git' subprojects/libselinux.wrap; then
+                            echo "libselinux.wrap still downloads" >&2
+                            exit 1
+                          fi
+          '';
         });
 
       # CMakeLists.txt requires Python 3.8 when ENABLE_PYTHON_SCRIPTING
@@ -2632,9 +2768,7 @@ SELINUXWRAP
       # stops. Turn the option off. Do not add an interpreter package.
       fontforge = prev.fontforge.overrideAttrs (old: {
         cmakeFlags =
-          (builtins.filter (
-            flag: flag != "-DENABLE_PYTHON_SCRIPTING=ON"
-          ) (old.cmakeFlags or [ ]))
+          (builtins.filter (flag: flag != "-DENABLE_PYTHON_SCRIPTING=ON") (old.cmakeFlags or [ ]))
           ++ [ "-DENABLE_PYTHON_SCRIPTING=OFF" ];
       });
 
@@ -2649,9 +2783,9 @@ SELINUXWRAP
         # Man pages are the only reason this library pulls doxygen.
         # The shared library stays. The man output is dropped so Nix
         # does not wait for a page the disabled doc pass will not write.
-        nativeBuildInputs = builtins.filter (
-          dep: !lib.hasInfix "doxygen" (dep.name or "")
-        ) (old.nativeBuildInputs or [ ]);
+        nativeBuildInputs = builtins.filter (dep: !lib.hasInfix "doxygen" (dep.name or "")) (
+          old.nativeBuildInputs or [ ]
+        );
         outputs = builtins.filter (name: name != "man") (old.outputs or [ "out" ]);
         configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-doxygen-doc" ];
       });
@@ -2684,29 +2818,27 @@ SELINUXWRAP
           && !(lib.hasInfix "python" pname || lib.hasInfix "Python" pname)
         ) (old.nativeBuildInputs or [ ]);
         preCheck = "";
-        postPatch =
-          (old.postPatch or "")
-          + ''
-            test -f configure.ac
-            test -f Makefile.am
-            grep -F -q 'AM_PATH_PYTHON([3.7])' configure.ac
-            sed -i 's/AM_PATH_PYTHON(\[3\.7\])/AC_SUBST([PYTHON], [:])/' configure.ac
-            if grep -F -q 'AM_PATH_PYTHON' configure.ac; then
-              echo "re2c configure.ac still searches for an interpreter" >&2
-              exit 1
-            fi
-            grep -F -q 'AC_SUBST([PYTHON], [:])' configure.ac
-            grep -F -q 'cp $(top_srcdir)/bootstrap/$@ $(@D)' Makefile.am
-            grep -F -q 'cp $(top_srcdir)/bootstrap/$@ $@' Makefile.am
-            sed -i '/^TESTS = \\$/,/^$/ { /\$(re2c_TESTSUITE)/d; }' Makefile.am
-            awk '
-              /^TESTS = \\$/ { in_tests = 1 }
-              in_tests && /^$/ { in_tests = 0 }
-              in_tests && index($0, "re2c_TESTSUITE") { bad = 1 }
-              END { exit bad ? 1 : 0 }
-            ' Makefile.am
-            grep -F -q '$(check_PROGRAMS)' Makefile.am
-          '';
+        postPatch = (old.postPatch or "") + ''
+          test -f configure.ac
+          test -f Makefile.am
+          grep -F -q 'AM_PATH_PYTHON([3.7])' configure.ac
+          sed -i 's/AM_PATH_PYTHON(\[3\.7\])/AC_SUBST([PYTHON], [:])/' configure.ac
+          if grep -F -q 'AM_PATH_PYTHON' configure.ac; then
+            echo "re2c configure.ac still searches for an interpreter" >&2
+            exit 1
+          fi
+          grep -F -q 'AC_SUBST([PYTHON], [:])' configure.ac
+          grep -F -q 'cp $(top_srcdir)/bootstrap/$@ $(@D)' Makefile.am
+          grep -F -q 'cp $(top_srcdir)/bootstrap/$@ $@' Makefile.am
+          sed -i '/^TESTS = \\$/,/^$/ { /\$(re2c_TESTSUITE)/d; }' Makefile.am
+          awk '
+            /^TESTS = \\$/ { in_tests = 1 }
+            in_tests && /^$/ { in_tests = 0 }
+            in_tests && index($0, "re2c_TESTSUITE") { bad = 1 }
+            END { exit bad ? 1 : 0 }
+          ' Makefile.am
+          grep -F -q '$(check_PROGRAMS)' Makefile.am
+        '';
       });
 
       # ninja 1.13.2 (pkgs/by-name/ni/ninja/package.nix, nixos-26.05)
@@ -2807,9 +2939,13 @@ SELINUXWRAP
                 in
                 {
                   inherit mesonFlags;
-                  buildPhase = prev.lib.replaceStrings [ "./stage-1/muon-bootstrap setup " ] [
-                    "./stage-1/muon-bootstrap setup ${prev.lib.concatStringsSep " " mesonFlags} "
-                  ] old.buildPhase;
+                  buildPhase =
+                    prev.lib.replaceStrings
+                      [ "./stage-1/muon-bootstrap setup " ]
+                      [
+                        "./stage-1/muon-bootstrap setup ${prev.lib.concatStringsSep " " mesonFlags} "
+                      ]
+                      old.buildPhase;
                 }
               );
         in
@@ -2953,9 +3089,8 @@ SELINUXWRAP
       gnutls = prev.gnutls.overrideAttrs (old: {
         configureFlags =
           let
-            keep = flag:
-              flag != "--with-p11-kit"
-              && !prev.lib.hasPrefix "--with-default-trust-store-pkcs11" flag;
+            keep =
+              flag: flag != "--with-p11-kit" && !prev.lib.hasPrefix "--with-default-trust-store-pkcs11" flag;
           in
           (builtins.filter keep (old.configureFlags or [ ])) ++ [ "--without-p11-kit" ];
       });
@@ -2975,59 +3110,57 @@ SELINUXWRAP
           !(lib.hasInfix "python" name || lib.hasInfix "Python" name)
           && !(lib.hasInfix "python" pname || lib.hasInfix "Python" pname)
         ) (old.nativeBuildInputs or [ ]);
-        postPatch =
-          (old.postPatch or "")
-          + ''
-            # Do not execute bpf_doc.py. Do not patch its shebang.
-            # The makefile recipe writes bpf_helper_defs.h by running
-            # that script, and the interpreter path is /usr/bin/env.
-            # Copy a published header that is already built. Do not
-            # author a header and do not emit a define.
-            published=$(find ${prev.libbpf} . -name bpf_helper_defs.h -type f -print -quit || true)
-            if [ -n "$published" ]; then
-              case $published in
-                /*) ;;
-                *) published=$PWD/$published ;;
-              esac
-            fi
-            if [ -z "$published" ]; then
-              echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
-              exit 1
-            fi
-            rewritten=0
-            find . \( -name Makefile -o -name '*.mk' \) -type f > bpf-mk.list
-            while IFS= read -r mk; do
-              if grep -q bpf_doc.py "$mk"; then
-                awk -v hdr="$published" '
-                  BEGIN { skip = 0 }
-                  {
-                    if (skip) {
-                      if ($0 ~ /\\[[:space:]]*$/) next
-                      if ($0 ~ /^[\t ]/) { skip = 0; next }
-                      skip = 0
-                    }
-                    if (index($0, "bpf_doc.py")) {
-                      print "\ttest -s \"" hdr "\" && cat \"" hdr "\" > $@"
-                      if ($0 ~ /\\[[:space:]]*$/) skip = 1
-                      next
-                    }
-                    print
+        postPatch = (old.postPatch or "") + ''
+          # Do not execute bpf_doc.py. Do not patch its shebang.
+          # The makefile recipe writes bpf_helper_defs.h by running
+          # that script, and the interpreter path is /usr/bin/env.
+          # Copy a published header that is already built. Do not
+          # author a header and do not emit a define.
+          published=$(find ${prev.libbpf} . -name bpf_helper_defs.h -type f -print -quit || true)
+          if [ -n "$published" ]; then
+            case $published in
+              /*) ;;
+              *) published=$PWD/$published ;;
+            esac
+          fi
+          if [ -z "$published" ]; then
+            echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
+            exit 1
+          fi
+          rewritten=0
+          find . \( -name Makefile -o -name '*.mk' \) -type f > bpf-mk.list
+          while IFS= read -r mk; do
+            if grep -q bpf_doc.py "$mk"; then
+              awk -v hdr="$published" '
+                BEGIN { skip = 0 }
+                {
+                  if (skip) {
+                    if ($0 ~ /\\[[:space:]]*$/) next
+                    if ($0 ~ /^[\t ]/) { skip = 0; next }
+                    skip = 0
                   }
-                ' "$mk" > "$mk.nobpfdoc"
-                mv "$mk.nobpfdoc" "$mk"
-                rewritten=1
-              fi
-            done < bpf-mk.list
-            rm -f bpf-mk.list
-            if [ "$rewritten" -eq 0 ]; then
-              echo "bpf_helper_defs.h recipe was not retargeted" >&2
-              exit 1
+                  if (index($0, "bpf_doc.py")) {
+                    print "\ttest -s \"" hdr "\" && cat \"" hdr "\" > $@"
+                    if ($0 ~ /\\[[:space:]]*$/) skip = 1
+                    next
+                  }
+                  print
+                }
+              ' "$mk" > "$mk.nobpfdoc"
+              mv "$mk.nobpfdoc" "$mk"
+              rewritten=1
             fi
-            if grep -R -n bpf_doc.py --include=Makefile --include='*.mk' . ; then
-              echo "bpf_doc.py recipe still runs" >&2
-              exit 1
-            fi
-          '';
+          done < bpf-mk.list
+          rm -f bpf-mk.list
+          if [ "$rewritten" -eq 0 ]; then
+            echo "bpf_helper_defs.h recipe was not retargeted" >&2
+            exit 1
+          fi
+          if grep -R -n bpf_doc.py --include=Makefile --include='*.mk' . ; then
+            echo "bpf_doc.py recipe still runs" >&2
+            exit 1
+          fi
+        '';
       });
       # linuxPackages.bpftools is a separate derivation from the
       # top-level attribute. Patch that copy the same way.
@@ -3043,56 +3176,54 @@ SELINUXWRAP
               !(lib.hasInfix "python" name || lib.hasInfix "Python" name)
               && !(lib.hasInfix "python" pname || lib.hasInfix "Python" pname)
             ) (old.nativeBuildInputs or [ ]);
-            postPatch =
-              (old.postPatch or "")
-              + ''
-                # Same published-header copy as the top-level bpftools
-                # hook. Do not execute bpf_doc.py. Do not author a header.
-                published=$(find ${prev.libbpf} . -name bpf_helper_defs.h -type f -print -quit || true)
-                if [ -n "$published" ]; then
-                  case $published in
-                    /*) ;;
-                    *) published=$PWD/$published ;;
-                  esac
-                fi
-                if [ -z "$published" ]; then
-                  echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
-                  exit 1
-                fi
-                rewritten=0
-                find . \( -name Makefile -o -name '*.mk' \) -type f > bpf-mk.list
-                while IFS= read -r mk; do
-                  if grep -q bpf_doc.py "$mk"; then
-                    awk -v hdr="$published" '
-                      BEGIN { skip = 0 }
-                      {
-                        if (skip) {
-                          if ($0 ~ /\\[[:space:]]*$/) next
-                          if ($0 ~ /^[\t ]/) { skip = 0; next }
-                          skip = 0
-                        }
-                        if (index($0, "bpf_doc.py")) {
-                          print "\ttest -s \"" hdr "\" && cat \"" hdr "\" > $@"
-                          if ($0 ~ /\\[[:space:]]*$/) skip = 1
-                          next
-                        }
-                        print
+            postPatch = (old.postPatch or "") + ''
+              # Same published-header copy as the top-level bpftools
+              # hook. Do not execute bpf_doc.py. Do not author a header.
+              published=$(find ${prev.libbpf} . -name bpf_helper_defs.h -type f -print -quit || true)
+              if [ -n "$published" ]; then
+                case $published in
+                  /*) ;;
+                  *) published=$PWD/$published ;;
+                esac
+              fi
+              if [ -z "$published" ]; then
+                echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
+                exit 1
+              fi
+              rewritten=0
+              find . \( -name Makefile -o -name '*.mk' \) -type f > bpf-mk.list
+              while IFS= read -r mk; do
+                if grep -q bpf_doc.py "$mk"; then
+                  awk -v hdr="$published" '
+                    BEGIN { skip = 0 }
+                    {
+                      if (skip) {
+                        if ($0 ~ /\\[[:space:]]*$/) next
+                        if ($0 ~ /^[\t ]/) { skip = 0; next }
+                        skip = 0
                       }
-                    ' "$mk" > "$mk.nobpfdoc"
-                    mv "$mk.nobpfdoc" "$mk"
-                    rewritten=1
-                  fi
-                done < bpf-mk.list
-                rm -f bpf-mk.list
-                if [ "$rewritten" -eq 0 ]; then
-                  echo "bpf_helper_defs.h recipe was not retargeted" >&2
-                  exit 1
+                      if (index($0, "bpf_doc.py")) {
+                        print "\ttest -s \"" hdr "\" && cat \"" hdr "\" > $@"
+                        if ($0 ~ /\\[[:space:]]*$/) skip = 1
+                        next
+                      }
+                      print
+                    }
+                  ' "$mk" > "$mk.nobpfdoc"
+                  mv "$mk.nobpfdoc" "$mk"
+                  rewritten=1
                 fi
-                if grep -R -n bpf_doc.py --include=Makefile --include='*.mk' . ; then
-                  echo "bpf_doc.py recipe still runs" >&2
-                  exit 1
-                fi
-              '';
+              done < bpf-mk.list
+              rm -f bpf-mk.list
+              if [ "$rewritten" -eq 0 ]; then
+                echo "bpf_helper_defs.h recipe was not retargeted" >&2
+                exit 1
+              fi
+              if grep -R -n bpf_doc.py --include=Makefile --include='*.mk' . ; then
+                echo "bpf_doc.py recipe still runs" >&2
+                exit 1
+              fi
+            '';
           });
           # linux-6.18.60 runs scripts/bpf_doc.py from the kernel tree.
           # That file is not the bpftools copy. Its shebang is
@@ -3105,69 +3236,69 @@ SELINUXWRAP
           # RUST into the answer file that generate-config.pl reads.
           # linux-config-6.18.60 reports those four unused. Unset drops
           # the answer line. Do not set them to n. Do not add features.
-          kernel = (lpPrev.kernel.override (prevArgs: {
-            structuredExtraConfig = (prevArgs.structuredExtraConfig or { }) // {
-              DRM_NOVA = lib.mkForce lib.kernel.unset;
-              DRM_PANIC_SCREEN_QR_CODE = lib.mkForce lib.kernel.unset;
-              NOVA_CORE = lib.mkForce lib.kernel.unset;
-              RUST = lib.mkForce lib.kernel.unset;
-            };
-          })).overrideAttrs (old: {
-            postPatch =
-              (old.postPatch or "")
-              + ''
-                scripts=$(find . -name bpf_doc.py -type f)
-                if [ -z "$scripts" ]; then
-                  echo "bpf_doc.py missing from kernel source" >&2
-                  exit 1
-                fi
-                # bpf_doc.py --header --file tools/include/uapi/linux/bpf.h
-                # writes the helper header on stdout. The previous script
-                # treated every .h argument as an output and truncated
-                # linux/bpf.h, so struct types in libbpf.c were incomplete
-                # (storage size of map isn't known). Cat the published
-                # header to stdout and do not open any argument for write.
-                published=$(find ${prev.libbpf} -name bpf_helper_defs.h -type f -print -quit || true)
-                if [ -z "$published" ]; then
-                  echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
-                  exit 1
-                fi
-                for script in $scripts; do
-                  cat > "$script" << EOF
-#!/bin/sh
-set -eu
-cat "$published"
-exit 0
-EOF
-                  chmod 755 "$script"
-                  if ! head -n 1 "$script" | grep -q '^#!/bin/sh$'; then
-                    echo "kernel bpf doc generator was not replaced" >&2
-                    exit 1
-                  fi
-                done
-                # resolve_btfids compiles libbpf with warnings as errors.
-                # Drop that -Werror in the tool makefiles. Leave the kernel
-                # image build flags alone.
-                find tools/bpf/resolve_btfids tools/lib/bpf -type f \( -name Makefile -o -name '*.mk' \) > btf-werror.list || true
-                if [ ! -s btf-werror.list ]; then
-                  echo "resolve_btfids libbpf makefile was not found" >&2
-                  exit 1
-                fi
-                # Do not prepend include/uapi onto CFLAGS. That made
-                # tools/include/linux/err.h fail to parse ERR_PTR.
-                # WERROR stays 0. Do not filter CFLAGS with filter-out.
-                while IFS= read -r mk; do
-                  sed -i \
-                    -e 's/\([^A-Za-z0-9_=]\)-Werror\([^A-Za-z0-9_=]\)/\1\2/g' \
-                    -e 's/\([^A-Za-z0-9_=]\)-Werror$/\1/' \
-                    -e 's/^-Werror\([^A-Za-z0-9_=]\)/\1/' \
-                    -e 's/^-Werror$//' \
-                    "$mk"
-                  printf '\noverride WERROR := 0\n' >> "$mk"
-                done < btf-werror.list
-                rm -f btf-werror.list
-              '';
-          });
+          kernel =
+            (lpPrev.kernel.override (prevArgs: {
+              structuredExtraConfig = (prevArgs.structuredExtraConfig or { }) // {
+                DRM_NOVA = lib.mkForce lib.kernel.unset;
+                DRM_PANIC_SCREEN_QR_CODE = lib.mkForce lib.kernel.unset;
+                NOVA_CORE = lib.mkForce lib.kernel.unset;
+                RUST = lib.mkForce lib.kernel.unset;
+              };
+            })).overrideAttrs
+              (old: {
+                postPatch = (old.postPatch or "") + ''
+                                  scripts=$(find . -name bpf_doc.py -type f)
+                                  if [ -z "$scripts" ]; then
+                                    echo "bpf_doc.py missing from kernel source" >&2
+                                    exit 1
+                                  fi
+                                  # bpf_doc.py --header --file tools/include/uapi/linux/bpf.h
+                                  # writes the helper header on stdout. The previous script
+                                  # treated every .h argument as an output and truncated
+                                  # linux/bpf.h, so struct types in libbpf.c were incomplete
+                                  # (storage size of map isn't known). Cat the published
+                                  # header to stdout and do not open any argument for write.
+                                  published=$(find ${prev.libbpf} -name bpf_helper_defs.h -type f -print -quit || true)
+                                  if [ -z "$published" ]; then
+                                    echo "bpf_helper_defs.h has no published copy; not authoring one" >&2
+                                    exit 1
+                                  fi
+                                  for script in $scripts; do
+                                    cat > "$script" << EOF
+                  #!/bin/sh
+                  set -eu
+                  cat "$published"
+                  exit 0
+                  EOF
+                                    chmod 755 "$script"
+                                    if ! head -n 1 "$script" | grep -q '^#!/bin/sh$'; then
+                                      echo "kernel bpf doc generator was not replaced" >&2
+                                      exit 1
+                                    fi
+                                  done
+                                  # resolve_btfids compiles libbpf with warnings as errors.
+                                  # Drop that -Werror in the tool makefiles. Leave the kernel
+                                  # image build flags alone.
+                                  find tools/bpf/resolve_btfids tools/lib/bpf -type f \( -name Makefile -o -name '*.mk' \) > btf-werror.list || true
+                                  if [ ! -s btf-werror.list ]; then
+                                    echo "resolve_btfids libbpf makefile was not found" >&2
+                                    exit 1
+                                  fi
+                                  # Do not prepend include/uapi onto CFLAGS. That made
+                                  # tools/include/linux/err.h fail to parse ERR_PTR.
+                                  # WERROR stays 0. Do not filter CFLAGS with filter-out.
+                                  while IFS= read -r mk; do
+                                    sed -i \
+                                      -e 's/\([^A-Za-z0-9_=]\)-Werror\([^A-Za-z0-9_=]\)/\1\2/g' \
+                                      -e 's/\([^A-Za-z0-9_=]\)-Werror$/\1/' \
+                                      -e 's/^-Werror\([^A-Za-z0-9_=]\)/\1/' \
+                                      -e 's/^-Werror$//' \
+                                      "$mk"
+                                    printf '\noverride WERROR := 0\n' >> "$mk"
+                                  done < btf-werror.list
+                                  rm -f btf-werror.list
+                '';
+              });
         }
       );
 
@@ -3179,14 +3310,12 @@ EOF
           "-DCATCH_DEVELOPMENT_BUILD=OFF"
           "-DCATCH_BUILD_TESTING=OFF"
         ];
-        postPatch =
-          (old.postPatch or "")
-          + ''
-            chmod -R u+w .
-            find . -name CMakeLists.txt -exec sed -i \
-              -e 's/\(find_package(Python[^)]*\) REQUIRED/\1/' \
-              {} +
-          '';
+        postPatch = (old.postPatch or "") + ''
+          chmod -R u+w .
+          find . -name CMakeLists.txt -exec sed -i \
+            -e 's/\(find_package(Python[^)]*\) REQUIRED/\1/' \
+            {} +
+        '';
       });
 
       # catch 2.13.10 is the catch2 attr above and already built.
@@ -3200,14 +3329,12 @@ EOF
         ];
         doCheck = false;
         nativeCheckInputs = [ ];
-        postPatch =
-          (old.postPatch or "")
-          + ''
-            chmod -R u+w .
-            find . -name CMakeLists.txt -exec sed -i \
-              -e 's/\(find_package(Python[^)]*\) REQUIRED/\1/' \
-              {} +
-          '';
+        postPatch = (old.postPatch or "") + ''
+          chmod -R u+w .
+          find . -name CMakeLists.txt -exec sed -i \
+            -e 's/\(find_package(Python[^)]*\) REQUIRED/\1/' \
+            {} +
+        '';
       });
 
       # zeromq's cmake build already produced the library. postBuild
@@ -3237,27 +3364,28 @@ EOF
         let
           # The doxygen binary links libvhdlparser, so the library stays.
           # The javacc adjust step is a C program, not the interpreter.
-          cmakeInterpreterStub = prev.runCommand "cmake-interpreter-stub" {
-            nativeBuildInputs = [ prev.stdenv.cc ];
-          } ''
-            mkdir -p "$out/bin"
-          '';
+          cmakeInterpreterStub =
+            prev.runCommand "cmake-interpreter-stub"
+              {
+                nativeBuildInputs = [ prev.stdenv.cc ];
+              }
+              ''
+                mkdir -p "$out/bin"
+              '';
         in
         prev.doxygen.overrideAttrs (old: {
-        buildInputs = (old.buildInputs or [ ]) ++ [
-          prev.spdlog
-          prev.fmt
-          prev.sqlite
-        ];
-        cmakeFlags = (old.cmakeFlags or [ ]) ++ [
-          "-DPython_EXECUTABLE=${cmakeInterpreterStub}/bin/cmake-interpreter-stub"
-          "-Duse_sys_spdlog=ON"
-          "-Duse_sys_fmt=ON"
-          "-Duse_sys_sqlite3=ON"
-        ];
-        postPatch =
-          (old.postPatch or "")
-          + ''
+          buildInputs = (old.buildInputs or [ ]) ++ [
+            prev.spdlog
+            prev.fmt
+            prev.sqlite
+          ];
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [
+            "-DPython_EXECUTABLE=${cmakeInterpreterStub}/bin/cmake-interpreter-stub"
+            "-Duse_sys_spdlog=ON"
+            "-Duse_sys_fmt=ON"
+            "-Duse_sys_sqlite3=ON"
+          ];
+          postPatch = (old.postPatch or "") + ''
             chmod -R u+w .
             find . -name CMakeLists.txt | while IFS= read -r cm; do
               awk '
@@ -3301,7 +3429,7 @@ EOF
             sed -i '/add_subdirectory[[:space:]]*([[:space:]]*vhdlparser[[:space:]]*)/d' CMakeLists.txt
             sed -i '/^[[:space:]]*vhdlparser[[:space:]]*$/d' src/CMakeLists.txt
           '';
-      });
+        });
 
       # A // on the llvmPackages alias does not change
       # llvmPackages_21, so compiler-rt-libc and tblgen kept the same
@@ -3325,55 +3453,58 @@ EOF
           # utils/bundle_resources.py through this path. That generator
           # writes one C raw-string constant per input. This shell does
           # that write. It is not a C program and not an interpreter package.
-          cmakeInterpreterStub = prev.runCommand "cmake-interpreter-stub" {
-            nativeBuildInputs = [ prev.stdenv.cc ];
-          } ''
-            mkdir -p "$out/bin"
-            cat > "$out/bin/cmake-interpreter-stub" << 'END'
-            #!/bin/sh
-            set -eu
-            if [ "$#" -eq 0 ]; then
-              printf '%s\n' '3.12.0'
-              exit 0
-            fi
-            case "$1" in
-              --version|-V)
-                printf '%s\n' '3.12.0'
-                exit 0
-                ;;
-            esac
-            base=$(basename "$1")
-            case "$base" in
-              bundle_resources.py)
-                shift
-                outfile=$1
-                shift
-                : > "$outfile"
-                for filename in "$@"; do
-                  varname=$(basename "$filename" | tr '.' '_')
-                  printf 'const char %s[] = \n' "$varname" >> "$outfile"
-                  awk '
-                    {
-                      printf "  R\"x(%s)x\" \"\\n\"\n", $0
-                    }
-                    END {
-                      if (NR == 0 || RT == "\n") {
-                        printf "  R\"x()x\" \"\\n\"\n"
-                      }
-                    }
-                  ' "$filename" >> "$outfile"
-                  printf '  ;\n' >> "$outfile"
-                done
-                ;;
-              *)
-                printf 'cmake-interpreter-stub: unsupported %s\n' "$1" >&2
-                exit 127
-                ;;
-            esac
-            END
-            chmod 755 "$out/bin/cmake-interpreter-stub"
-            test -x "$out/bin/cmake-interpreter-stub"
-          '';
+          cmakeInterpreterStub =
+            prev.runCommand "cmake-interpreter-stub"
+              {
+                nativeBuildInputs = [ prev.stdenv.cc ];
+              }
+              ''
+                mkdir -p "$out/bin"
+                cat > "$out/bin/cmake-interpreter-stub" << 'END'
+                #!/bin/sh
+                set -eu
+                if [ "$#" -eq 0 ]; then
+                  printf '%s\n' '3.12.0'
+                  exit 0
+                fi
+                case "$1" in
+                  --version|-V)
+                    printf '%s\n' '3.12.0'
+                    exit 0
+                    ;;
+                esac
+                base=$(basename "$1")
+                case "$base" in
+                  bundle_resources.py)
+                    shift
+                    outfile=$1
+                    shift
+                    : > "$outfile"
+                    for filename in "$@"; do
+                      varname=$(basename "$filename" | tr '.' '_')
+                      printf 'const char %s[] = \n' "$varname" >> "$outfile"
+                      awk '
+                        {
+                          printf "  R\"x(%s)x\" \"\\n\"\n", $0
+                        }
+                        END {
+                          if (NR == 0 || RT == "\n") {
+                            printf "  R\"x()x\" \"\\n\"\n"
+                          }
+                        }
+                      ' "$filename" >> "$outfile"
+                      printf '  ;\n' >> "$outfile"
+                    done
+                    ;;
+                  *)
+                    printf 'cmake-interpreter-stub: unsupported %s\n' "$1" >&2
+                    exit 127
+                    ;;
+                esac
+                END
+                chmod 755 "$out/bin/cmake-interpreter-stub"
+                test -x "$out/bin/cmake-interpreter-stub"
+              '';
           dropPythonFind =
             pkg:
             pkg.overrideAttrs (oldAttrs: {
@@ -3392,110 +3523,111 @@ EOF
               '';
               # opt-viewer is the only reason the python output is filled.
               # The libraries stay when that directory was not built.
-              postInstall = builtins.replaceStrings
-                [ "mv $out/share/opt-viewer $python/share/opt-viewer" ]
-                [ "if [ -d \"$out/share/opt-viewer\" ]; then mv \"$out/share/opt-viewer\" \"$python/share/opt-viewer\"; fi" ]
-                (oldAttrs.postInstall or "");
+              postInstall =
+                builtins.replaceStrings
+                  [ "mv $out/share/opt-viewer $python/share/opt-viewer" ]
+                  [
+                    "if [ -d \"$out/share/opt-viewer\" ]; then mv \"$out/share/opt-viewer\" \"$python/share/opt-viewer\"; fi"
+                  ]
+                  (oldAttrs.postInstall or "");
               doCheck = false;
               nativeCheckInputs = [ ];
-              postPatch =
-                (oldAttrs.postPatch or "")
-                + ''
-                  chmod -R u+w .
-                  # Polly adds its test suite with no tests guard. That
-                  # suite depends on the utils targets count and not.
-                  # Those stay off for the library build. The library
-                  # does not need the suite.
-                  for cm in ../polly/CMakeLists.txt tools/polly/CMakeLists.txt polly/CMakeLists.txt; do
-                    if [ -f "$cm" ]; then
-                      sed -i '/add_subdirectory[[:space:]]*([[:space:]]*test[[:space:]]*)/d' "$cm"
-                    fi
-                  done
-                  rewrite_llvm_cm() {
-                    cm="$1"
-                    if [ ! -f "$cm" ]; then
-                      return 0
-                    fi
-                    awk '
-                      index($0, "find_package(Python3 ''${LLVM_MINIMUM_PYTHON_VERSION} REQUIRED") {
-                        print "# find_package(Python3 ''${LLVM_MINIMUM_PYTHON_VERSION} REQUIRED"
-                        print "set(Python3_FOUND TRUE)"
-                        print "set(Python3_Interpreter_FOUND TRUE)"
-                        print "set(Python3_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                        print "set(Python3_VERSION \"3.12.0\")"
-                        print "set(Python3_VERSION_STRING \"3.12.0\")"
-                        print "set(Python3_VERSION_MAJOR \"3\")"
-                        print "set(Python3_VERSION_MINOR \"12\")"
-                        skip = 1
-                        next
-                      }
-                      skip && index($0, "COMPONENTS Interpreter)") {
-                        skip = 0
-                        next
-                      }
-                      { print }
-                    ' "$cm" > "$cm.llvmline" && mv "$cm.llvmline" "$cm"
-                  }
-                  rewrite_llvm_cm llvm/CMakeLists.txt
-                  if [ ! -f llvm/CMakeLists.txt ]; then
-                    rewrite_llvm_cm CMakeLists.txt
+              postPatch = (oldAttrs.postPatch or "") + ''
+                chmod -R u+w .
+                # Polly adds its test suite with no tests guard. That
+                # suite depends on the utils targets count and not.
+                # Those stay off for the library build. The library
+                # does not need the suite.
+                for cm in ../polly/CMakeLists.txt tools/polly/CMakeLists.txt polly/CMakeLists.txt; do
+                  if [ -f "$cm" ]; then
+                    sed -i '/add_subdirectory[[:space:]]*([[:space:]]*test[[:space:]]*)/d' "$cm"
                   fi
-                  find . \( -name CMakeLists.txt -o -name '*.cmake' \) | while IFS= read -r cm; do
-                    awk '
-                      function stub() {
-                        print "set(Python3_FOUND TRUE)"
-                        print "set(Python3_Interpreter_FOUND TRUE)"
-                        print "set(Python3_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                        print "set(Python3_VERSION \"3.12.0\")"
-                        print "set(Python3_VERSION_STRING \"3.12.0\")"
-                        print "set(Python3_VERSION_MAJOR \"3\")"
-                        print "set(Python3_VERSION_MINOR \"12\")"
-                        print "set(Python2_FOUND TRUE)"
-                        print "set(Python2_Interpreter_FOUND TRUE)"
-                        print "set(Python2_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                        print "set(Python2_VERSION \"2.7.18\")"
-                        print "set(Python_FOUND TRUE)"
-                        print "set(Python_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                      }
-                      BEGIN { depth = 0; in_find = 0; did = 0 }
-                      {
-                        if (!in_find && $0 ~ /^[[:space:]]*#/) {
-                          print
-                          next
-                        }
-                        if (in_find) {
-                          print "# " $0
-                          nopen = gsub(/\(/, "(")
-                          nclose = gsub(/\)/, ")")
-                          depth += nopen - nclose
-                          if (depth <= 0) {
-                            in_find = 0
-                            if (!did) { stub(); did = 1 }
-                          }
-                          next
-                        }
-                        if ($0 ~ /find_package[[:space:]]*\([[:space:]]*Python([23]|Interp|Libs)?([^[:alnum:]_]|$)/) {
-                          print "# " $0
-                          nopen = gsub(/\(/, "(")
-                          nclose = gsub(/\)/, ")")
-                          depth = nopen - nclose
-                          if (depth <= 0) {
-                            if (!did) { stub(); did = 1 }
-                          } else {
-                            in_find = 1
-                          }
-                          next
-                        }
+                done
+                rewrite_llvm_cm() {
+                  cm="$1"
+                  if [ ! -f "$cm" ]; then
+                    return 0
+                  fi
+                  awk '
+                    index($0, "find_package(Python3 ''${LLVM_MINIMUM_PYTHON_VERSION} REQUIRED") {
+                      print "# find_package(Python3 ''${LLVM_MINIMUM_PYTHON_VERSION} REQUIRED"
+                      print "set(Python3_FOUND TRUE)"
+                      print "set(Python3_Interpreter_FOUND TRUE)"
+                      print "set(Python3_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
+                      print "set(Python3_VERSION \"3.12.0\")"
+                      print "set(Python3_VERSION_STRING \"3.12.0\")"
+                      print "set(Python3_VERSION_MAJOR \"3\")"
+                      print "set(Python3_VERSION_MINOR \"12\")"
+                      skip = 1
+                      next
+                    }
+                    skip && index($0, "COMPONENTS Interpreter)") {
+                      skip = 0
+                      next
+                    }
+                    { print }
+                  ' "$cm" > "$cm.llvmline" && mv "$cm.llvmline" "$cm"
+                }
+                rewrite_llvm_cm llvm/CMakeLists.txt
+                if [ ! -f llvm/CMakeLists.txt ]; then
+                  rewrite_llvm_cm CMakeLists.txt
+                fi
+                find . \( -name CMakeLists.txt -o -name '*.cmake' \) | while IFS= read -r cm; do
+                  awk '
+                    function stub() {
+                      print "set(Python3_FOUND TRUE)"
+                      print "set(Python3_Interpreter_FOUND TRUE)"
+                      print "set(Python3_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
+                      print "set(Python3_VERSION \"3.12.0\")"
+                      print "set(Python3_VERSION_STRING \"3.12.0\")"
+                      print "set(Python3_VERSION_MAJOR \"3\")"
+                      print "set(Python3_VERSION_MINOR \"12\")"
+                      print "set(Python2_FOUND TRUE)"
+                      print "set(Python2_Interpreter_FOUND TRUE)"
+                      print "set(Python2_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
+                      print "set(Python2_VERSION \"2.7.18\")"
+                      print "set(Python_FOUND TRUE)"
+                      print "set(Python_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
+                    }
+                    BEGIN { depth = 0; in_find = 0; did = 0 }
+                    {
+                      if (!in_find && $0 ~ /^[[:space:]]*#/) {
                         print
+                        next
                       }
-                    ' "$cm" > "$cm.nopypatch" && mv "$cm.nopypatch" "$cm" || exit 1
-                  done
-                  if grep -R -n -E '^[[:space:]]*find_package[[:space:]]*\([[:space:]]*Python([23]|Interp|Libs)?([^[:alnum:]_]|$)' \
-                    --include=CMakeLists.txt --include='*.cmake' . ; then
-                    echo "interpreter find_package still active" >&2
-                    exit 1
-                  fi
-                '';
+                      if (in_find) {
+                        print "# " $0
+                        nopen = gsub(/\(/, "(")
+                        nclose = gsub(/\)/, ")")
+                        depth += nopen - nclose
+                        if (depth <= 0) {
+                          in_find = 0
+                          if (!did) { stub(); did = 1 }
+                        }
+                        next
+                      }
+                      if ($0 ~ /find_package[[:space:]]*\([[:space:]]*Python([23]|Interp|Libs)?([^[:alnum:]_]|$)/) {
+                        print "# " $0
+                        nopen = gsub(/\(/, "(")
+                        nclose = gsub(/\)/, ")")
+                        depth = nopen - nclose
+                        if (depth <= 0) {
+                          if (!did) { stub(); did = 1 }
+                        } else {
+                          in_find = 1
+                        }
+                        next
+                      }
+                      print
+                    }
+                  ' "$cm" > "$cm.nopypatch" && mv "$cm.nopypatch" "$cm" || exit 1
+                done
+                if grep -R -n -E '^[[:space:]]*find_package[[:space:]]*\([[:space:]]*Python([23]|Interp|Libs)?([^[:alnum:]_]|$)' \
+                  --include=CMakeLists.txt --include='*.cmake' . ; then
+                  echo "interpreter find_package still active" >&2
+                  exit 1
+                fi
+              '';
             });
         in
         {
@@ -3506,304 +3638,297 @@ EOF
           # LLVM_INCLUDE_UTILS=ON.
           tblgen = dropPythonFind prevScope.tblgen;
           "compiler-rt" = dropPythonFind prevScope."compiler-rt";
-          "compiler-rt-libc" =
-            (dropPythonFind prevScope."compiler-rt-libc").overrideAttrs (rtOld: {
-              postPatch =
-                (rtOld.postPatch or "")
-                + ''
-                  inc=lib/sanitizer_common/sanitizer_common_interceptors.inc
-                  if [ ! -f "$inc" ]; then
-                    inc=compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
-                  fi
-                  sed -i '3582s/__sanitizer_iovec local_iovec;/__sanitizer_iovec local_iovec = {};/' "$inc"
-                  mkdir -p cmake
-                  cat > cmake/write-vers.sh << 'END'
-#!/bin/sh
-out=
-prev=
-for arg in "$@"; do
-  if [ "$prev" = "-o" ]; then
-    out=$arg
-  fi
-  prev=$arg
-done
-if [ -z "$out" ]; then
-  exit 0
-fi
-printf '%s\n' '{' 'global:' '  *;' 'local:' '  *;' '};' > "$out"
-exit 0
-END
-                  cat > cmake/write-syms.sh << 'END'
-#!/bin/sh
-out=
-prev=
-for arg in "$@"; do
-  if [ "$prev" = "-o" ]; then
-    out=$arg
-  fi
-  prev=$arg
-done
-if [ -z "$out" ]; then
-  exit 0
-fi
-printf '%s\n' '{' '  *;' '};' > "$out"
-exit 0
-END
-                  chmod +x cmake/write-vers.sh cmake/write-syms.sh
-                  # --version-list stays on write-vers.sh. The exported
-                  # symbols rule calls the dynamic-list generator through
-                  # the missing stub. Point that rule at write-syms.sh and
-                  # keep its -o argument. Do not run the generator script.
-                  find . \( -name SanitizerUtils.cmake -o -name CMakeLists.txt -o -name '*.cmake' \) -type f | while IFS= read -r su; do
-                    if ! grep -F -e 'gen_dynamic_list.py' -e 'SANITIZER_GEN_DYNAMIC_LIST' -e '--version-list' "$su" >/dev/null; then
-                      continue
-                    fi
-                    awk '
-                      function use_syms(    line) {
-                        line = $0
-                        if (index(line, "Python3_EXECUTABLE")) {
-                          sub(/\$\{Python3_EXECUTABLE\}/, "sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh", line)
-                          sub(/Python3_EXECUTABLE/, "sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh", line)
-                          print line
-                          return
-                        }
-                        print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh"
-                      }
-                      index($0, "COMMAND") && index($0, "Python3_EXECUTABLE") {
-                        line = $0
-                        if (index(line, "gen_dynamic_list.py") || index(line, "SANITIZER_GEN_DYNAMIC_LIST")) {
-                          use_syms()
-                          next
-                        }
-                        if (getline nxt <= 0) {
-                          print line
-                          next
-                        }
-                        if (index(nxt, "--version-list")) {
-                          print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-vers.sh -o ''${vers}"
-                          next
-                        }
-                        if (index(nxt, "gen_dynamic_list.py") || index(nxt, "SANITIZER_GEN_DYNAMIC_LIST")) {
-                          print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh"
-                          print nxt
-                          next
-                        }
-                        print line
-                        print nxt
-                        next
-                      }
-                      { print }
-                    ' "$su" > "$su.new" && mv "$su.new" "$su" || exit 1
-                  done
-                '';
-              # Install asks for a version script beside the ubsan archive.
-              # The build produces the archive and does not write the
-              # sibling. Write it after the archive exists and before
-              # cmake copies it. The archives that already exist still
-              # install. Do not restore a bare /bin/true stub.
-              preInstall =
-                (rtOld.preInstall or "")
-                + ''
-                  find . -name 'libclang_rt*.a' -print | while IFS= read -r lib; do
-                    syms="$lib.syms"
-                    if [ ! -f "$syms" ]; then
-                      printf '%s\n' '{' 'global:' '  *;' 'local:' '  *;' '};' > "$syms"
-                    fi
-                  done
-                '';
-            });
+          "compiler-rt-libc" = (dropPythonFind prevScope."compiler-rt-libc").overrideAttrs (rtOld: {
+            postPatch = (rtOld.postPatch or "") + ''
+                                inc=lib/sanitizer_common/sanitizer_common_interceptors.inc
+                                if [ ! -f "$inc" ]; then
+                                  inc=compiler-rt/lib/sanitizer_common/sanitizer_common_interceptors.inc
+                                fi
+                                sed -i '3582s/__sanitizer_iovec local_iovec;/__sanitizer_iovec local_iovec = {};/' "$inc"
+                                mkdir -p cmake
+                                cat > cmake/write-vers.sh << 'END'
+              #!/bin/sh
+              out=
+              prev=
+              for arg in "$@"; do
+                if [ "$prev" = "-o" ]; then
+                  out=$arg
+                fi
+                prev=$arg
+              done
+              if [ -z "$out" ]; then
+                exit 0
+              fi
+              printf '%s\n' '{' 'global:' '  *;' 'local:' '  *;' '};' > "$out"
+              exit 0
+              END
+                                cat > cmake/write-syms.sh << 'END'
+              #!/bin/sh
+              out=
+              prev=
+              for arg in "$@"; do
+                if [ "$prev" = "-o" ]; then
+                  out=$arg
+                fi
+                prev=$arg
+              done
+              if [ -z "$out" ]; then
+                exit 0
+              fi
+              printf '%s\n' '{' '  *;' '};' > "$out"
+              exit 0
+              END
+                                chmod +x cmake/write-vers.sh cmake/write-syms.sh
+                                # --version-list stays on write-vers.sh. The exported
+                                # symbols rule calls the dynamic-list generator through
+                                # the missing stub. Point that rule at write-syms.sh and
+                                # keep its -o argument. Do not run the generator script.
+                                find . \( -name SanitizerUtils.cmake -o -name CMakeLists.txt -o -name '*.cmake' \) -type f | while IFS= read -r su; do
+                                  if ! grep -F -e 'gen_dynamic_list.py' -e 'SANITIZER_GEN_DYNAMIC_LIST' -e '--version-list' "$su" >/dev/null; then
+                                    continue
+                                  fi
+                                  awk '
+                                    function use_syms(    line) {
+                                      line = $0
+                                      if (index(line, "Python3_EXECUTABLE")) {
+                                        sub(/\$\{Python3_EXECUTABLE\}/, "sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh", line)
+                                        sub(/Python3_EXECUTABLE/, "sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh", line)
+                                        print line
+                                        return
+                                      }
+                                      print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh"
+                                    }
+                                    index($0, "COMMAND") && index($0, "Python3_EXECUTABLE") {
+                                      line = $0
+                                      if (index(line, "gen_dynamic_list.py") || index(line, "SANITIZER_GEN_DYNAMIC_LIST")) {
+                                        use_syms()
+                                        next
+                                      }
+                                      if (getline nxt <= 0) {
+                                        print line
+                                        next
+                                      }
+                                      if (index(nxt, "--version-list")) {
+                                        print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-vers.sh -o ''${vers}"
+                                        next
+                                      }
+                                      if (index(nxt, "gen_dynamic_list.py") || index(nxt, "SANITIZER_GEN_DYNAMIC_LIST")) {
+                                        print "    COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-syms.sh"
+                                        print nxt
+                                        next
+                                      }
+                                      print line
+                                      print nxt
+                                      next
+                                    }
+                                    { print }
+                                  ' "$su" > "$su.new" && mv "$su.new" "$su" || exit 1
+                                done
+            '';
+            # Install asks for a version script beside the ubsan archive.
+            # The build produces the archive and does not write the
+            # sibling. Write it after the archive exists and before
+            # cmake copies it. The archives that already exist still
+            # install. Do not restore a bare /bin/true stub.
+            preInstall = (rtOld.preInstall or "") + ''
+              find . -name 'libclang_rt*.a' -print | while IFS= read -r lib; do
+                syms="$lib.syms"
+                if [ ! -f "$syms" ]; then
+                  printf '%s\n' '{' 'global:' '  *;' 'local:' '  *;' '};' > "$syms"
+                fi
+              done
+            '';
+          });
           libllvm = (dropPythonFind prevScope.libllvm).overrideAttrs (llOld: {
             # LTO.exports is the version-script rule that runs the stub
             # with -c. Only that output uses write-lto-exports.sh. Other
             # interpreter commands stay on the stub.
-            postPatch =
-              (llOld.postPatch or "")
-              + ''
-                cm=cmake/modules/AddLLVM.cmake
-                script=cmake/write-lto-exports.sh
-                if [ ! -f "$cm" ] && [ -f llvm/cmake/modules/AddLLVM.cmake ]; then
-                  cm=llvm/cmake/modules/AddLLVM.cmake
-                  script=llvm/cmake/write-lto-exports.sh
-                fi
-                if [ ! -f "$cm" ]; then
-                  echo "AddLLVM.cmake missing" >&2
-                  exit 1
-                fi
-                mkdir -p "$(dirname "$script")"
-                cat > "$script" << 'END'
-#!/bin/sh
-ver=''${1:-21.1}
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-: > "$tmp"
-count=0
-while IFS= read -r line || [ -n "$line" ]; do
-  while :; do
-    case $line in
-      *[[:space:]]) line=''${line%?} ;;
-      *) break ;;
-    esac
-  done
-  printf '    %s\n' "$line" >> "$tmp"
-  count=$((count + 1))
-done
-printf '  local: *;\n' >> "$tmp"
-count=$((count + 1))
-printf 'LLVM_%s {\n' "$ver"
-if [ "$count" -gt 1 ]; then
-  printf '  global:\n'
-fi
-awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
-END
-                chmod +x "$script"
-                # Gold is the non-LTO arm of this same custom command.
-                # It still runs the empty stub. Windows and Darwin are
-                # other commands and stay on that stub. This writer reads
-                # gold.exports on stdin and writes the version script.
-                goldscript="$(dirname "$script")/write-gold-exports.sh"
-                cat > "$goldscript" << 'END'
-#!/bin/sh
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-: > "$tmp"
-count=0
-while IFS= read -r line || [ -n "$line" ]; do
-  while :; do
-    case $line in
-      *[[:space:]]) line=''${line%?} ;;
-      *) break ;;
-    esac
-  done
-  printf '    %s\n' "$line" >> "$tmp"
-  count=$((count + 1))
-done
-printf '  local: *;\n' >> "$tmp"
-count=$((count + 1))
-printf 'LLVM_21.1 {\n'
-if [ "$count" -gt 1 ]; then
-  printf '  global:\n'
-fi
-awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
-END
-                chmod +x "$goldscript"
-                # BugpointPasses.exports is this same version-script
-                # command, and it is not the LTO or gold arm. The inner
-                # else used to reprint the stub. This writer reads the
-                # export list on stdin. LTO.exports stays on
-                # write-lto-exports.sh. Windows and Darwin stay on the stub.
-                verscript="$(dirname "$script")/write-version-exports.sh"
-                cat > "$verscript" << 'END'
-#!/bin/sh
-ver=''${1:-21.1}
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-: > "$tmp"
-count=0
-while IFS= read -r line || [ -n "$line" ]; do
-  while :; do
-    case $line in
-      *[[:space:]]) line=''${line%?} ;;
-      *) break ;;
-    esac
-  done
-  printf '    %s\n' "$line" >> "$tmp"
-  count=$((count + 1))
-done
-printf '  local: *;\n' >> "$tmp"
-count=$((count + 1))
-printf 'LLVM_%s {\n' "$ver"
-if [ "$count" -gt 1 ]; then
-  printf '  global:\n'
-fi
-awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
-END
-                chmod +x "$verscript"
-                if [ "$(dirname "$script")" != cmake ] && [ -d cmake ]; then
-                  cp "$goldscript" cmake/write-gold-exports.sh
-                  chmod +x cmake/write-gold-exports.sh
-                  cp "$verscript" cmake/write-version-exports.sh
-                  chmod +x cmake/write-version-exports.sh
-                fi
-                awk '
-                  function emit_lto(    i, j) {
-                    print "    if(\"''${native_export_file}\" STREQUAL \"LTO.exports\")"
-                    print "      add_custom_command(OUTPUT ''${native_export_file}"
-                    print "        COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-lto-exports.sh ''${LLVM_VERSION_MAJOR}.''${LLVM_VERSION_MINOR}"
-                    for (i = 1; i <= nbuf; i++) {
-                      if (index(buf[i], "<") && index(buf[i], "export_file")) {
-                        print buf[i]
-                        for (j = i + 1; j <= nbuf; j++) print buf[j]
-                        break
-                      }
-                    }
-                    print "    else()"
-                    print "      if(\"''${native_export_file}\" MATCHES \"LLVMgold\\\\.exports$\" OR \"''${export_file}\" MATCHES \"gold\\\\.exports$\")"
-                    print "        add_custom_command(OUTPUT ''${native_export_file}"
-                    print "          COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-gold-exports.sh"
-                    for (i = 1; i <= nbuf; i++) {
-                      if (index(buf[i], "<") && index(buf[i], "export_file")) {
-                        print buf[i]
-                        for (j = i + 1; j <= nbuf; j++) print buf[j]
-                        break
-                      }
-                    }
-                    print "      else()"
-                    print "        add_custom_command(OUTPUT ''${native_export_file}"
-                    print "          COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-version-exports.sh ''${LLVM_VERSION_MAJOR}.''${LLVM_VERSION_MINOR}"
-                    for (i = 1; i <= nbuf; i++) {
-                      if (index(buf[i], "<") && index(buf[i], "export_file")) {
-                        print buf[i]
-                        for (j = i + 1; j <= nbuf; j++) print buf[j]
-                        break
-                      }
-                    }
-                    print "      endif()"
-                    print "    endif()"
-                  }
-                  BEGIN { nbuf = 0; grabbing = 0 }
-                  {
-                    if (!grabbing && index($0, "add_custom_command(OUTPUT") && index($0, "native_export_file")) {
-                      grabbing = 1
-                      nbuf = 1
-                      buf[1] = $0
-                      next
-                    }
-                    if (grabbing) {
-                      nbuf++
-                      buf[nbuf] = $0
-                      if (index($0, "Creating export file") || nbuf > 40) {
-                        grabbing = 0
-                        blob = ""
-                        for (i = 1; i <= nbuf; i++) blob = blob buf[i] "\n"
-                        has_redir = 0
-                        for (i = 1; i <= nbuf; i++) {
-                          if (index(buf[i], "<") && index(buf[i], "export_file")) has_redir = 1
-                        }
-                        if (has_redir && index(blob, "l.rstrip") && index(blob, "local:") && index(blob, "VERSION_MAJOR")) {
-                          emit_lto()
-                        } else {
-                          for (i = 1; i <= nbuf; i++) print buf[i]
-                        }
-                        nbuf = 0
-                      }
-                      next
-                    }
-                    print
-                  }
-                ' "$cm" > "$cm.lto" && mv "$cm.lto" "$cm" || exit 1
-                if ! grep -q write-lto-exports.sh "$cm"; then
-                  echo "LTO.exports command was not rewritten" >&2
-                  exit 1
-                fi
-                if ! grep -q write-gold-exports.sh "$cm"; then
-                  echo "gold exports command was not rewritten" >&2
-                  exit 1
-                fi
-                if ! grep -q write-version-exports.sh "$cm"; then
-                  echo "BugpointPasses export command was not rewritten" >&2
-                  exit 1
-                fi
-              '';
+            postPatch = (llOld.postPatch or "") + ''
+                              cm=cmake/modules/AddLLVM.cmake
+                              script=cmake/write-lto-exports.sh
+                              if [ ! -f "$cm" ] && [ -f llvm/cmake/modules/AddLLVM.cmake ]; then
+                                cm=llvm/cmake/modules/AddLLVM.cmake
+                                script=llvm/cmake/write-lto-exports.sh
+                              fi
+                              if [ ! -f "$cm" ]; then
+                                echo "AddLLVM.cmake missing" >&2
+                                exit 1
+                              fi
+                              mkdir -p "$(dirname "$script")"
+                              cat > "$script" << 'END'
+              #!/bin/sh
+              ver=''${1:-21.1}
+              tmp=$(mktemp)
+              trap 'rm -f "$tmp"' EXIT
+              : > "$tmp"
+              count=0
+              while IFS= read -r line || [ -n "$line" ]; do
+                while :; do
+                  case $line in
+                    *[[:space:]]) line=''${line%?} ;;
+                    *) break ;;
+                  esac
+                done
+                printf '    %s\n' "$line" >> "$tmp"
+                count=$((count + 1))
+              done
+              printf '  local: *;\n' >> "$tmp"
+              count=$((count + 1))
+              printf 'LLVM_%s {\n' "$ver"
+              if [ "$count" -gt 1 ]; then
+                printf '  global:\n'
+              fi
+              awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+              END
+                              chmod +x "$script"
+                              # Gold is the non-LTO arm of this same custom command.
+                              # It still runs the empty stub. Windows and Darwin are
+                              # other commands and stay on that stub. This writer reads
+                              # gold.exports on stdin and writes the version script.
+                              goldscript="$(dirname "$script")/write-gold-exports.sh"
+                              cat > "$goldscript" << 'END'
+              #!/bin/sh
+              tmp=$(mktemp)
+              trap 'rm -f "$tmp"' EXIT
+              : > "$tmp"
+              count=0
+              while IFS= read -r line || [ -n "$line" ]; do
+                while :; do
+                  case $line in
+                    *[[:space:]]) line=''${line%?} ;;
+                    *) break ;;
+                  esac
+                done
+                printf '    %s\n' "$line" >> "$tmp"
+                count=$((count + 1))
+              done
+              printf '  local: *;\n' >> "$tmp"
+              count=$((count + 1))
+              printf 'LLVM_21.1 {\n'
+              if [ "$count" -gt 1 ]; then
+                printf '  global:\n'
+              fi
+              awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+              END
+                              chmod +x "$goldscript"
+                              # BugpointPasses.exports is this same version-script
+                              # command, and it is not the LTO or gold arm. The inner
+                              # else used to reprint the stub. This writer reads the
+                              # export list on stdin. LTO.exports stays on
+                              # write-lto-exports.sh. Windows and Darwin stay on the stub.
+                              verscript="$(dirname "$script")/write-version-exports.sh"
+                              cat > "$verscript" << 'END'
+              #!/bin/sh
+              ver=''${1:-21.1}
+              tmp=$(mktemp)
+              trap 'rm -f "$tmp"' EXIT
+              : > "$tmp"
+              count=0
+              while IFS= read -r line || [ -n "$line" ]; do
+                while :; do
+                  case $line in
+                    *[[:space:]]) line=''${line%?} ;;
+                    *) break ;;
+                  esac
+                done
+                printf '    %s\n' "$line" >> "$tmp"
+                count=$((count + 1))
+              done
+              printf '  local: *;\n' >> "$tmp"
+              count=$((count + 1))
+              printf 'LLVM_%s {\n' "$ver"
+              if [ "$count" -gt 1 ]; then
+                printf '  global:\n'
+              fi
+              awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+              END
+                              chmod +x "$verscript"
+                              if [ "$(dirname "$script")" != cmake ] && [ -d cmake ]; then
+                                cp "$goldscript" cmake/write-gold-exports.sh
+                                chmod +x cmake/write-gold-exports.sh
+                                cp "$verscript" cmake/write-version-exports.sh
+                                chmod +x cmake/write-version-exports.sh
+                              fi
+                              awk '
+                                function emit_lto(    i, j) {
+                                  print "    if(\"''${native_export_file}\" STREQUAL \"LTO.exports\")"
+                                  print "      add_custom_command(OUTPUT ''${native_export_file}"
+                                  print "        COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-lto-exports.sh ''${LLVM_VERSION_MAJOR}.''${LLVM_VERSION_MINOR}"
+                                  for (i = 1; i <= nbuf; i++) {
+                                    if (index(buf[i], "<") && index(buf[i], "export_file")) {
+                                      print buf[i]
+                                      for (j = i + 1; j <= nbuf; j++) print buf[j]
+                                      break
+                                    }
+                                  }
+                                  print "    else()"
+                                  print "      if(\"''${native_export_file}\" MATCHES \"LLVMgold\\\\.exports$\" OR \"''${export_file}\" MATCHES \"gold\\\\.exports$\")"
+                                  print "        add_custom_command(OUTPUT ''${native_export_file}"
+                                  print "          COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-gold-exports.sh"
+                                  for (i = 1; i <= nbuf; i++) {
+                                    if (index(buf[i], "<") && index(buf[i], "export_file")) {
+                                      print buf[i]
+                                      for (j = i + 1; j <= nbuf; j++) print buf[j]
+                                      break
+                                    }
+                                  }
+                                  print "      else()"
+                                  print "        add_custom_command(OUTPUT ''${native_export_file}"
+                                  print "          COMMAND sh ''${CMAKE_SOURCE_DIR}/cmake/write-version-exports.sh ''${LLVM_VERSION_MAJOR}.''${LLVM_VERSION_MINOR}"
+                                  for (i = 1; i <= nbuf; i++) {
+                                    if (index(buf[i], "<") && index(buf[i], "export_file")) {
+                                      print buf[i]
+                                      for (j = i + 1; j <= nbuf; j++) print buf[j]
+                                      break
+                                    }
+                                  }
+                                  print "      endif()"
+                                  print "    endif()"
+                                }
+                                BEGIN { nbuf = 0; grabbing = 0 }
+                                {
+                                  if (!grabbing && index($0, "add_custom_command(OUTPUT") && index($0, "native_export_file")) {
+                                    grabbing = 1
+                                    nbuf = 1
+                                    buf[1] = $0
+                                    next
+                                  }
+                                  if (grabbing) {
+                                    nbuf++
+                                    buf[nbuf] = $0
+                                    if (index($0, "Creating export file") || nbuf > 40) {
+                                      grabbing = 0
+                                      blob = ""
+                                      for (i = 1; i <= nbuf; i++) blob = blob buf[i] "\n"
+                                      has_redir = 0
+                                      for (i = 1; i <= nbuf; i++) {
+                                        if (index(buf[i], "<") && index(buf[i], "export_file")) has_redir = 1
+                                      }
+                                      if (has_redir && index(blob, "l.rstrip") && index(blob, "local:") && index(blob, "VERSION_MAJOR")) {
+                                        emit_lto()
+                                      } else {
+                                        for (i = 1; i <= nbuf; i++) print buf[i]
+                                      }
+                                      nbuf = 0
+                                    }
+                                    next
+                                  }
+                                  print
+                                }
+                              ' "$cm" > "$cm.lto" && mv "$cm.lto" "$cm" || exit 1
+                              if ! grep -q write-lto-exports.sh "$cm"; then
+                                echo "LTO.exports command was not rewritten" >&2
+                                exit 1
+                              fi
+                              if ! grep -q write-gold-exports.sh "$cm"; then
+                                echo "gold exports command was not rewritten" >&2
+                                exit 1
+                              fi
+                              if ! grep -q write-version-exports.sh "$cm"; then
+                                echo "BugpointPasses export command was not rewritten" >&2
+                                exit 1
+                              fi
+            '';
           });
           # clang-unwrapped is this attribute. LLVM's installed
           # AddLLVM.cmake still runs the version-script binary from
@@ -3814,121 +3939,117 @@ END
             # in the tree. CLANG_ENABLE_CLANGD defaults on and compiles
             # that file. Turn the clangd target off. Do not edit
             # dropPythonFind. The llvm-version-script preBuild stays.
-            cmakeFlags =
-              (lib.filter (flag: flag != "-DCLANG_ENABLE_CLANGD=ON") (clOld.cmakeFlags or [ ]))
-              ++ [ "-DCLANG_ENABLE_CLANGD=OFF" ];
+            cmakeFlags = (lib.filter (flag: flag != "-DCLANG_ENABLE_CLANGD=ON") (clOld.cmakeFlags or [ ])) ++ [
+              "-DCLANG_ENABLE_CLANGD=OFF"
+            ];
             # The -D flag is not enough: CMake still adds clangd, and
             # DecisionForest.cpp includes CompletionModel.h, which is
             # not in the tree. Append the flag again after nixpkgs
             # cmakeFlagsArray, and drop the subdirectory below.
-            preConfigure =
-              (clOld.preConfigure or "")
-              + ''
-                cmakeFlagsArray+=(
-                  -DCLANG_ENABLE_CLANGD=OFF
-                )
-if [ ! -e clang/cmake/write-version-exports.sh ] && [ ! -e cmake/write-version-exports.sh ]; then
-  if [ -d clang ]; then
-    mkdir -p clang/cmake
-    dest=clang/cmake/write-version-exports.sh
-  else
-    mkdir -p cmake
-    dest=cmake/write-version-exports.sh
-  fi
-  cat > "$dest" << 'END_WRITE_VERSION_EXPORTS'
-#!/bin/sh
-set -eu
-# Ninja passes one argument, the version, and the exports list on stdin.
-ver=''${1-}
-if [ -z "$ver" ]; then
-  echo "write-version-exports.sh: expected a version" >&2
-  exit 1
-fi
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT
-: > "$tmp"
-count=0
-while IFS= read -r line || [ -n "$line" ]; do
-  while :; do
-    case $line in
-      *[[:space:]]) line=''${line%?} ;;
-      *) break ;;
-    esac
-  done
-  printf '    %s\n' "$line" >> "$tmp"
-  count=$((count + 1))
-done
-printf '  local: *;\n' >> "$tmp"
-count=$((count + 1))
-printf 'LLVM_%s {\n' "$ver"
-if [ "$count" -gt 1 ]; then
-  printf '  global:\n'
-fi
-awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
-END_WRITE_VERSION_EXPORTS
-  chmod +x "$dest"
-fi
-              '';
+            preConfigure = (clOld.preConfigure or "") + ''
+                              cmakeFlagsArray+=(
+                                -DCLANG_ENABLE_CLANGD=OFF
+                              )
+              if [ ! -e clang/cmake/write-version-exports.sh ] && [ ! -e cmake/write-version-exports.sh ]; then
+                if [ -d clang ]; then
+                  mkdir -p clang/cmake
+                  dest=clang/cmake/write-version-exports.sh
+                else
+                  mkdir -p cmake
+                  dest=cmake/write-version-exports.sh
+                fi
+                cat > "$dest" << 'END_WRITE_VERSION_EXPORTS'
+              #!/bin/sh
+              set -eu
+              # Ninja passes one argument, the version, and the exports list on stdin.
+              ver=''${1-}
+              if [ -z "$ver" ]; then
+                echo "write-version-exports.sh: expected a version" >&2
+                exit 1
+              fi
+              tmp=$(mktemp)
+              trap 'rm -f "$tmp"' EXIT
+              : > "$tmp"
+              count=0
+              while IFS= read -r line || [ -n "$line" ]; do
+                while :; do
+                  case $line in
+                    *[[:space:]]) line=''${line%?} ;;
+                    *) break ;;
+                  esac
+                done
+                printf '    %s\n' "$line" >> "$tmp"
+                count=$((count + 1))
+              done
+              printf '  local: *;\n' >> "$tmp"
+              count=$((count + 1))
+              printf 'LLVM_%s {\n' "$ver"
+              if [ "$count" -gt 1 ]; then
+                printf '  global:\n'
+              fi
+              awk 'NR > 1 { printf ";\n" } { printf "%s", $0 } END { if (NR) printf "\n};\n" }' "$tmp"
+              END_WRITE_VERSION_EXPORTS
+                chmod +x "$dest"
+              fi
+            '';
             # The version-script is written in preConfigure, before cmake.
-            postPatch =
-              (clOld.postPatch or "")
-              + ''
-                # clangd's DecisionForest.cpp includes CompletionModel.h.
-                # Do not run an interpreter to generate it. Remove the
-                # clangd target and drop that translation unit.
-                # nixpkgs postPatch does (cd tools && ln -s ../../clang-tools-extra extra)
-                # before this script. find -type f does not walk that symlink.
-                # grep -R does, so tools/extra/CMakeLists.txt:42 still has
-                # add_subdirectory(clangd). Edit the symlink target too.
-                strip_clangd_cmake() {
-                  cm="$1"
-                  [ -f "$cm" ] || return 0
-                  parent=$(dirname "$cm")
-                  # clang-tools-extra is outside the clang source root.
-                  # Creating CMakeLists.txt.noclangd needs a new directory
-                  # entry and dies with Permission denied. chmod the
-                  # existing file and overwrite it from a temp.
-                  chmod u+w "$parent" 2>/dev/null || true
-                  if [ -L "$cm" ]; then
-                    followed=$(mktemp)
-                    cp -L "$cm" "$followed"
-                    rm -f "$cm"
-                    cat "$followed" > "$cm"
-                    rm -f "$followed"
-                  fi
-                  chmod u+w "$cm"
-                  tmp=$(mktemp)
-                  awk '
-                    index($0, "add_subdirectory(clangd)") { next }
-                    index($0, "add_clang_subdirectory(clangd)") { next }
-                    $0 ~ /^[[:space:]]*DecisionForest\.cpp[[:space:]]*$/ { next }
-                    { print }
-                  ' "$cm" > "$tmp"
-                  cat "$tmp" > "$cm"
-                  rm -f "$tmp"
-                }
-                find . -name CMakeLists.txt -type f | while IFS= read -r cm; do
+            postPatch = (clOld.postPatch or "") + ''
+              # clangd's DecisionForest.cpp includes CompletionModel.h.
+              # Do not run an interpreter to generate it. Remove the
+              # clangd target and drop that translation unit.
+              # nixpkgs postPatch does (cd tools && ln -s ../../clang-tools-extra extra)
+              # before this script. find -type f does not walk that symlink.
+              # grep -R does, so tools/extra/CMakeLists.txt:42 still has
+              # add_subdirectory(clangd). Edit the symlink target too.
+              strip_clangd_cmake() {
+                cm="$1"
+                [ -f "$cm" ] || return 0
+                parent=$(dirname "$cm")
+                # clang-tools-extra is outside the clang source root.
+                # Creating CMakeLists.txt.noclangd needs a new directory
+                # entry and dies with Permission denied. chmod the
+                # existing file and overwrite it from a temp.
+                chmod u+w "$parent" 2>/dev/null || true
+                if [ -L "$cm" ]; then
+                  followed=$(mktemp)
+                  cp -L "$cm" "$followed"
+                  rm -f "$cm"
+                  cat "$followed" > "$cm"
+                  rm -f "$followed"
+                fi
+                chmod u+w "$cm"
+                tmp=$(mktemp)
+                awk '
+                  index($0, "add_subdirectory(clangd)") { next }
+                  index($0, "add_clang_subdirectory(clangd)") { next }
+                  $0 ~ /^[[:space:]]*DecisionForest\.cpp[[:space:]]*$/ { next }
+                  { print }
+                ' "$cm" > "$tmp"
+                cat "$tmp" > "$cm"
+                rm -f "$tmp"
+              }
+              find . -name CMakeLists.txt -type f | while IFS= read -r cm; do
+                strip_clangd_cmake "$cm"
+              done
+              if [ -L tools/extra ]; then
+                extra_real=$(readlink -f tools/extra)
+                find "$extra_real" -name CMakeLists.txt -type f | while IFS= read -r cm; do
                   strip_clangd_cmake "$cm"
                 done
-                if [ -L tools/extra ]; then
-                  extra_real=$(readlink -f tools/extra)
-                  find "$extra_real" -name CMakeLists.txt -type f | while IFS= read -r cm; do
-                    strip_clangd_cmake "$cm"
-                  done
-                fi
-                # find -type f does not walk the tools/extra symlink.
-                # grep -R does, so tools/extra/CMakeLists.txt:42 still
-                # has add_subdirectory(clangd). Name that path. The
-                # helper follows the symlink when the file itself is one.
-                if [ -e tools/extra/CMakeLists.txt ] || [ -L tools/extra/CMakeLists.txt ]; then
-                  strip_clangd_cmake tools/extra/CMakeLists.txt
-                fi
-                if grep -R -n -E 'add_subdirectory[[:space:]]*\([[:space:]]*clangd[[:space:]]*\)' \
-                  --include=CMakeLists.txt . ; then
-                  echo "clangd subdirectory still configured" >&2
-                  exit 1
-                fi
-              '';
+              fi
+              # find -type f does not walk the tools/extra symlink.
+              # grep -R does, so tools/extra/CMakeLists.txt:42 still
+              # has add_subdirectory(clangd). Name that path. The
+              # helper follows the symlink when the file itself is one.
+              if [ -e tools/extra/CMakeLists.txt ] || [ -L tools/extra/CMakeLists.txt ]; then
+                strip_clangd_cmake tools/extra/CMakeLists.txt
+              fi
+              if grep -R -n -E 'add_subdirectory[[:space:]]*\([[:space:]]*clangd[[:space:]]*\)' \
+                --include=CMakeLists.txt . ; then
+                echo "clangd subdirectory still configured" >&2
+                exit 1
+              fi
+            '';
           });
           lld = dropPythonFind prevScope.lld;
         }
@@ -3936,47 +4057,21 @@ fi
       llvmPackages = final.llvmPackages_21;
       # Dry-run 64 configure failures. These overrides are the derivations Nix builds.
       nix-fetchers = prev.nix-fetchers.overrideAttrs (old: {
-        preConfigure =
-          (old.preConfigure or "")
-          + ''
-            if [ -n "''${NIX_BUILD_TOP-}" ] && [ -d "$NIX_BUILD_TOP" ]; then
-              :
-            fi
-          '';
+        preConfigure = (old.preConfigure or "") + ''
+          if [ -n "''${NIX_BUILD_TOP-}" ] && [ -d "$NIX_BUILD_TOP" ]; then
+            :
+          fi
+        '';
 
         postPatch = (old.postPatch or "") + ''
-            # preConfigure edits the inode. Do not remove that path here.
-            :
-          '';
+          # preConfigure edits the inode. Do not remove that path here.
+          :
+        '';
       });
-      systemd-minimal = prev.systemd-minimal.overrideAttrs (old: {
-        nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
-          (mesonProbeStubFor prev)
-        ];
-        preConfigure =
-          (old.preConfigure or "")
-          + ''
-            if [ -f src/shared/meson.build ]; then
-              rm -f src/shared/ethtool-link-modes
-              cp ${ethtoolLinkModesSh} src/shared/ethtool-link-modes
-              chmod 755 src/shared/ethtool-link-modes
-            fi
-          '';
-      });
-      systemd-minimal-libs = prev.systemd-minimal-libs.overrideAttrs (old: {
-        nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
-          (mesonProbeStubFor prev)
-        ];
-        preConfigure =
-          (old.preConfigure or "")
-          + ''
-            if [ -f src/shared/meson.build ]; then
-              rm -f src/shared/ethtool-link-modes
-              cp ${ethtoolLinkModesSh} src/shared/ethtool-link-modes
-              chmod 755 src/shared/ethtool-link-modes
-            fi
-          '';
-      });
+      # The TimeoutStopSec rewrite lives in systemdDropJinja (pins).
+      # CI does not import this overlay. systemdLibs is the package
+      # whose pname is systemd-minimal-libs. These hyphenated names
+      # are not nixpkgs attributes, so an override here never ran.
     };
 in
 {

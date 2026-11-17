@@ -174,6 +174,9 @@ Ladder detail: [fix-and-fixos.md](fix-and-fixos.md).
 | **Finish check-remote then dry-run then switch** | Operator 2026-08-27: after a guest reboot or RAM scare, do **not** tell the operator to wait. Leftover stays `just check-remote`, then `just deploy-dry-run`, then the real `just deploy` switch unless they said stop. Agents never reboot. Agents may run one `just check-remote` at a time, plus eval and the dry-run (2026-09-02). The real switch `just deploy` is operator-owned. Agents must not run `just deploy`. `just deploy-host` without `--dry-run` is that same switch. Long form `just deploy-host` stays valid and has no default target. |
 | **Forks** | Agents never touch `SurmountSystems/*` fork git unless the operator **explicitly** orders that work. Stalwart fork consume: flake input. PQConnect Nix work on sibling repo stays **unstaged for human** commit. |
 | **Cargo update and cargo audit are one pair** | Operator 2026-10-10: do not run `cargo update` without an audit of that new lock. Do not run `cargo audit` / `just audit-remote` on a lock that was not just updated, unless a significant amount of time has passed since the last pair. Do not invent a day count. A few days is not that gap. Menhera stays the index. The laptop-cargo forbid still covers tests, clippy, and rustc. It does not split this pair or hand `cargo update` back. Dual-pin `AGENTS.md`. |
+| **Source-only transfer, fetch on the extra disk (operator 2026-11-16)** | When testing, transfer only source from horizon to surmount-1. Vendor and fetch dependencies only on the extra disk, checkout `/mnt/hdd/projects/server`. Do not upload `vendor/`, `target/`, the cargo registry, or a Nix store from horizon. The builder's network fetches dependencies onto that disk. Horizon `cargo update` writes the lock only. Builds, audits, and tests run on surmount-1. `just check-remote` and `nix build` on horizon are the laptop Nix client. That client copies the closure back and uses horizon's network. Do not run them for this mail-host check. SSH to surmount-1 and run the build there. The SSH channel carries the log, not the store. Dependencies are fetched by surmount-1 onto `/mnt/hdd`. Dual-pin `AGENTS.md` section *Source-only transfer, fetch on the extra disk (operator 2026-11-16)*. |
+| **Vendored builds on the extra disk, and 32 jobs (operator 2026-11-16)** | Builds for this repo run on surmount-1 from the vendored trees on the extra disk. The checkout is `/mnt/hdd/projects/server`. The Nix store for those builds is `/mnt/hdd/projects/server/vendor/nix-store`. Flake inputs are `/mnt/hdd/projects/server/vendor/inputs`. Fixed-output sources are `/mnt/hdd/projects/server/vendor/sources`. Do not download a NixOS channel tarball for this work. Do not run `just check-remote` or `nix build` on horizon. Horizon copies source only. surmount-1 has 64 cores. The Nix invocation is `--max-jobs 32 --cores 32`. That cap is safe while the scram service protects the guest from running out of memory. Do not drop below 32 for this build. Do not raise it above 32. scram stays. Do not weaken scram to buy more jobs. Watch for a step that is running one job when the tool accepts a job count. Raise that step to 32. That applies to this repo's build on surmount-1. The main session is L1. L1 spawns an L2. The L2 spawns an L3 for the reads, the remote checks, and the edits. L1 does not do that work. Carry out the operator's instruction. Do not debate it in chat. Dual-pin `AGENTS.md` section *Vendored builds on the extra disk, and 32 jobs (operator 2026-11-16)*. |
+| **make, ninja, and cargo job counts are 32 (operator 2026-11-16)** | make, ninja, and cargo job counts for this repo's builds on surmount-1 are 32. Set MAKEFLAGS, NIX_BUILD_CORES, and CARGO_BUILD_JOBS to 32. 32 is the parallel setting for every tool on surmount-1 that accepts a job count. It is not only the Nix flags --max-jobs 32 and --cores 32. A build that is running one compile at a time is the miss. Raise that step to 32. Do not raise any of them above 32. See the heading *Vendored builds on the extra disk, and 32 jobs (operator 2026-11-16)*. Dual-pin `AGENTS.md` section *Vendored builds on the extra disk, and 32 jobs (operator 2026-11-16)*. |
 | **Fmt runs before clippy** | Operator 2026-10-12: cargo fmt and nixfmt finish before clippy. `just check` is `fmt`, then `clippy`, then `test`. In `checks.*.ci`, each clippy derivation depends on `management-ui-fmt` and `nix-fmt-check`. Do not list clippy before fmt. Dual-pin `AGENTS.md`. |
 | **Always validate versions** | Re-check upstream latest when touching pins. Docs lag. [research/version-audit.md](research/version-audit.md). |
 | **Prove assumptions** | No "unsafe" / scare copy without evidence (failed build, broken import, measured issue). |
@@ -186,21 +189,41 @@ Ladder detail: [fix-and-fixos.md](fix-and-fixos.md).
 
 ---
 
-## 3. Versions (last audit 2026-07-31; FOD and toolchain rows re-checked 2026-10-17; Stalwart family re-checked 2026-11-03)
+## Vendored builds on the extra disk, and 32 jobs (operator 2026-11-16)
+
+Builds for this repo run on surmount-1 from the vendored trees on the extra disk. The checkout is `/mnt/hdd/projects/server`. The Nix store for those builds is `/mnt/hdd/projects/server/vendor/nix-store`. Flake inputs are `/mnt/hdd/projects/server/vendor/inputs`. Fixed-output sources are `/mnt/hdd/projects/server/vendor/sources`.
+
+Do not download a NixOS channel tarball for this work. Do not run `just check-remote` or `nix build` on horizon. Horizon copies source only.
+
+32 is the parallel setting for every tool on surmount-1 that accepts a job count. It is not only the Nix flags `--max-jobs 32` and `--cores 32`.
+
+make, ninja, cargo, and any other job count used for this repo's builds on surmount-1 are 32. Set `MAKEFLAGS`, `NIX_BUILD_CORES`, and `CARGO_BUILD_JOBS` to 32 for those builds.
+
+A build that is running one compile at a time is the miss. Raise that step to 32. Do not raise any of them above 32.
+
+surmount-1 has 64 cores. 32 is the cap while scram protects the guest from running out of memory. Do not weaken scram. The Nix invocation stays `--max-jobs 32` and `--cores 32`. Do not drop below 32 for this build. scram stays.
+
+Builds still use the vendored store `/mnt/hdd/projects/server/vendor/nix-store`. Do not run nix on horizon.
+
+The main session is L1. L1 spawns an L2. The L2 spawns an L3 for the reads, the remote checks, and the edits. L1 does not do that work. Carry out the operator's instruction. Do not debate it in chat.
+
+---
+
+## 3. Versions (last audit 2026-07-31; FOD and toolchain rows re-checked 2026-10-17; Stalwart server and WebUI re-checked 2026-11-16; nixpkgs-rust re-checked 2026-11-16)
 
 Source of truth for FODs: `nix/packages/*.nix`. Audit:
 [research/version-audit.md](research/version-audit.md).
 
 | Pin | Tree (as of audit) | Notes |
 |-----|--------------------|-------|
-| Stalwart server | **1.0.2** binary FOD | Latest GitHub tag on 2026-11-03 (`v1.0.2`, published 2026-11-02T15:42:44Z). Not a prerelease. Not nixpkgs stalwart |
+| Stalwart server | **1.1.0** binary FOD | GitHub releases/latest, checked on surmount-1 on 2026-11-16, is `v1.1.0` (published 2026-11-09T13:23:08Z, not a prerelease). Gnu tarball names are unchanged. Each tarball contains one binary named stalwart. SRI hashes are in `nix/packages/stalwart-mail.nix`, from `nix store prefetch-file` on the /mnt/hdd store. Not nixpkgs stalwart |
 | stalwart-cli | **1.0.14** | Latest tag on 2026-11-03 (`v1.0.14`, published 2026-10-25T18:15:42Z). Still no Maildir import (that is Vandelay) |
 | vandelay | **1.0.14** | Latest tag on 2026-11-03 (`v1.0.14`, published 2026-11-01T16:43:01Z). Official Maildir++ / JMAP import |
-| Stalwart WebUI | **2.0.4** | Latest tag on 2026-11-03 (`v2.0.4`, published 2026-11-02T11:19:17Z) |
+| Stalwart WebUI | **2.0.6** | GitHub releases/latest, checked on surmount-1 on 2026-11-16, is `v2.0.6` (published 2026-11-13T11:38:18Z, not a prerelease). Asset name is still `webui.zip`. The SRI hash is in `nix/packages/stalwart-webui.nix`, from `nix store prefetch-file` on the /mnt/hdd store. |
 | spam-filter rules | **3.0.4** | Latest tag on 2026-11-03 (`v3.0.4`, published 2026-11-01T15:50:40Z). Release asset is `spam-filter-rules.json.gz` only. v3.0.2 was the last tag that also published `spam-filter.toml` |
-| Arti (HS package) | Surmount-owned source **2.8.0** (`arti-onion-service.nix`, GitLab `arti-v2.8.0`) + `onion-service-service` | Src hash is the 2026-11-05 prefetch. `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. The package does not reuse nixpkgs-rust `pkgs.arti` **2.7.0** `cargoDeps` (lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`). rustc via `nixpkgs-rust` is **1.99.1**. Not stock nixpkgs 1.4.2 lag. Live Tor verify still residual |
+| Arti (HS package) | Surmount-owned source **2.8.0** (`arti-onion-service.nix`, GitLab `arti-v2.8.0`) + `onion-service-service` | Src hash is the 2026-11-05 prefetch. `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. The package does not reuse nixpkgs-rust `pkgs.arti` cargoDeps. rustc via `nixpkgs-rust` is **1.100.0** (lock `fd400cc205c104a499657a82680b6a3eaa8b7d8e`; `pkgs/development/compilers/rust/1_100.nix` at that commit sets rustcVersion = "1.100.0"). GitLab tags checked on surmount-1 on 2026-11-16: `arti-v2.8.0` is still the newest 2.x tag returned, and searches for `arti-v2.9` and `arti-v3.` returned no tag names. The Arti pin was not changed. Not stock nixpkgs 1.4.2 lag. Live Tor verify still residual |
 | Nix package | **2.35.4** via `nix/overlays.nix` on the nixos-26.05 `nixVersions.nix_2_35` recipe | Channel `pkgs.nix` was `nixVersions.stable` **2.34.9**. Source commit `21286d605815196c3fff1960550ab08700fc4e6f`. That recipe has no cargoHash. NixOS stays on **nixos-26.05** because 26.11 is not released. Release notes still read 2026.11/??. Branch-off is scheduled 2026-11-16 to 2026-11-23. Release is scheduled 2026-11-23 to 2026-11-30. See [NixOS 26.11 release schedule](https://github.com/NixOS/nixpkgs/issues/567567) (accessed: 2026-11-05). |
-| management-ui rustc (crane) | **1.99.1** from `nixpkgs-rust` `pkgs.rustc` (`nix/rust-toolchain.nix`, lock `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`) | Host channel nixos-26.05 `pkgs.rustc` is still **1.95.0**. grok-oss uses the same `surmount-rust-1.99.1` toolchain, not host cargo 1.95.0. Not `rustPackages_1_95`. Leptos MSRV is >=1.88 |
+| management-ui rustc (crane) | **1.100.0** from `nixpkgs-rust` `pkgs.rustc` (`nix/rust-toolchain.nix`, lock `fd400cc205c104a499657a82680b6a3eaa8b7d8e`) | Host channel nixos-26.05 `pkgs.rustc` was **1.95.0** at the 2026-10-17 check and was not re-measured on 2026-11-16. grok-oss uses the same `surmount-rust-1.100.0` toolchain, not that host cargo. Not `rustPackages_1_95`. Leptos MSRV is >=1.88 |
 | Host nixpkgs channel | **nixos-26.05** lock | Engine is **not** from channel; channel lag is separate |
 | Lean (builder login) | **4.35.0** official linux x86_64 release (`nix/packages/lean4.nix`, tag `v4.35.0`, published 2026-10-12) | Operator directed Lean 4.35 on 2026-11-04. Not nixpkgs `pkgs.lean4` 4.29.1. Not an elan pin. The live login PATH is unchanged until a switch. `just deploy` was not run for this pin. |
 | Stock Stalwart modules | dual `disabledModules` | `stalwart-mail.nix` + `stalwart.nix`; Surmount option `services.stalwart` (not stock TOML body) |
@@ -488,9 +511,9 @@ deploy-secrets fail-loud options, hardening/networking + optional
 accessControl nft sets, docs, scripts, local/host end-to-end harnesses
 (`nix run .#e2e` / `nix run .#e2e-host`, thin `just e2e` / `just e2e-host`),
 VM and pure contract checks. Crane management-ui and grok-oss use
-`nixpkgs-rust` `pkgs.rustc` 1.99.1 (`nix/rust-toolchain.nix`, lock
-`9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`), not host-channel `rustPackages_1_95`. Host nixos-26.05
-`pkgs.rustc` is still 1.95.0.
+`nixpkgs-rust` `pkgs.rustc` 1.100.0 (`nix/rust-toolchain.nix`, lock
+`fd400cc205c104a499657a82680b6a3eaa8b7d8e`), not host-channel `rustPackages_1_95`. Host nixos-26.05
+`pkgs.rustc` was 1.95.0 at the 2026-10-17 check and was not re-measured on 2026-11-16.
 E2E SoT is flake apps + Rust `crates/surmount-e2e`
 (not free-floating bash). Host e2e is never in `checks.*.ci`. Tor deep row is
 optional on local `just e2e` only (not CI). Full hermetic anchors live outside

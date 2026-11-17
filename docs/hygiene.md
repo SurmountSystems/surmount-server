@@ -86,17 +86,16 @@ Provisioned-host UI screenshots must not be copied into the tree, residual,
 reports, or hooks.
 
 ```bash
-just check-private-data -- --staged   # pre-commit twin (alias: just private-data)
-just check-private-data -- --tree     # full tracked tree (CI twin)
-nix run .#surmount-private-data -- --tree
+surmount-private-data --staged   # commit hook, when the binary is on PATH
+surmount-private-data --tree     # full tracked tree; not the commit hook
 # crate tests: cd crates && cargo test -p surmount-private-data
-# or: nix build .#checks.<system>.surmount-private-data-test
 ```
 
-`nix run .#surmount-private-data` (alias `just check-private-data` /
-`just private-data`). Pre-commit prefers the binary on PATH, then a
-`crates/target` build, then `nix run .#surmount-private-data -- --staged`
-so a commit TTY does not need a nix shell. GHA runs the flake package
+The commit hook runs `surmount-private-data --staged` from PATH, or from
+`crates/target/release` or `crates/target/debug`. A missing binary fails
+the commit. The hook does not start a build and does not fetch a
+closure. `just check-private-data` (alias `just private-data`) is a
+separate operator command, not the hook. GHA runs the flake package
 `--tree` and `just ci` includes crate tests. This gate is admission
 control only; it does not replace the standing never-secrets law above.
 

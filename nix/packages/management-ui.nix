@@ -3,7 +3,7 @@
 # or via the flake overlay which injects craneLib.
 #
 # Leptos 0.8 SSR MSRV is rustc 1.88+. Toolchain comes from
-# nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.1).
+# nix/rust-toolchain.nix (nixpkgs-rust rustc 1.100.0).
 
 {
   lib,

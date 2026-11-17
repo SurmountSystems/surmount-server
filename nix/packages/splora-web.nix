@@ -98,37 +98,37 @@ craneLib.buildTrunkPackage {
   # --locked, using the vendor dir from cargoDeps. Do not delete
   # tempfile. The indexer packages keep the upstream root Cargo.toml.
   preConfigure = ''
-    grep -vxF \
-      -e 'splora = { path = "../.." }' \
-      -e '# Indexer library name is `electrs`. Package name is `splora`.' \
-      frontend/web/Cargo.toml > frontend/web/Cargo.toml.no-indexer-dev
-    mv frontend/web/Cargo.toml.no-indexer-dev frontend/web/Cargo.toml
-    if grep -F 'splora = { path = "../.." }' frontend/web/Cargo.toml; then
-      echo "frontend/web still depends on the indexer package splora" >&2
-      exit 1
-    fi
-    if ! grep -qxF '[workspace]' frontend/web/Cargo.toml; then
-      {
-        printf '%s\n' '[workspace]'
-        echo
-        cat frontend/web/Cargo.toml
-      } > frontend/web/Cargo.toml.workspace-root
-      mv frontend/web/Cargo.toml.workspace-root frontend/web/Cargo.toml
-    fi
-    cat > Trunk.toml <<'EOF'
-[build]
-target = "frontend/web/index.html"
-dist = "frontend/web/dist"
-EOF
-    mkdir -p .cargo
-    substitute ${cargoDeps}/.cargo/config.toml .cargo/config.toml \
-      --subst-var-by vendor ${cargoDeps}
-    cat >> .cargo/config.toml <<'EOF'
+        grep -vxF \
+          -e 'splora = { path = "../.." }' \
+          -e '# Indexer library name is `electrs`. Package name is `splora`.' \
+          frontend/web/Cargo.toml > frontend/web/Cargo.toml.no-indexer-dev
+        mv frontend/web/Cargo.toml.no-indexer-dev frontend/web/Cargo.toml
+        if grep -F 'splora = { path = "../.." }' frontend/web/Cargo.toml; then
+          echo "frontend/web still depends on the indexer package splora" >&2
+          exit 1
+        fi
+        if ! grep -qxF '[workspace]' frontend/web/Cargo.toml; then
+          {
+            printf '%s\n' '[workspace]'
+            echo
+            cat frontend/web/Cargo.toml
+          } > frontend/web/Cargo.toml.workspace-root
+          mv frontend/web/Cargo.toml.workspace-root frontend/web/Cargo.toml
+        fi
+        cat > Trunk.toml <<'EOF'
+    [build]
+    target = "frontend/web/index.html"
+    dist = "frontend/web/dist"
+    EOF
+        mkdir -p .cargo
+        substitute ${cargoDeps}/.cargo/config.toml .cargo/config.toml \
+          --subst-var-by vendor ${cargoDeps}
+        cat >> .cargo/config.toml <<'EOF'
 
-[net]
-offline = true
-EOF
-    cargo generate-lockfile --offline --manifest-path frontend/web/Cargo.toml
+    [net]
+    offline = true
+    EOF
+        cargo generate-lockfile --offline --manifest-path frontend/web/Cargo.toml
   '';
   trunkIndexPath = "frontend/web/index.html";
   doCheck = false;

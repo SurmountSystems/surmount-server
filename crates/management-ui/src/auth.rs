@@ -331,7 +331,9 @@ pub struct VerifiedIdentity {
 impl VerifiedIdentity {
     pub fn npub(&self) -> Result<String, String> {
         let pk = PublicKey::parse(&self.hex_pubkey).map_err(|e| e.to_string())?;
-        pk.to_bech32().map_err(|e| e.to_string())
+        // Err is Infallible (!). The Ok binding is irrefutable.
+        let Ok(npub) = pk.to_bech32();
+        Ok(npub)
     }
 }
 

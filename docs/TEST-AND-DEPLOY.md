@@ -36,6 +36,20 @@ just btop
 just deploy
 ```
 
+`just vendor` is not part of that switch. From the repo root it
+writes locked flake inputs and fixed-output sources as ordinary
+directories under `./vendor` on the disk that holds that checkout.
+On horizon that is the laptop checkout. On surmount-1 the checkout
+for this dump is `/mnt/hdd/projects/server`, so the trees land on
+`/mnt/hdd`. Do not commit `vendor/`.
+
+When testing, transfer only source from horizon to surmount-1. Do not
+upload `vendor/`, `target/`, the cargo registry, or a Nix store from
+horizon. Vendor and fetch dependencies on surmount-1, in the checkout
+`/mnt/hdd/projects/server` on the extra disk. Horizon `cargo update`
+writes the lock only. Builds, audits, and tests run on surmount-1.
+`just check-remote` and `nix build` on horizon are the laptop Nix client. That client copies the closure back and uses horizon's network. Do not run them for this mail-host check. SSH to surmount-1 and run the build there. The SSH channel carries the log, not the store. Dependencies are fetched by surmount-1 onto `/mnt/hdd`.
+
 `nix flake update` moves branch inputs: nixpkgs `nixos-26.05`,
 `advisory-db`, Splora, and `surmount-site`. It does
 not move commit-pinned `nixpkgs-rust`, `crane`, or `sops-nix`.

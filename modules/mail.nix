@@ -88,9 +88,7 @@ in
     type = lib.types.pathInStore;
     internal = true;
     readOnly = true;
-    default = lib.getExe (
-      pkgs.writeShellScriptBin "pre-switch-checks" preSwitchCheckScript
-    );
+    default = lib.getExe (pkgs.writeShellScriptBin "pre-switch-checks" preSwitchCheckScript);
   };
 
   config = mkIf cfg.enable (mkMerge [

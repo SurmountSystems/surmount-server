@@ -20,10 +20,11 @@
 # Vendor / crates.io:
 #   fetch-cargo-vendor against crates.io returned HTTP 403 from this
 #   environment (same class of failure that forced Stalwart to release-binary
-#   FODs). nixpkgs-rust pkgs.arti is still 2.7.0. Do not set cargoDeps to
-#   that tree or to any other 2.7.0 vendor. cargoHash for arti-v2.8.0 is
+#   FODs). Read 2026-11-16: nixpkgs-rust commit
+#   fd400cc205c104a499657a82680b6a3eaa8b7d8e has pkgs.arti version 2.8.0.
+#   Do not set cargoDeps to that tree. cargoHash for arti-v2.8.0 is
 #   sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. The missing-hash
-#   throw is gone. Do not pretend a 2.7.0 vendor tree matches this source.
+#   throw is gone. Do not pretend that vendor tree matches this source.
 #
 # Toolchain:
 #   crates/arti/Cargo.toml in the arti-v2.8.0 tree sets rust-version = "1.92".
@@ -45,7 +46,7 @@
 # Bump procedure:
 #   1. Set the single `version` binding below to "X.Y.Z" (GitLab tag
 #      arti-vX.Y.Z). The drv version and the src tag both use that binding.
-#   2. Prefetch cargoHash for this tag. Do not reuse a 2.7.0 vendor tree.
+#   2. Prefetch cargoHash for this tag. Do not reuse nixpkgs pkgs.arti cargoDeps.
 #   3. Refresh src hash (nix build until got: hash, or prefetch).
 #   4. Confirm MSRV still met by nixpkgs-rust rustc.
 #   5. Re-read upstream CHANGELOG / example config for TOML shape drift.
@@ -111,7 +112,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   buildAndTestSubdir = "crates/arti";
 
-  # nixpkgs-rust pkgs.arti is 2.7.0. Do not point cargoDeps at it.
+  # nixpkgs-rust pkgs.arti at the 1.100.0 pin is 2.8.0. Do not point cargoDeps at it.
   # cargoHash is the fetchCargoVendor vendor-staging got hash for this tag.
   cargoHash = "sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=";
 
@@ -153,7 +154,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     surmountArtiPackaging = {
       mode = "gitlab-source-cargoHash-set";
       upstreamTag = "arti-v${finalAttrs.version}";
-      reason = "arti 2.8.0 cargoHash is sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=; the missing-hash throw is gone; nixpkgs-rust arti 2.7.0 cargoDeps is not this source";
+      reason = "arti 2.8.0 cargoHash is sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=; the missing-hash throw is gone; nixpkgs-rust arti 2.8.0 cargoDeps is not this source";
     };
   };
 

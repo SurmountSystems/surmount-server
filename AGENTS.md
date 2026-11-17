@@ -552,6 +552,34 @@ Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
+## Source-only transfer, fetch on the extra disk (operator 2026-11-16)
+
+When testing, transfer only source from horizon to surmount-1. Vendor and fetch dependencies only on the extra disk, checkout `/mnt/hdd/projects/server`. Do not upload `vendor/`, `target/`, the cargo registry, or a Nix store from horizon. The builder's network fetches dependencies onto that disk. Horizon `cargo update` writes the lock only. Builds, audits, and tests run on surmount-1.
+
+`just check-remote` and `nix build` on horizon are the laptop Nix client. That client copies the closure back and uses horizon's network. Do not run them for this mail-host check. SSH to surmount-1 and run the build there. The SSH channel carries the log, not the store. Dependencies are fetched by surmount-1 onto `/mnt/hdd`.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Vendored builds on the extra disk, and 32 jobs (operator 2026-11-16)
+
+Builds for this repo run on surmount-1 from the vendored trees on the extra disk. The checkout is `/mnt/hdd/projects/server`. The Nix store for those builds is `/mnt/hdd/projects/server/vendor/nix-store`. Flake inputs are `/mnt/hdd/projects/server/vendor/inputs`. Fixed-output sources are `/mnt/hdd/projects/server/vendor/sources`.
+
+Do not download a NixOS channel tarball for this work. Do not run `just check-remote` or `nix build` on horizon. Horizon copies source only.
+
+32 is the parallel setting for every tool on surmount-1 that accepts a job count. It is not only the Nix flags `--max-jobs 32` and `--cores 32`.
+
+make, ninja, cargo, and any other job count used for this repo's builds on surmount-1 are 32. Set `MAKEFLAGS`, `NIX_BUILD_CORES`, and `CARGO_BUILD_JOBS` to 32 for those builds.
+
+A build that is running one compile at a time is the miss. Raise that step to 32. Do not raise any of them above 32.
+
+surmount-1 has 64 cores. 32 is the cap while scram protects the guest from running out of memory. Do not weaken scram. The Nix invocation stays `--max-jobs 32` and `--cores 32`. Do not drop below 32 for this build. scram stays.
+
+Builds still use the vendored store `/mnt/hdd/projects/server/vendor/nix-store`. Do not run nix on horizon.
+
+The main session is L1. L1 spawns an L2. The L2 spawns an L3 for the reads, the remote checks, and the edits. L1 does not do that work. Carry out the operator's instruction. Do not debate it in chat.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Fmt runs before clippy (operator 2026-10-12)
 
 Cargo fmt and nixfmt finish before clippy. `just check` is `fmt`, then `clippy`, then `test`. In `checks.*.ci`, `management-ui-clippy`, `e2e-clippy`, and each wave1 `*-clippy` depend on `management-ui-fmt` and `nix-fmt-check`. Do not list clippy before fmt. Do not let the CI aggregate start clippy beside fmt.
@@ -643,7 +671,9 @@ Scaffold `memoryMax = "4G"` is a builder budget, not a published guest
 RAM size. Scaffold `maxJobs = 32` is half the measured mail-host CPUs
 (operator 2026-10-17). It is not one slot per online CPU. Scram, the
 builder OOM score, and Nice=19 are why this is no longer 8. Do not
-publish the raw CPU count. The builder is the preferred in-guest OOM
+publish RAM, disk, SKU, and IP. That forbid does not cover the
+2026-11-16 record that surmount-1 has 64 cores and this build uses
+32 jobs. The builder is the preferred in-guest OOM
 victim (`OOMScoreAdjust`). Enable `surmount.hardening.qemuGuestAgent`
 from the private overlay on horizon so SHC can inject a command when SSH is stuck. Do **not**
 start Lake from an agent. `surmount.lake.enable` stays false until

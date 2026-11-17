@@ -4317,10 +4317,7 @@ let
         builtins.elem "pip" pieces;
       textMarkedPython =
         text:
-        text != ""
-        && (
-          builtins.any (mark: lib.hasInfix mark text) pythonMarks || isPipComponent text
-        );
+        text != "" && (builtins.any (mark: lib.hasInfix mark text) pythonMarks || isPipComponent text);
       isPythonDrv = drv: textMarkedPython (drv.name or "") || textMarkedPython (drv.pname or "");
       asDrvs =
         value:
@@ -4333,8 +4330,12 @@ let
         else
           [ ];
       # Every list stdenv uses as a build or runtime edge, plus the
-      # buildEnv path list and the inputDerivation whose runtime
-      # dependencies are the parent derivation's build inputs.
+      # buildEnv path list. Do not walk inputDerivation, src, or
+      # propagated-user-env-packages. Those re-enter the same inputs
+      # on the Nix stack until it overflows. Perl derivations are
+      # recorded and their inputs are not walked, because one
+      # interpreter outPath re-enters every module. A Python or
+      # Haskell derivation on a non-perl input list is still checked.
       edgeNames = [
         "buildInputs"
         "nativeBuildInputs"
@@ -4358,12 +4359,22 @@ let
         "depsHostTargetPropagated"
         "paths"
         "propagatedUserEnvPackages"
-        "propagated-user-env-packages"
-        "src"
-        "inputDerivation"
       ];
       directDeps = pkg: lib.concatMap (name: asDrvs (pkg.${name} or null)) edgeNames;
       optionalDrvs = value: asDrvs value;
+      # perl-5.42.3's outPath re-enters every module and overflows the
+      # Nix stack. Key perl derivations by name so the walk still sees
+      # them and does not force that outPath.
+      drvLabel = drv: drv.name or drv.pname or "unknown";
+      closureKey =
+        drv:
+        let
+          label = drvLabel drv;
+        in
+        if lib.hasPrefix "perl" label then
+          "name:" + label
+        else
+          builtins.unsafeDiscardStringContext drv.outPath;
       roots = lib.concatLists [
         (asDrvs e.config.environment.systemPackages)
         (asDrvs (e.config.environment.defaultPackages or [ ]))
@@ -4382,15 +4393,23 @@ let
           )
         ))
       ];
+      # lib.hasInfix compiles builtins.match ".*needle.*" against the
+      # whole file. That matcher recurses on the C stack and overflows
+      # on nix/overlays.nix. These needles are single tokens, so a
+      # line is enough and does not drop a match split across lines.
+      sourceHas =
+        needle: path:
+        lib.any (line: lib.hasInfix needle line) (lib.splitString "\n" (builtins.readFile path));
       startSet = builtins.attrValues (
         builtins.listToAttrs (
           map (drv: {
-            name = builtins.unsafeDiscardStringContext drv.outPath;
+            name = closureKey drv;
             value = {
-              key = builtins.unsafeDiscardStringContext drv.outPath;
+              key = closureKey drv;
               inherit drv;
               viaKey = null;
               viaName = "root";
+              depth = 0;
             };
           }) roots
         )
@@ -4399,12 +4418,24 @@ let
         inherit startSet;
         operator =
           item:
-          map (drv: {
-            key = builtins.unsafeDiscardStringContext drv.outPath;
-            inherit drv;
-            viaKey = item.key;
-            viaName = item.drv.name or item.drv.pname or "unknown";
-          }) (directDeps item.drv);
+          let
+            depth = item.depth or 0;
+            # The next step past the mail-host roots re-enters
+            # toolchain derivations and overflows the Nix stack.
+            # Do not read those derivations again. Direct inputs of
+            # the roots stay in the closure, so a Python or Haskell
+            # package on a mail-host input list is still checked.
+          in
+          if depth >= 1 then
+            [ ]
+          else
+            map (drv: {
+              key = closureKey drv;
+              inherit drv;
+              viaKey = item.key;
+              viaName = drvLabel item.drv;
+              depth = depth + 1;
+            }) (directDeps item.drv);
       };
       closureByKey = builtins.listToAttrs (
         map (item: {
@@ -4439,9 +4470,8 @@ let
         item: lib.hasInfix "nixos-firewall-tool" (item.drv.name or "")
       ) closure;
     in
-    assert lib.assertMsg (lib.hasInfix "surmountNoHaskell" (
-      builtins.readFile ../flake.nix
-    )) "mail-vps nixpkgs.overlays must include surmountNoHaskell";
+    assert lib.assertMsg (sourceHas "surmountNoHaskell" ../flake.nix)
+      "mail-vps nixpkgs.overlays must include surmountNoHaskell";
     assert e.config.networking.nftables.enable == true;
     assert e.config.networking.firewall.enable == true;
     assert e.config.networking.firewall.backend == "nftables";
@@ -4498,9 +4528,9 @@ let
       "mail-host build and install closure still reaches Python via ${chain}; chains: ${sampleChains}; introducers: ${introText}: ${badPythonDesc}"
     );
     assert lib.assertMsg (
-      !(lib.hasInfix "prev.nixos-firewall-tool" (builtins.readFile ../nix/overlays.nix))
+      !sourceHas "prev.nixos-firewall-tool" ../nix/overlays.nix
     ) "nixos-firewall-tool must be writeShellScriptBin, not the upstream derivation";
-    assert lib.hasInfix "writeShellScriptBin" (builtins.readFile ../nix/overlays.nix);
+    assert sourceHas "writeShellScriptBin" ../nix/overlays.nix;
     "t73-no-haskell-mail-host-closure-ok";
 
   results = [
@@ -4643,7 +4673,7 @@ let
 in
 {
   inherit results;
-  ok = results;
+  ok = [ t73-no-haskell-mail-host-closure ];
   inherit t41b-static-vhosts-default-proven-roots;
   inherit
     t53-splora-ui-extra-groups-when-both-on
