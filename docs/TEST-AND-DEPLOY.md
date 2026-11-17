@@ -344,7 +344,7 @@ What the dry-run does (it must not switch the guest):
 - on the guest, bootstraps `gccarch-x86-64-v3` when the daemon's
   system-features omit it, the same way `just deploy` does, then runs
   `nixos-rebuild build --flake path:/root/surmount-server#mail-vps`
-  with `--option max-jobs 32 --option cores 0`
+  with `--option max-jobs 32 --option cores 32`
 - does not run `nixos-rebuild switch`
 - does not change `/nix/var/nix/profiles/system`
 - does not run post-switch smoke

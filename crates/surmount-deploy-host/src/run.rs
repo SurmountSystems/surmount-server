@@ -491,7 +491,7 @@ fn build_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
     let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
     let build = format!(
-        "nixos-rebuild build --flake {flake_q} --option max-jobs 32 --option cores 0 --keep-going"
+        "nixos-rebuild build --flake {flake_q} --option max-jobs 32 --option cores 32 --keep-going"
     );
     format!("{bootstrap}\n{build}")
 }
@@ -509,11 +509,10 @@ fn switch_remote_command(flake_ref: &str) -> String {
     let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
     let switch = [
         "before=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
-        // Live nix.conf still has max-jobs 8 until this generation
-        // switches. 32 matches surmount.remoteBuilder.maxJobs. cores 0
-        // is auto so one drv can use the machine.
+        // 32 matches surmount.remoteBuilder.maxJobs and buildCores.
+        // cores 0 would use every online CPU. Do not pass cores 0.
         &format!(
-            "nixos-rebuild switch --flake {flake_q} --option max-jobs 32 --option cores 0"
+            "nixos-rebuild switch --flake {flake_q} --option max-jobs 32 --option cores 32"
         ),
         "rc=$?",
         "after=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
@@ -971,7 +970,7 @@ mod tests {
         assert!(cmd.contains("nixos-rebuild switch --flake"));
         assert!(!cmd.contains("nixos-rebuild build"));
         assert!(cmd.contains("--option max-jobs 32"));
-        assert!(cmd.contains("--option cores 0"));
+        assert!(cmd.contains("--option cores 32"));
         assert!(!cmd.contains("--keep-going"), "{cmd}");
         assert!(cmd.contains("path:/tmp/repo#mail-vps"));
         assert!(cmd.contains("/nix/var/nix/profiles/system"));
@@ -1012,7 +1011,7 @@ mod tests {
         let cmd = build_remote_command("path:/tmp/repo#mail-vps");
         assert!(
             cmd.contains(
-                "nixos-rebuild build --flake path:/tmp/repo#mail-vps --option max-jobs 32 --option cores 0 --keep-going"
+                "nixos-rebuild build --flake path:/tmp/repo#mail-vps --option max-jobs 32 --option cores 32 --keep-going"
             ),
             "{cmd}"
         );
@@ -1043,7 +1042,7 @@ mod tests {
         let switched = switch_remote_command("path:/tmp/repo#mail-vps");
         assert!(switched.contains("nixos-rebuild switch --flake"));
         assert!(switched.contains(
-            "nixos-rebuild switch --flake path:/tmp/repo#mail-vps --option max-jobs 32 --option cores 0"
+            "nixos-rebuild switch --flake path:/tmp/repo#mail-vps --option max-jobs 32 --option cores 32"
         ));
         assert!(!switched.contains("nixos-rebuild build"));
         assert!(!switched.contains("--keep-going"), "{switched}");

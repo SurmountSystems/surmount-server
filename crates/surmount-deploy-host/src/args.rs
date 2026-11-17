@@ -22,7 +22,7 @@ Options:
                          overlay, bootstrap gccarch-x86-64-v3 the same way
                          as a real deploy, and run nixos-rebuild build
                          with the same path: flake ref and
-                         --option max-jobs 32 --option cores 0.
+                         --option max-jobs 32 --option cores 32.
                          Does not run nixos-rebuild switch, does not change
                          /nix/var/nix/profiles/system, does not run
                          post-switch smoke, and does not install secrets.

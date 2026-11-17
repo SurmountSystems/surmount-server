@@ -574,6 +574,8 @@ A build that is running one compile at a time is the miss. Raise that step to 32
 
 surmount-1 has 64 cores. 32 is the cap while scram protects the guest from running out of memory. Do not weaken scram. The Nix invocation stays `--max-jobs 32` and `--cores 32`. Do not drop below 32 for this build. scram stays.
 
+Operator 2026-11-17: always evaluate assumptions before you report them. Before you say 32 cores are in use, quote a live measurement of busy CPUs from that machine, taken in that turn. The nix.conf values `cores = 32` and `max-jobs = 32` are the cap. They are not utilization. An idle machine with that cap is not a 32-core build. A previous report is not that measurement. Evaluate the assumption against the measurement that would falsify it.
+
 Builds still use the vendored store `/mnt/hdd/projects/server/vendor/nix-store`. Do not run nix on horizon.
 
 The main session is L1. L1 spawns an L2. The L2 spawns an L3 for the reads, the remote checks, and the edits. L1 does not do that work. Carry out the operator's instruction. Do not debate it in chat.

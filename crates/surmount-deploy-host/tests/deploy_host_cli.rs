@@ -606,7 +606,7 @@ fn hermetic_cmd() -> (Command, PathBuf, PathBuf) {
 fn assert_dry_run_builds(ssh_log: &str, out: &str) {
     assert!(
         ssh_log.contains(
-            "nixos-rebuild build --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 0 --keep-going"
+            "nixos-rebuild build --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 32 --keep-going"
         ),
         "{ssh_log}"
     );
@@ -688,7 +688,7 @@ fn finished_rebuild_runs_smoke_and_can_succeed() {
     assert!(out.status.success(), "{s}");
     assert!(log.contains("nixos-rebuild switch"), "{log}");
     assert!(log.contains(
-        "nixos-rebuild switch --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 0"
+        "nixos-rebuild switch --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 32"
     ));
     assert!(!log.contains("--keep-going"), "{log}");
     assert!(!log.contains("nixos-rebuild build"), "{log}");

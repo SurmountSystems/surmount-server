@@ -141,7 +141,7 @@ in
     # Job slots stay under MemoryMax. Half the measured mail-host CPUs,
     # not one slot per CPU. Laptop machines max-jobs must match.
     nix.settings.max-jobs = rb.maxJobs;
-    nix.settings.cores = lib.mkIf (rb.buildCores != null) rb.buildCores;
+    nix.settings.cores = rb.buildCores;
     # Client machines-file already lists surmount-remote. The builder
     # nix-daemon must list it too or rustc is not eligible here. extra-
     # keeps NixOS auto-detected features (big-parallel).

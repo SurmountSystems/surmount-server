@@ -1361,13 +1361,13 @@ in
       };
 
       buildCores = mkOption {
-        type = types.nullOr types.ints.unsigned;
-        default = null;
+        type = types.ints.positive;
+        default = 32;
         description = ''
-          If set, nix.settings.cores (threads per job). null leaves the Nix
-          default (0 = auto) so one derivation can use online CPUs.
-          Pair a modest maxJobs with auto cores instead of one job slot
-          per online CPU.
+          nix.settings.cores (threads one derivation may use). Default 32,
+          the same cap as maxJobs. Nix treats 0 as every online CPU, so
+          this option does not accept 0. Do not set 1. Do not publish the
+          raw CPU count.
         '';
       };
 
