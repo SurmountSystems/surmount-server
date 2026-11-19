@@ -112,6 +112,12 @@ done
 for target in $targets; do
     if [ -d "$target/lib" ]; then
         search="$search $target/lib"
+        # libsystemd-shared-260.so is installed under lib/systemd, not lib/.
+        for sub in "$target"/lib/*/; do
+            if [ -d "$sub" ]; then
+                search="$search ${sub%/}"
+            fi
+        done
     fi
 done
 

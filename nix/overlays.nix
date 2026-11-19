@@ -416,6 +416,12 @@ let
               importdistutils)
                 exit 0
                 ;;
+              importos\;*)
+                # dbus asks for TMPDIR, TEMP, and TMP. Print those
+                # values. Do not run the interpreter.
+                printf '%s\n' "''${TMPDIR-}" "''${TEMP-}" "''${TMP-}"
+                exit 0
+                ;;
               import*)
                 exit 1
                 ;;
@@ -461,6 +467,11 @@ let
             fi
             mkdir -p -- "$2"
             chmod 755 -- "$2"
+            exit 0
+            ;;
+          meson_post_install.py|copy_data_for_tests.py)
+            # relocation is disabled. The setuid helper is not installed
+            # from this build. The test copy is not part of the library.
             exit 0
             ;;
         esac
@@ -926,56 +937,12 @@ let
                             echo "udev helper symbols have no existing definition" >&2
                             exit 1
                           fi
-                          udev_rel="../''${udev_def#src/}"
-                          assert_rel="../''${assert_def#src/}"
-                          for helper in ata_id cdrom_id dmi_memory_id fido_id scsi_id; do
-                            append_udev_source "$helper" "$udev_rel"
-                          done
-                          for helper in ata_id cdrom_id dmi_memory_id scsi_id iocost; do
-                            append_udev_source "$helper" "$assert_rel"
-                          done
-                          if [ -f src/udev/meson.build ]; then
-                            if ! grep -F -q "$udev_rel" src/udev/meson.build; then
-                              echo "udev meson.build does not link udev_parse_config" >&2
-                              exit 1
-                            fi
-                            if ! grep -F -q "$assert_rel" src/udev/meson.build; then
-                              echo "udev meson.build does not link log_assert_failed" >&2
-                              exit 1
-                            fi
-                          fi
-                          # ata_id's first undefined reference is log_dispatch_internal
-                          # from assert-util.c:33. udev_parse_config is not that error.
-                          # Add the existing .c files that define the ata_id undefined
-                          # references. Do not write a new C function. The inserts above stay.
-                          for rel in \
-                            ../basic/log.c \
-                            ../basic/build.c \
-                            ../basic/device-nodes.c \
-                            ../basic/fd-util.c \
-                            ../basic/hashmap.c \
-                            ../basic/path-util.c \
-                            ../basic/stat-util.c \
-                            ../basic/static-destruct.c \
-                            ../basic/string-util.c \
-                            ../basic/utf8.c \
-                            ../libsystemd/sd-device/device-private.c \
-                            ../libsystemd/sd-device/sd-device.c \
-                            ../shared/conf-parser.c \
-                            ../shared/main-func.c
-                          do
-                            if [ ! -f "src/udev/$rel" ]; then
-                              echo "missing existing source for ata_id link: $rel" >&2
-                              exit 1
-                            fi
-                            for helper in ata_id cdrom_id dmi_memory_id fido_id iocost mtd_probe scsi_id v4l_id; do
-                              append_udev_source "$helper" "$rel"
-                            done
-                          done
-                          if [ -f src/udev/meson.build ] && ! grep -F -q "../basic/log.c" src/udev/meson.build; then
-                            echo "udev meson.build does not link log_dispatch_internal" >&2
-                            exit 1
-                          fi
+                          # udev_parse_config and log_assert_failed already live in
+                          # libsystemd-shared. Do not copy those .c files into
+                          # ata_id. Meson compiles them -fvisibility=hidden, so
+                          # the shared library keeps the names local. The gcc
+                          # wrapper below appends -fvisibility=default on -c
+                          # lines. The version script is already global:*.
                           # bpf-devices.c fails with an implicit declaration of
                           # BPF_JMP_A. The vendored uapi header is the first
                           # -isystem match and does not define BPF_JMP_A. The
@@ -1002,11 +969,18 @@ let
                           # same path is also -I. GCC ignores -I for a directory
                           # that is also -isystem, then searches uapi first. uapi
                           # linux/fs.h and linux/magic.h do not define
-                          # FILEID_KERNFS or GFS2_MAGIC. Copy the upstream override
-                          # headers to a directory meson does not pass as -isystem
-                          # so -I is not ignored. Do not write a header.
+                          # FILEID_KERNFS or GFS2_MAGIC. uapi linux/keyctl.h does
+                          # not define key_serial_t. The upstream override
+                          # linux/keyctl.h does, when KEY_POS_VIEW is unset.
+                          # Copy those existing headers to a directory meson does
+                          # not pass as -isystem so -I is not ignored. uapi stays
+                          # the first -isystem linux directory, so include_next
+                          # from the keyctl.h copy reaches uapi before the
+                          # original override. Do not -D KEY_POS_VIEW. Do not
+                          # write a header. Do not add a typedef.
                           if [ ! -f src/include/override/linux/fs.h ] \
-                            || [ ! -f src/include/override/linux/magic.h ]; then
+                            || [ ! -f src/include/override/linux/magic.h ] \
+                            || [ ! -f src/include/override/linux/keyctl.h ]; then
                             echo "systemd override headers are missing" >&2
                             exit 1
                           fi
@@ -1015,12 +989,18 @@ let
                             src/include/override-first/linux/fs.h
                           cp src/include/override/linux/magic.h \
                             src/include/override-first/linux/magic.h
+                          cp src/include/override/linux/keyctl.h \
+                            src/include/override-first/linux/keyctl.h
                           if ! grep -F -q FILEID_KERNFS src/include/override-first/linux/fs.h; then
                             echo "copied fs.h does not define FILEID_KERNFS" >&2
                             exit 1
                           fi
                           if ! grep -F -q GFS2_MAGIC src/include/override-first/linux/magic.h; then
                             echo "copied magic.h does not define GFS2_MAGIC" >&2
+                            exit 1
+                          fi
+                          if ! grep -F -q key_serial_t src/include/override-first/linux/keyctl.h; then
+                            echo "copied keyctl.h does not name key_serial_t" >&2
                             exit 1
                           fi
                           # sd-id128.c does not include linux/keyctl.h. The six
@@ -1101,8 +1081,8 @@ let
                           mkdir -p "$NIX_BUILD_TOP/bin"
                           cp tools/gperf-no-empty-keyword "$NIX_BUILD_TOP/bin/gperf"
                           chmod 755 "$NIX_BUILD_TOP/bin/gperf"
-                          # uapi is the first -isystem linux/ directory, so the
-                          # override keyctl header is not the one these files see.
+                          # uapi is the first -isystem linux/ directory. The copy in
+                          # override-first is the linux/keyctl.h these files see.
                           # sd-id128.c does not include linux/keyctl.h.
                           # exec-invoke.c includes sys/keyctl.h and uses the same
                           # six names. Match those two source paths only. Do not
@@ -1134,14 +1114,32 @@ let
                               exit 1
                               ;;
                           esac
-                          # Do not -D KEY_POS_* or key_serial_t. override/linux/keyctl.h
-                          # is on the include path and defines the typedef and
+                          # Do not -D KEY_POS_* or key_serial_t. The copied
+                          # override-first/linux/keyctl.h defines the typedef and
                           # the KEY_* macros. Predefining KEY_POS_VIEW takes
                           # the #else branch, which needs KEY_OTH_ALL from
                           # uapi, and uapi does not declare it. The exec
                           # target is the store gcc, never this script.
+                          # ata_id links libsystemd-shared-260.so. systemd-analyze
+                          # links that .so and libsystemd-core-260.so. Meson
+                          # puts -fvisibility=hidden on the compile line, so
+                          # those .so files keep parse_boolean, log_internal,
+                          # and the other names local. The version script is
+                          # already global:*. The last -fvisibility flag wins.
+                          # Append -fvisibility=default only on -c lines.
+                          # Do not append static archives. Do not drop
+                          # -Wl,--no-undefined. No new C.
                           cat > "$NIX_BUILD_TOP/bin/gcc" << 'SDID128GCC'
             #!/bin/sh
+            compile=0
+            for arg in "$@"; do
+              if [ "$arg" = "-c" ]; then
+                compile=1
+              fi
+            done
+            if [ "$compile" -eq 1 ]; then
+              set -- "$@" -fvisibility=default
+            fi
             exec REAL_GCC "$@"
             SDID128GCC
                           awk -v real="$real_gcc" '{ gsub(/REAL_GCC/, real); print }' \
@@ -1160,6 +1158,10 @@ let
                             echo "gcc wrapper exec target is the script" >&2
                             exit 1
                           fi
+                          if ! grep -F -q -- -fvisibility=default "$NIX_BUILD_TOP/bin/gcc"; then
+                            echo "gcc wrapper does not append -fvisibility=default" >&2
+                            exit 1
+                          fi
                           case ":$PATH:" in
                             *":$NIX_BUILD_TOP/bin:"*) ;;
                             *) export PATH="$NIX_BUILD_TOP/bin:$PATH" ;;
@@ -1168,9 +1170,9 @@ let
           env = (old.env or { }) // {
             # Do not -D any KEY_ name here. Those are keyboard gperf
             # identifiers stored in an unsigned short, and a global
-            # -D fails -Werror=overflow. override/linux/keyctl.h defines
-            # key_serial_t and the KEY_* permission macros. Do not add
-            # a C function.
+            # -D fails -Werror=overflow. The copied
+            # override-first/linux/keyctl.h defines key_serial_t and the
+            # KEY_* permission macros. Do not add a C function.
             NIX_CFLAGS_COMPILE_BEFORE =
               (toString (old.env.NIX_CFLAGS_COMPILE_BEFORE or old.NIX_CFLAGS_COMPILE_BEFORE or ""))
               + " -I ../src/include/override-first"
@@ -1192,8 +1194,9 @@ let
               # linux/bpf_insn.h. Do not -include linux/keyctl.h.
               # Do not add a C function.
               # override-first is not a meson -isystem directory, so this
-              # -I is not dropped. It is the upstream fs.h and magic.h
-              # that define FILEID_KERNFS and GFS2_MAGIC.
+              # -I is not dropped. It is the upstream fs.h, magic.h, and
+              # keyctl.h that define FILEID_KERNFS, GFS2_MAGIC, and
+              # key_serial_t.
               + " -I ../src/include/override-first"
               + " -I ../src/include/override"
               + " -idirafter ../src/include/bpf-insn-next";
@@ -2373,8 +2376,117 @@ let
 
       # Stock dbus enables X11 autolaunch and lists libx11. This host
       # has no X server. The shadowed callPackage still scrubs the
-      # interpreter slot. This does not add an interpreter.
-      dbus = prev.dbus.override { x11Support = false; };
+      # interpreter slot. Muon still runs find_program for the
+      # interpreter name. The probe stub's symlink is that name.
+      # It is not an interpreter package. The dbus checks run
+      # interpreter scripts, so skip them.
+      dbus = (prev.dbus.override { x11Support = false; }).overrideAttrs (old: {
+        doCheck = false;
+        nativeBuildInputs =
+          let
+            tried = builtins.tryEval (old.nativeBuildInputs or [ ]);
+            inputs = if tried.success && builtins.isList tried.value then tried.value else [ ];
+          in
+          builtins.filter (
+            dep:
+            let
+              one = builtins.tryEval dep;
+              name = if one.success then one.value.name or "" else "";
+              pname = if one.success then one.value.pname or "" else "";
+            in
+            one.success
+            && !(prev.lib.hasInfix "python" name)
+            && !(prev.lib.hasInfix "Python" name)
+            && !(prev.lib.hasInfix "python" pname)
+            && !(prev.lib.hasInfix "Python" pname)
+          ) inputs
+          ++ [
+            (mesonProbeStubFor prev)
+          ];
+      });
+
+      # e2fsprogs enables fuse2fs unless configure is told not to.
+      # withFuse false drops the fuse3 input and the fuse2fs output.
+      # It does not pass the configure switch, so the default path
+      # still looks for fuse3 headers. This host does not need fuse2fs.
+      e2fsprogs = (prev.e2fsprogs.override { withFuse = false; }).overrideAttrs (old: {
+        configureFlags = (old.configureFlags or [ ]) ++ [
+          "--disable-fuse2fs"
+        ];
+      });
+
+      # sphinx-build is an interpreter tool. This host does not need
+      # the generated manual. --disable-documentation is the configure
+      # switch. The man output stays as an empty directory.
+      btrfs-progs = prev.btrfs-progs.overrideAttrs (old: {
+        configureFlags = (old.configureFlags or [ ]) ++ [
+          "--disable-documentation"
+        ];
+        postInstall = (old.postInstall or "") + ''
+          mkdir -p "$man"
+        '';
+      });
+
+      # The HTML administrators' guide xsltproc target failed.
+      # The upstream docs feature is the switch for that target.
+      # The same feature also covers the manual pages in doc/.
+      # The declared doc and man outputs stay as empty directories.
+      # Muon passes an empty link_args string through as "".
+      # ld then reports "cannot find :". Drop empty arguments.
+      # This wrapper is only on the linux-pam build path.
+      linux-pam =
+        let
+          dropEmptyArgCc = prev.runCommand "drop-empty-gcc-arg" { } ''
+            mkdir -p "$out/bin"
+            cat > "$out/bin/filter-empty-args" << 'EOF'
+            #!/bin/sh
+            real=$1
+            shift
+            n=0
+            for arg in "$@"; do
+              if [ -n "$arg" ]; then
+                n=$((n + 1))
+                eval "kept_$n=\$arg"
+              fi
+            done
+            set --
+            i=1
+            while [ "$i" -le "$n" ]; do
+              eval "set -- \"\$@\" \"\$kept_$i\""
+              i=$((i + 1))
+            done
+            exec "$real" "$@"
+            EOF
+            chmod 755 "$out/bin/filter-empty-args"
+            cat > "$out/bin/gcc" << EOF
+            #!/bin/sh
+            exec "$out/bin/filter-empty-args" ${prev.stdenv.cc}/bin/gcc "\$@"
+            EOF
+            cat > "$out/bin/cc" << EOF
+            #!/bin/sh
+            exec "$out/bin/filter-empty-args" ${prev.stdenv.cc}/bin/cc "\$@"
+            EOF
+            chmod 755 "$out/bin/gcc" "$out/bin/cc"
+          '';
+        in
+        prev.linux-pam.overrideAttrs (old: {
+          mesonFlags = (old.mesonFlags or [ ]) ++ [
+            "-Ddocs=disabled"
+          ];
+          nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+            dropEmptyArgCc
+          ];
+          postInstall = (old.postInstall or "") + ''
+            mkdir -p "$doc" "$man"
+          '';
+        });
+
+      # Fish's check runs tests/test_driver.py. The shebang asks for
+      # /usr/bin/env, and this build has no interpreter on PATH.
+      # The fish binary already compiled. Skip the check.
+      fish = prev.fish.overrideAttrs (_old: {
+        doCheck = false;
+      });
 
       # Introspection builds gobject-introspection, which runs Python
       # and can pull cairo. The mail host does not need GObject typelibs.
