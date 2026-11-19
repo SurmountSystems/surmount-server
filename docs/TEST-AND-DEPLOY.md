@@ -22,12 +22,13 @@ Companions: [OPS.md](OPS.md), [deploy-host-local.md](deploy-host-local.md),
 
 ## Update, audit, test, and switch
 
-From the repo root, in this order. One Nix client at a time. There is
-no `just` recipe for the first two lines.
+From the repo root, in this order. One Nix client at a time.
+`just deploy` stays the operator's real switch. Agents must not run
+`just deploy`. Agents run `just deploy-dry-run`.
 
 ```bash
-nix flake update
-cargo update
+nix run .#update-flakes
+nix run .#update-software
 just audit-remote
 just check-remote
 just check-heavy
@@ -46,24 +47,30 @@ for this dump is `/mnt/hdd/projects/server`, so the trees land on
 When testing, transfer only source from horizon to surmount-1. Do not
 upload `vendor/`, `target/`, the cargo registry, or a Nix store from
 horizon. Vendor and fetch dependencies on surmount-1, in the checkout
-`/mnt/hdd/projects/server` on the extra disk. Horizon `cargo update`
-writes the lock only. Builds, audits, and tests run on surmount-1.
+`/mnt/hdd/projects/server` on the extra disk. The cargo lock write
+inside `nix run .#update-software` is the lock step. Builds, audits,
+and tests run on surmount-1.
 `just check-remote` and `nix build` on horizon are the laptop Nix client. That client copies the closure back and uses horizon's network. Do not run them for this mail-host check. SSH to surmount-1 and run the build there. The SSH channel carries the log, not the store. Dependencies are fetched by surmount-1 onto `/mnt/hdd`.
 
-`nix flake update` moves branch inputs: nixpkgs `nixos-26.05`,
-`advisory-db`, Splora, and `surmount-site`. It does
-not move commit-pinned `nixpkgs-rust`, `crane`, or `sops-nix`.
-This flake does not take grok-oss or tau inputs. Stalwart versions are
-the fixed-output files under `nix/packages/`, not this command.
+`nix run .#update-flakes` walks every `flake.nix`. A branch input
+keeps its URL. `nixpkgs` stays `nixos-26.05`. `advisory-db` and
+`surmount-site` stay branch URLs. Their locks move when the command
+runs `nix flake lock --update-input`. A commit pin is a `github:` URL
+whose last path segment is a 40-hex commit. The command writes the
+newer rev into that file, then locks. Commit pins here are
+`nixpkgs-rust`, `crane`, `sops-nix`, `nixfmt-rs`, and `splora`.
+This flake does not take grok-oss or tau inputs.
 
-`cargo update` uses the menhera index already configured on the laptop.
+`nix run .#update-software` updates the hand pins under `nix/packages`,
+then runs cargo update against the menhera cooldown index (not
+crates.io), then the hermetic cargo-audit check, in that same pass.
 `just audit` and `just audit-remote` run the same RustSec check.
-`just audit-remote` forces the mail-host builder. Run one of them as
-the next command after `cargo update`. Do not update and skip it. Do
-not audit a lock that was not just updated, unless a significant
-amount of time has passed. A few days is not that gap. The check sets `[yanked] enabled = false` because the Nix sandbox
+`just audit-remote` forces the mail-host builder. Do not update and
+skip the audit. Do not audit a lock that was not just updated, unless
+a significant amount of time has passed. A few days is not that gap.
+The check sets `[yanked] enabled = false` because the Nix sandbox
 has no crates.io index. Yanked crates are refused by the menhera index
-during `cargo update`.
+during that cargo update.
 Nix does not warn that the git tree is dirty on these builds. The lock
 files are supposed to be uncommitted at this step.
 
@@ -569,8 +576,8 @@ The block in [Update, audit, test, and switch](#update-audit-test-and-switch)
 is the sequence. One-page copy:
 
 ```bash
-nix flake update
-cargo update
+nix run .#update-flakes
+nix run .#update-software
 just audit-remote
 just check-remote
 just check-heavy

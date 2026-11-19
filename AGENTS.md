@@ -405,14 +405,37 @@ scratch. Call on-disk handoffs **reports**, never "joins".
 ## Git is operator-owned (operator 2026-08-17)
 
 Git is operator-owned. The index and the working tree are **how the
-operator keeps track of what agents did**. Agents never `git add`,
-`git commit`, `git push`, stage, or **touch the index at all**
-(`git restore --staged`, `git reset`, `git rm --cached`, anything that
-writes the index). Finding a staged tree is **not** a reason to unstage.
+operator keeps track of what agents did**. Do not commit. Do not push.
+Do not stage modifications of files that are already tracked. Do not
+unstage, restore, or reset (`git restore --staged`, `git reset`,
+`git rm --cached`). Finding a staged tree is **not** a reason to unstage.
 Do not "fix" or "clean up" Git. That erases their tracker. Tell them if
 they asked. Do not nag about commits. Do not mention uncommitted trees
-in reports unless they asked about Git that turn. Operator 2026-08-28:
-stop touching Git. Unstaging is still touching Git.
+in reports unless they asked about Git that turn. Operator 2026-08-28
+said stop touching Git. That sentence does not cancel the 2026-11-18
+carve-out for a new untracked file. Unstaging stays forbidden.
+The live rule is *New file git add, and the builder is back (operator 2026-11-18)*.
+
+## New file git add, and the builder is back (operator 2026-11-18)
+
+Operator 2026-11-18, always remember. Two rules.
+
+`git add` of a new file is allowed. A new file means a path git does not
+track yet. Stage that path only (`git add -- <path>`). If several new
+files are required, stage each new path and nothing else. Do not
+`git add .`. Do not stage modifications of files that are already
+tracked. Do not unstage, restore, or reset. Do not commit. Do not push.
+The reason: Nix and this repo omit untracked files, and appending a new
+module to an existing file makes that file grow without bound. Prefer a
+new file over a bigger file.
+
+A finished provider maintenance window is not a reason to avoid the
+remote builder. The 2026-11-17 SHC window ended 2026-11-18 09:00 UTC.
+surmount-1 is the builder again. One `just check-remote` at a time.
+`just deploy` stays operator-owned. Do not invent a new "stay off the
+guest" order from that old window.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
 ## GitHub tracking and git-flow branches (operator 2026-09-08)
 
@@ -460,8 +483,9 @@ Public-repo hygiene still applies: no secrets in issues or PR bodies.
 When the operator says **always remember**, that is not a chat promise.
 Write it in **both** this file **and** [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)
 in the same turn (standing rule + compaction reload table). One file is
-attention dilution. Chat-only is compaction loss. Nix needing an untracked
-file is still not a reason to stage.
+attention dilution. Chat-only is compaction loss. A new untracked file
+may be staged with `git add -- <path>` only. Do not stage a tracked
+file for that reason. See *New file git add, and the builder is back (operator 2026-11-18)*.
 
 ## Number parallel items, and name the machine (operator 2026-11-03)
 

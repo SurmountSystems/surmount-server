@@ -7,8 +7,16 @@ mod error;
 mod keys;
 mod nix_conf;
 mod paths;
+mod recipe_batch_01;
+mod recipe_batch_02;
+mod recipe_batch_03;
+mod recipe_batch_04;
+mod recipe_batch_05;
 mod run;
 mod smoke;
+mod update_maintenance;
+mod update_pin_refresh;
+mod vendor_recipe;
 
 pub use args::{ALLOWED_SECRETS_KINDS, DeployOpts, Mode, USAGE, parse_args, validate_secrets_kind};
 pub use error::ToolError;

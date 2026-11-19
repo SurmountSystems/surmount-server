@@ -530,180 +530,188 @@
         }
       );
 
-      apps = forAllSystems (system: {
-        e2e = {
-          type = "app";
-          program = "${self.packages.${system}.e2e}/bin/surmount-e2e";
-        };
-        e2e-host = {
-          type = "app";
-          program = "${self.packages.${system}.e2e-host}/bin/surmount-e2e-host";
-        };
-        surmount-private-data = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-private-data}/bin/surmount-private-data";
-        };
-        surmount-host-logs = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-logs}/bin/surmount-host-logs";
-        };
-        surmount-shc = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-shc}/bin/surmount-shc";
-        };
-        surmount-niced-builder = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-niced-builder}/bin/surmount-niced-builder";
-        };
-        surmount-scram = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-scram}/bin/surmount-scram";
-        };
-        surmount-leftover-homes = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-leftover-homes}/bin/surmount-leftover-homes";
-        };
-        surmount-inxi-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-inxi-host";
-        };
-        surmount-btop-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-btop-host";
-        };
-        surmount-tls-hybrid = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-tls-hybrid";
-        };
-        surmount-et = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-et";
-        };
-        surmount-deploy-static-sites = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-deploy-static-sites";
-        };
-        surmount-sync-static-sites = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-sync-static-sites";
-        };
-        surmount-diskstation-afp-mount = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-afp-mount";
-        };
-        surmount-diskstation-discover = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-discover";
-        };
-        surmount-copy-mailplus-uid = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-copy-mailplus-uid";
-        };
-        surmount-fix-public-dashboard = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-fix-public-dashboard";
-        };
-        surmount-deploy-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-deploy-host}/bin/surmount-deploy-host";
-        };
-        surmount-dns-zone = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-dns-zone}/bin/surmount-dns-zone";
-        };
-        surmount-domain-audit = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-domain-audit}/bin/surmount-domain-audit";
-        };
-        surmount-host-cutover = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-cutover";
-        };
-        acme-dns-hook-namecheap-bin = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap";
-        };
-        surmount-laptop-renew-cert = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/surmount-laptop-renew-cert";
-        };
-        surmount-render-host-profile-acme = {
-          type = "app";
-          program = "${
-            self.packages.${system}.surmount-acme-namecheap
-          }/bin/surmount-render-host-profile-acme";
-        };
-        acme-dns-hook-namecheap-dispatch = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap-dispatch";
-        };
-        acme-dns-hook-lab = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-lab";
-        };
-        surmount-deploy-host-post-switch-smoke = {
-          type = "app";
-          program = "${
-            self.packages.${system}.surmount-deploy-host
-          }/bin/surmount-deploy-host-post-switch-smoke";
-        };
-        surmount-host-material-inventory = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-material-inventory";
-        };
-        register-dkim = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/register-dkim";
-        };
-        free-stalwart-public-443 = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/free-stalwart-public-443";
-        };
-        point-stalwart-mail-tls = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/point-stalwart-mail-tls";
-        };
-        add-stalwart-token = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/add-stalwart-token";
-        };
-        bootstrap-stalwart-api-token = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/bootstrap-stalwart-api-token";
-        };
-        stalwart-recovery-unlock = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/stalwart-recovery-unlock";
-        };
-        surmount-mail-import-maildir = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-mail-import}/bin/surmount-mail-import-maildir";
-        };
-        secrets-install-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-install-host";
-        };
-        secrets-export-bw-to-staging = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-export-bw-to-staging";
-        };
-        surmount-secrets-prompt = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-secrets-prompt}/bin/surmount-secrets-prompt";
-        };
-        surmount-rekey = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-rekey}/bin/surmount-rekey";
-        };
-        speedtest = {
-          type = "app";
-          program = "${self.packages.${system}.speedtest}/bin/speedtest";
-        };
-        scc = {
-          type = "app";
-          program = "${self.packages.${system}.scc}/bin/scc";
-        };
-      });
+      apps = forAllSystems (
+        system:
+        {
+          e2e = {
+            type = "app";
+            program = "${self.packages.${system}.e2e}/bin/surmount-e2e";
+          };
+          e2e-host = {
+            type = "app";
+            program = "${self.packages.${system}.e2e-host}/bin/surmount-e2e-host";
+          };
+          surmount-private-data = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-private-data}/bin/surmount-private-data";
+          };
+          surmount-host-logs = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-logs}/bin/surmount-host-logs";
+          };
+          surmount-shc = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-shc}/bin/surmount-shc";
+          };
+          surmount-niced-builder = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-niced-builder}/bin/surmount-niced-builder";
+          };
+          surmount-scram = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-scram}/bin/surmount-scram";
+          };
+          surmount-leftover-homes = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-leftover-homes}/bin/surmount-leftover-homes";
+          };
+          surmount-inxi-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-inxi-host";
+          };
+          surmount-btop-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-btop-host";
+          };
+          surmount-tls-hybrid = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-tls-hybrid";
+          };
+          surmount-et = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-et";
+          };
+          surmount-grok-oss = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-grok-oss";
+          };
+          surmount-deploy-static-sites = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-deploy-static-sites";
+          };
+          surmount-sync-static-sites = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-sync-static-sites";
+          };
+          surmount-diskstation-afp-mount = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-afp-mount";
+          };
+          surmount-diskstation-discover = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-discover";
+          };
+          surmount-copy-mailplus-uid = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-copy-mailplus-uid";
+          };
+          surmount-fix-public-dashboard = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-fix-public-dashboard";
+          };
+          surmount-deploy-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-deploy-host}/bin/surmount-deploy-host";
+          };
+          surmount-dns-zone = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-dns-zone}/bin/surmount-dns-zone";
+          };
+          surmount-domain-audit = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-domain-audit}/bin/surmount-domain-audit";
+          };
+          surmount-host-cutover = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-cutover";
+          };
+          acme-dns-hook-namecheap-bin = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap";
+          };
+          surmount-laptop-renew-cert = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/surmount-laptop-renew-cert";
+          };
+          surmount-render-host-profile-acme = {
+            type = "app";
+            program = "${
+              self.packages.${system}.surmount-acme-namecheap
+            }/bin/surmount-render-host-profile-acme";
+          };
+          acme-dns-hook-namecheap-dispatch = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap-dispatch";
+          };
+          acme-dns-hook-lab = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-lab";
+          };
+          surmount-deploy-host-post-switch-smoke = {
+            type = "app";
+            program = "${
+              self.packages.${system}.surmount-deploy-host
+            }/bin/surmount-deploy-host-post-switch-smoke";
+          };
+          surmount-host-material-inventory = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-material-inventory";
+          };
+          register-dkim = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/register-dkim";
+          };
+          free-stalwart-public-443 = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/free-stalwart-public-443";
+          };
+          point-stalwart-mail-tls = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/point-stalwart-mail-tls";
+          };
+          add-stalwart-token = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/add-stalwart-token";
+          };
+          bootstrap-stalwart-api-token = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/bootstrap-stalwart-api-token";
+          };
+          stalwart-recovery-unlock = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/stalwart-recovery-unlock";
+          };
+          surmount-mail-import-maildir = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-mail-import}/bin/surmount-mail-import-maildir";
+          };
+          secrets-install-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-install-host";
+          };
+          secrets-export-bw-to-staging = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-export-bw-to-staging";
+          };
+          surmount-secrets-prompt = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-secrets-prompt}/bin/surmount-secrets-prompt";
+          };
+          surmount-rekey = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-rekey}/bin/surmount-rekey";
+          };
+          speedtest = {
+            type = "app";
+            program = "${self.packages.${system}.speedtest}/bin/speedtest";
+          };
+          scc = {
+            type = "app";
+            program = "${self.packages.${system}.scc}/bin/scc";
+          };
+        }
+        // import ./nix/just-recipe-apps.nix { inherit self system; }
+      );
 
       checks = forAllSystems (
         system:
@@ -905,6 +913,10 @@
                 // lib.optionalAttrs (spec.crate == "surmount-host-probe") {
                   src = srcWithJustfile;
                 }
+                // lib.optionalAttrs (spec.crate == "surmount-private-data") {
+                  # The shared src drops extensionless script/git-hooks/pre-commit.
+                  src = self.packages.${system}.surmount-private-data.workspaceSrc;
+                }
               );
               "${spec.crate}-clippy" = mkWave1Clippy spec.crate (
                 lib.optionalAttrs (spec.crate == "surmount-host-probe") {
@@ -951,6 +963,13 @@
               r = import ./tests/deploy-secrets.nix { inherit lib; };
             in
             pkgs.writeText "deploy-secrets-contract" (builtins.toJSON r.ok);
+
+          # Just recipe bodies are one nix run line, or a dependency list.
+          just-recipe-bodies-contract =
+            let
+              r = import ./tests/just-recipe-bodies.nix { inherit lib; };
+            in
+            pkgs.writeText "just-recipe-bodies-contract" (builtins.toJSON r.ok);
 
           # Pure Arti path-shape only (no nixosSystem; full arti in module-eval).
           arti-module-contract =
@@ -1089,6 +1108,7 @@
               (afterFmt e2e-clippy)
               module-eval-contract
               deploy-secrets-contract
+              just-recipe-bodies-contract
               arti-module-contract
               arti-onion-package-contract
               public-site-package-contract
@@ -1115,6 +1135,7 @@
             e2e-clippy
             module-eval-contract
             deploy-secrets-contract
+            just-recipe-bodies-contract
             arti-module-contract
             arti-onion-package-contract
             public-site-package-contract

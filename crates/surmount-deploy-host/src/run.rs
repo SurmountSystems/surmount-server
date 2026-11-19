@@ -84,7 +84,26 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    match crate::args::parse_args(args)? {
+    let owned: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+    if let Some(done) = crate::recipe_batch_01::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_02::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_03::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_04::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_05::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::update_maintenance::maybe_dispatch(&owned) {
+        return done;
+    }
+    match crate::args::parse_args(owned.iter().map(String::as_str))? {
         Mode::Help => {
             print!("{USAGE}");
             Ok(())

@@ -15,12 +15,15 @@ let
   rustToolchain = import ../rust-toolchain.nix { pkgs = pkgsRust; };
   craneLib' = craneLib.overrideToolchain rustToolchain;
 
+  # scanner_contracts opens script/git-hooks/pre-commit from the crate manifest.
+  # filterCargoSources keeps directories plus .rs/.toml only, and this file has no suffix.
   src = lib.cleanSourceWith {
     src = craneLib'.path ../..;
     filter =
       path: type:
       (craneLib'.filterCargoSources path type)
-      || (builtins.match ".*\\.(html|css|js|svg|png|toml|json|txt|md)$" path != null);
+      || (builtins.match ".*\\.(html|css|js|svg|png|toml|json|txt|md)$" path != null)
+      || (builtins.match ".*/script/git-hooks/pre-commit" path != null);
   };
 
   commonArgs = {
@@ -60,4 +63,7 @@ pkgs.symlinkJoin {
       --prefix PATH : ${lib.makeBinPath [ pkgs.git ]}
   '';
   meta = unwrapped.meta;
+  passthru = {
+    workspaceSrc = src;
+  };
 }
