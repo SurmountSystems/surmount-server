@@ -2427,12 +2427,46 @@ let
         '';
       });
 
+      # shadow's man pages run itstool. That attr is an empty
+      # directory, so the command is missing and make exits 127.
+      # The configure default is man pages off. Nixpkgs passes
+      # --enable-man. This host does not need those pages.
+      # Do not add itstool.
+      shadow = prev.shadow.overrideAttrs (old: {
+        configureFlags =
+          let
+            tried = builtins.tryEval (old.configureFlags or [ ]);
+            flags = if tried.success && builtins.isList tried.value then tried.value else [ ];
+          in
+          builtins.filter (flag: flag != "--enable-man") flags
+          ++ [
+            "--disable-man"
+          ];
+        postInstall = (old.postInstall or "") + ''
+          mkdir -p "$man"
+        '';
+      });
+
+      # polkit is off (-Dpolkit=false). Muon still configures
+      # pcscd.service.in, and that file's @requires_polkit@ key is
+      # unset, so configure_file fails. The disabled value is empty.
+      # Do not add polkit.
+      pcsclite = prev.pcsclite.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          substituteInPlace etc/pcscd.service.in \
+            --replace-fail '@requires_polkit@' ""
+        '';
+      });
+
       # The HTML administrators' guide xsltproc target failed.
       # The upstream docs feature is the switch for that target.
       # The same feature also covers the manual pages in doc/.
       # The declared doc and man outputs stay as empty directories.
       # Muon passes an empty link_args string through as "".
       # ld then reports "cannot find :". Drop empty arguments.
+      # The cc setup hook puts the store gcc ahead of
+      # nativeBuildInputs, so this filter has to be prepended
+      # again before configure and before the build.
       # This wrapper is only on the linux-pam build path.
       linux-pam =
         let
@@ -2476,6 +2510,12 @@ let
           nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
             dropEmptyArgCc
           ];
+          preConfigure = (old.preConfigure or "") + ''
+            export PATH="${dropEmptyArgCc}/bin''${PATH:+:}$PATH"
+          '';
+          preBuild = (old.preBuild or "") + ''
+            export PATH="${dropEmptyArgCc}/bin''${PATH:+:}$PATH"
+          '';
           postInstall = (old.postInstall or "") + ''
             mkdir -p "$doc" "$man"
           '';
@@ -2486,6 +2526,124 @@ let
       # The fish binary already compiled. Skip the check.
       fish = prev.fish.overrideAttrs (_old: {
         doCheck = false;
+      });
+
+      # grub 2.12 is fetched from git tag grub-2.12. That tree has
+      # gentpl.py and Makefile.util.def, and it does not have
+      # Makefile.util.am. bootstrap.conf's post-import hook runs
+      # ./autogen.sh, which stops when no interpreter is on PATH,
+      # and automake then cannot open Makefile.util.am.
+      # The same nixpkgs expression already fetches the 2.12 release
+      # tarball for locales. That unpacked tree contains the generated
+      # makefile, unidata.c, and the imported libgcrypt tree.
+      # Copy those files and delete the autogen.sh line so bootstrap
+      # does not invoke an interpreter. Two later patches add
+      # key_protector to the .def files. Mirror that in the copied
+      # makefiles. configure.ac calls AM_PATH_PYTHON and then runs
+      # gentpl to list pci platforms. Replace that macro and write the
+      # pci list from gentpl.GROUPS["pci"]. Do not add an interpreter.
+      grub2 =
+        let
+          grubRelease = prev.fetchzip {
+            url = "https://ftp.gnu.org/gnu/grub/grub-2.12.tar.gz";
+            hash = "sha256-IoRiJHNQ58y0UhCAD0CrpFiI8Mz1upzAtyh5K4Njh/w=";
+          };
+        in
+        prev.grub2.overrideAttrs (old: {
+          postPatch = (old.postPatch or "") + ''
+                        sed -i '/\.\/autogen\.sh/d' bootstrap.conf
+                        chmod u+w configure.ac
+                        sed -i 's/AM_PATH_PYTHON(\[2\.6\])/AC_SUBST([PYTHON], [:])/' configure.ac
+                        sed -i '/^PLATFORMS_PCI=/c\
+            PLATFORMS_PCI=" i386_pc i386_efi i386_qemu i386_coreboot i386_multiboot i386_ieee1275 x86_64_efi mips_loongson "' configure.ac
+                        if grep -F -q 'AM_PATH_PYTHON' configure.ac; then
+                          echo "AM_PATH_PYTHON token still present in configure.ac" >&2
+                          exit 1
+                        fi
+                        if ! grep -F -q 'AC_SUBST([PYTHON], [:])' configure.ac; then
+                          echo "AC_SUBST PYTHON assignment missing in configure.ac" >&2
+                          exit 1
+                        fi
+                        if grep -F -q 'import gentpl' configure.ac; then
+                          echo "gentpl import still present in configure.ac" >&2
+                          exit 1
+                        fi
+                        rel=${grubRelease}
+                        test -f "$rel/Makefile.util.am"
+                        test -f "$rel/grub-core/Makefile.core.am"
+                        test -f "$rel/grub-core/unidata.c"
+                        cp -f "$rel/Makefile.util.am" Makefile.util.am
+                        chmod u+w Makefile.util.am
+                        cp -f "$rel/grub-core/Makefile.core.am" grub-core/Makefile.core.am
+                        chmod u+w grub-core/Makefile.core.am
+                        cp -f "$rel/grub-core/unidata.c" grub-core/unidata.c
+                        chmod u+w grub-core/unidata.c
+                        mkdir -p include/grub/gcrypt
+                        cp -f \
+                          "$rel/include/grub/gcrypt/g10lib.h" \
+                          "$rel/include/grub/gcrypt/gcrypt.h" \
+                          "$rel/include/grub/gcrypt/gpg-error.h" \
+                          include/grub/gcrypt/
+                        rm -rf grub-core/lib/libgcrypt-grub
+                        cp -a "$rel/grub-core/lib/libgcrypt-grub" grub-core/lib/
+                        chmod -R u+w grub-core/lib/libgcrypt-grub
+                        echo timestamp > stamp-h.in
+                        sed -i 's|grub-core/disk/luks.c|grub-core/disk/key_protector.c grub-core/disk/luks.c|' Makefile.util.am
+                        awk '
+                          $0 ~ /^platform_PROGRAMS \+= scsi\.module$/ { grab=1 }
+                          grab { print }
+                          grab && /grep .MARKER/ { exit }
+                        ' grub-core/Makefile.core.am \
+                          | sed \
+                            -e 's/scsi\.module/key_protector.module/g' \
+                            -e 's/scsi_module/key_protector_module/g' \
+                            -e 's/scsi\.marker/key_protector.marker/g' \
+                            -e 's/scsi\.mod/key_protector.mod/g' \
+                            -e 's|disk\/scsi\.c|disk/key_protector.c|g' \
+                          >> grub-core/Makefile.core.am
+                        find . -iname '*.[ch]' \
+                          ! -ipath './grub-core/lib/libgcrypt-grub/*' \
+                          ! -ipath './build-aux/*' \
+                          ! -ipath './grub-core/lib/libgcrypt/src/misc.c' \
+                          ! -ipath './grub-core/lib/libgcrypt/src/global.c' \
+                          ! -ipath './grub-core/lib/libgcrypt/src/secmem.c' \
+                          ! -ipath './util/grub-gen-widthspec.c' \
+                          ! -ipath './util/grub-gen-asciih.c' \
+                          ! -ipath './gnulib/*' \
+                          ! -ipath './grub-core/lib/gnulib/*' \
+                          | sort > po/POTFILES.in
+                        find util -iname '*.in' ! -name Makefile.in | sort > po/POTFILES-shell.in
+                        test -f Makefile.util.am
+                        test -f grub-core/Makefile.core.am
+          '';
+          # bootstrap generates configure after postPatch. Fail here if
+          # that script still searches for an interpreter or imports gentpl.
+          preConfigure = (old.preConfigure or "") + ''
+            if grep -F -q 'for a Python interpreter with version >= 2.6' configure; then
+              echo "generated configure still requires a Python interpreter" >&2
+              exit 1
+            fi
+            if grep -F -q 'import gentpl' configure; then
+              echo "generated configure still imports gentpl" >&2
+              exit 1
+            fi
+          '';
+        });
+
+      # libnbd 1.22.5 configure.ac AC_ARG_ENABLE([fuse]) documents
+      # --disable-fuse. nbdfuse.c uses the FUSE 3 API. This build
+      # was compiling it against fuse 2.9.9 headers. The mail host
+      # does not need the NBD FUSE mount. Do not add fuse3.
+      libnbd = prev.libnbd.overrideAttrs (old: {
+        configureFlags =
+          let
+            tried = builtins.tryEval (old.configureFlags or [ ]);
+            flags = if tried.success && builtins.isList tried.value then tried.value else [ ];
+          in
+          flags
+          ++ [
+            "--disable-fuse"
+          ];
       });
 
       # Introspection builds gobject-introspection, which runs Python
