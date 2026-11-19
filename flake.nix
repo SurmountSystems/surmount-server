@@ -48,45 +48,45 @@
     # pkgs/development/compilers/rust/1_99.nix at rustcVersion = "1.99.1".
     # 1_100.nix is HTTP 404 on master, staging, and nixos-unstable.
     # The stable 1.100.0 file is commit
-    # fd400cc205c104a499657a82680b6a3eaa8b7d8e (message
+    # 30a691ce22c321e72f2e4fd205b6c55cd6e66502 (message
     # "rust: 1.99.1 -> 1.100.0", commit date 2026-11-10), open as
     # NixOS/nixpkgs pull 586088 against staging, not merged. That file
     # sets rustcVersion = "1.100.0" and bootstrapVersion = "1.100.0".
     # Prior lock 9ecc0a672e9ef2ca4eec8e87dbee653607a7d332 was rustc 1.99.1.
     # Crane has no nixpkgs input: mkLib keeps host pkgs and
     # overrideToolchain supplies this rustc.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/fd400cc205c104a499657a82680b6a3eaa8b7d8e";
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/30a691ce22c321e72f2e4fd205b6c55cd6e66502";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
     # Crane release v0.24.0 is 692f7e9 (2026-08-21), older than master.
-    # Master tip 79fd63528501446749c09f08cad486a58c7d173e, read 2026-11-16
+    # Master tip 95e62def851e9d650f0eab63cb4f59a3306e20bd, read 2026-11-16
     # (commit date 2026-11-04). Subject: Make  both `name`/`version` take
     # precedence if in `[workspace.metadata.crane]` (#1099). GitHub checks
     # "run tests" and "run tests 26.05" succeeded. Not a broken HEAD.
     # Prior pin bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a.
-    crane.url = "github:ipetkov/crane/79fd63528501446749c09f08cad486a58c7d173e";
+    crane.url = "github:ipetkov/crane/95e62def851e9d650f0eab63cb4f59a3306e20bd";
     # crane follows its own nixpkgs; we pass pkgs from our nixpkgs in outputs.
 
     # sops-nix has no versioned GitHub release. Tip
-    # 11e5885d241743ff0193465d533b20e754bc3ce0, read 2026-11-16 (commit
+    # 7c637afdccdf9bcf35c4a2d67b58a77c1fd843a4, read 2026-11-16 (commit
     # date 2026-11-14). Subject: update vendorHash, after the
     # go.opentelemetry.io/otel/sdk bump. GitHub check "tests" succeeded.
     # Not a broken HEAD. Prior pin
     # 44931708c62937c2b1bf7953902989fa5bb9ee1b.
     sops-nix = {
-      url = "github:Mic92/sops-nix/11e5885d241743ff0193465d533b20e754bc3ce0";
+      url = "github:Mic92/sops-nix/7c637afdccdf9bcf35c4a2d67b58a77c1fd843a4";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
     # Rust nixfmt (Mic92/nixfmt-rs), not Haskell pkgs.nixfmt.
-    # Default-branch HEAD c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039,
+    # Default-branch HEAD 346cbaf52347495cc97ac316ef4e37108bab5dd8,
     # read 2026-11-05 (commit date 2026-10-14). Do not float main.
     # Their published byte match is Haskell nixfmt 1.2.0, not this
     # channel's pkgs.nixfmt 1.5.0. Do not set inputs.nixpkgs.follows:
     # their flake pins its own nixpkgs, so this repo's gcc.arch overlay
     # cannot reach the formatter build.
-    nixfmt-rs.url = "github:Mic92/nixfmt-rs/c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039";
+    nixfmt-rs.url = "github:Mic92/nixfmt-rs/346cbaf52347495cc97ac316ef4e37108bab5dd8";
 
     # Public static site for apex/www. Fetch the git tree (HTML/CSS/JS).
     # Operator bumps: just publish (nix flake update surmount-site).
@@ -498,7 +498,7 @@
           # Upstream attribute is packages.${system}.default. Binary name
           # is nixfmt. Author claims byte-identical output with Haskell
           # nixfmt 1.2.0, not with nixos-26.05 pkgs.nixfmt 1.5.0.
-          # Pin c22b2c9ef0ad3b66f97ebd6296fbba298aa9e039, read 2026-11-05.
+          # Pin 346cbaf52347495cc97ac316ef4e37108bab5dd8, read 2026-11-05.
           # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt ...
           nixfmt = nixfmt-rs.packages.${system}.default;
           # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
