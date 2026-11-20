@@ -570,7 +570,7 @@ let
               (mesonProbeStubFor prev)
               # mount.pc and libseccomp.pc. The setup hook publishes them.
               # This is not a PKG_CONFIG_PATH prepend.
-              (prev.lib.getDev prev.util-linux)
+              (prev.lib.getDev prev.util-linuxMinimal)
               (prev.lib.getDev prev.libseccomp)
             ];
           postPatch = (old.postPatch or "") + ''
@@ -1233,7 +1233,10 @@ let
                           # plain buildInput never becomes DT_NEEDED. --no-as-needed
                           # keeps -lmount and -lseccomp on the link line. -rpath is
                           # the runtime search path for those sonames.
-                          mount_lib="${prev.lib.getLib prev.util-linux}/lib"
+                          # cc-wrapper prefixes -Wl, on each NIX_LDFLAGS word that
+                          # is not -L/. A -Wl, word becomes -Wl,-Wl, and meson
+                          # link tests fail. Write the linker flags bare.
+                          mount_lib="${prev.lib.getLib prev.util-linuxMinimal}/lib"
                           seccomp_lib="${prev.lib.getLib prev.libseccomp}/lib"
                           if [ ! -e "$mount_lib/libmount.so.1" ]; then
                             echo "libmount.so.1 is missing" >&2
@@ -1243,7 +1246,7 @@ let
                             echo "libseccomp.so.2 is missing" >&2
                             exit 1
                           fi
-                          export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-L$mount_lib -L$seccomp_lib -Wl,--no-as-needed -lmount -lseccomp -Wl,--as-needed -rpath $mount_lib -rpath $seccomp_lib"
+                          export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-L$mount_lib -L$seccomp_lib --no-as-needed -lmount -lseccomp --as-needed -rpath $mount_lib -rpath $seccomp_lib"
           '';
           env = (old.env or { }) // {
             # Do not -D any KEY_ name here. Those are keyboard gperf
@@ -1290,9 +1293,18 @@ let
             prev.stdenv.cc.cc.lib
             final.openssl
             final.tpm2-tss
-            (prev.lib.getLib prev.util-linux)
+            (prev.lib.getLib prev.util-linuxMinimal)
             (prev.lib.getLib prev.libseccomp)
           ];
+          # Meson install runs the installed systemd before postFixup.
+          # That binary needs libmount.so.1. The loader does not search
+          # the util-linux lib yet. LD_LIBRARY_PATH covers that script.
+          # postFixup writes the permanent rpath.
+          preInstall = (old.preInstall or "") + ''
+            mount_lib="${prev.lib.getLib prev.util-linuxMinimal}/lib"
+            seccomp_lib="${prev.lib.getLib prev.libseccomp}/lib"
+            export LD_LIBRARY_PATH="$mount_lib:$seccomp_lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          '';
           # Compile still needs the three relative include flags above.
           # Fixup runs another compiler after the build directory is done.
           # That compiler treats override/unistd.h include_next as an error
@@ -1341,7 +1353,7 @@ let
           # Link line above asks for DT_NEEDED. patchelf writes it again if
           # meson dropped --no-as-needed. The libs-only output has no pid1.
           postFixup = (old.postFixup or "") + ''
-            mount_lib="${prev.lib.getLib prev.util-linux}/lib"
+            mount_lib="${prev.lib.getLib prev.util-linuxMinimal}/lib"
             seccomp_lib="${prev.lib.getLib prev.libseccomp}/lib"
             if [ ! -e "$mount_lib/libmount.so.1" ]; then
               echo "libmount.so.1 is missing" >&2
