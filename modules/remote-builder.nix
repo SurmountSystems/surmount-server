@@ -152,17 +152,31 @@ in
     # SHC 261/262: prefer killing the builder over mail when the guest
     # is tight. MemoryMax alone does not protect mail if the builder
     # cap is most of guest RAM.
-    systemd.services.nix-daemon.serviceConfig = {
-      MemoryAccounting = true;
-      MemoryMax = rb.memoryMax;
-      Nice = 19;
-      IOSchedulingClass = lib.mkForce "idle";
-      OOMScoreAdjust = 500;
-      SyslogIdentifier = "nix-daemon";
-      LogRateLimitIntervalSec = "30s";
-      LogRateLimitBurst = 50000;
-    }
-    // sliceCpu;
+    # pkgs.nix is the upstream binary and does not install
+    # nix-daemon.service. NixOS still generates this unit from the
+    # serviceConfig set here, so ExecStart has to be on this same unit.
+    # @ sets argv0 to nix-daemon. The binary is the multicall symlink.
+    systemd.services.nix-daemon = {
+      requires = [ "nix-daemon.socket" ];
+      after = [ "nix-daemon.socket" ];
+      serviceConfig = {
+        ExecStart = "@${nixDaemon} nix-daemon --daemon";
+        MemoryAccounting = true;
+        MemoryMax = rb.memoryMax;
+        Nice = 19;
+        IOSchedulingClass = lib.mkForce "idle";
+        OOMScoreAdjust = 500;
+        SyslogIdentifier = "nix-daemon";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
+      }
+      // sliceCpu;
+    };
+
+    # The same missing package unit left the socket with no Listen line.
+    systemd.sockets.nix-daemon.listenStreams = [
+      "/nix/var/nix/daemon-socket/socket"
+    ];
 
     systemd.services.stalwart-mail.serviceConfig.OOMScoreAdjust = -300;
     systemd.services.surmount-management-ui.serviceConfig.OOMScoreAdjust = -300;

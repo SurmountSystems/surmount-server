@@ -568,6 +568,10 @@ let
             ++ [
               minijinjaCli
               (mesonProbeStubFor prev)
+              # mount.pc and libseccomp.pc. The setup hook publishes them.
+              # This is not a PKG_CONFIG_PATH prepend.
+              (prev.lib.getDev prev.util-linux)
+              (prev.lib.getDev prev.libseccomp)
             ];
           postPatch = (old.postPatch or "") + ''
                           # Meson stores default-user-timeout-sec as the string
@@ -1225,6 +1229,21 @@ let
                             *":$NIX_BUILD_TOP/bin:"*) ;;
                             *) export PATH="$NIX_BUILD_TOP/bin:$PATH" ;;
                           esac
+                          # systemd 260 dlopens these and the link uses --as-needed, so a
+                          # plain buildInput never becomes DT_NEEDED. --no-as-needed
+                          # keeps -lmount and -lseccomp on the link line. -rpath is
+                          # the runtime search path for those sonames.
+                          mount_lib="${prev.lib.getLib prev.util-linux}/lib"
+                          seccomp_lib="${prev.lib.getLib prev.libseccomp}/lib"
+                          if [ ! -e "$mount_lib/libmount.so.1" ]; then
+                            echo "libmount.so.1 is missing" >&2
+                            exit 1
+                          fi
+                          if [ ! -e "$seccomp_lib/libseccomp.so.2" ]; then
+                            echo "libseccomp.so.2 is missing" >&2
+                            exit 1
+                          fi
+                          export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-L$mount_lib -L$seccomp_lib -Wl,--no-as-needed -lmount -lseccomp -Wl,--as-needed -rpath $mount_lib -rpath $seccomp_lib"
           '';
           env = (old.env or { }) // {
             # Do not -D any KEY_ name here. Those are keyboard gperf
@@ -1264,10 +1283,15 @@ let
           # executable still lists HAVE_OPENSSL and HAVE_TPM2, so those
           # libraries have to be found or meson does not install the
           # binary. Bootloader stays disabled.
+          # libmount and libseccomp are runtime inputs. systemd dlopens
+          # libmount.so.1 and libseccomp.so.2. The dev outputs above are
+          # only so meson can find the libraries when the features are enabled.
           buildInputs = (old.buildInputs or [ ]) ++ [
             prev.stdenv.cc.cc.lib
             final.openssl
             final.tpm2-tss
+            (prev.lib.getLib prev.util-linux)
+            (prev.lib.getLib prev.libseccomp)
           ];
           # Compile still needs the three relative include flags above.
           # Fixup runs another compiler after the build directory is done.
@@ -1314,6 +1338,86 @@ let
             drop_dangling_debug_source_outputs
             fixupOutputHooks+=(drop_dangling_debug_source_outputs)
           '';
+          # Link line above asks for DT_NEEDED. patchelf writes it again if
+          # meson dropped --no-as-needed. The libs-only output has no pid1.
+          postFixup = (old.postFixup or "") + ''
+            mount_lib="${prev.lib.getLib prev.util-linux}/lib"
+            seccomp_lib="${prev.lib.getLib prev.libseccomp}/lib"
+            if [ ! -e "$mount_lib/libmount.so.1" ]; then
+              echo "libmount.so.1 is missing" >&2
+              exit 1
+            fi
+            if [ ! -e "$seccomp_lib/libseccomp.so.2" ]; then
+              echo "libseccomp.so.2 is missing" >&2
+              exit 1
+            fi
+            resolve_elf() {
+              elf=$1
+              if [ -z "$elf" ] || [ ! -e "$elf" ]; then
+                return 1
+              fi
+              if [ -L "$elf" ]; then
+                elf=$(readlink -f "$elf")
+              fi
+              case "$elf" in
+                "$out"/*) ;;
+                *) return 1 ;;
+              esac
+              if [ ! -f "$elf" ]; then
+                return 1
+              fi
+              if ! patchelf --print-needed "$elf" >/dev/null 2>&1; then
+                return 1
+              fi
+              printf '%s\n' "$elf"
+            }
+            add_rpath() {
+              elf=$1
+              dir=$2
+              got=$(patchelf --print-rpath "$elf")
+              case ":$got:" in
+                *":$dir:"*) return 0 ;;
+              esac
+              if [ -n "$got" ]; then
+                patchelf --set-rpath "$got:$dir" "$elf"
+              else
+                patchelf --set-rpath "$dir" "$elf"
+              fi
+            }
+            add_needed() {
+              elf=$1
+              soname=$2
+              if patchelf --print-needed "$elf" | grep -F -x -q "$soname"; then
+                return 0
+              fi
+              patchelf --add-needed "$soname" "$elf"
+            }
+            for elf in \
+              "$out"/lib/systemd/systemd \
+              "$out"/lib/systemd/libsystemd-shared-*.so \
+              "$out"/lib/systemd/libsystemd-core-*.so \
+              "$out"/bin/systemd-analyze \
+              "$out"/bin/systemctl
+            do
+              resolved=$(resolve_elf "$elf") || continue
+              add_rpath "$resolved" "$mount_lib"
+              add_rpath "$resolved" "$seccomp_lib"
+              add_needed "$resolved" libmount.so.1
+              add_needed "$resolved" libseccomp.so.2
+            done
+            if [ -e "$out/lib/systemd/systemd" ]; then
+              pid1=$(resolve_elf "$out/lib/systemd/systemd") || {
+                echo "systemd pid1 is not an ELF" >&2
+                exit 1
+              }
+              for soname in libmount.so.1 libseccomp.so.2; do
+                if ! patchelf --print-needed "$pid1" | grep -F -x -q "$soname"; then
+                  echo "systemd is missing DT_NEEDED $soname" >&2
+                  exit 1
+                fi
+              done
+            fi
+          '';
           # switch-to-configuration build.rs reads
           # share/dbus-1/interfaces/org.freedesktop.systemd1.Manager.xml.
           # -Ddbus-interfaces-dir=no skipped that install. Keep a real
@@ -1340,6 +1444,12 @@ let
                 && flag != "-Dopenssl=disabled"
                 && flag != "-Dtpm2=enabled"
                 && flag != "-Dtpm2=disabled"
+                && flag != "-Dlibmount=enabled"
+                && flag != "-Dlibmount=disabled"
+                && flag != "-Dlibmount=auto"
+                && flag != "-Dseccomp=enabled"
+                && flag != "-Dseccomp=disabled"
+                && flag != "-Dseccomp=auto"
               ) (old.mesonFlags or [ ]);
               hasDbusInterfaces = builtins.any (flag: prev.lib.hasPrefix "-Ddbus-interfaces-dir=" flag) kept;
             in
@@ -1349,6 +1459,11 @@ let
               "-Dbootloader=disabled"
               "-Dopenssl=enabled"
               "-Dtpm2=enabled"
+              # Feature name is libmount. enabled requires mount.pc.
+              "-Dlibmount=enabled"
+              # Feature name is seccomp. That option links libseccomp.
+              # There is no -Dlibseccomp option in systemd 260.
+              "-Dseccomp=enabled"
             ]
             ++ prev.lib.optionals (!hasDbusInterfaces) [
               "-Ddbus-interfaces-dir=${placeholder "out"}/share/dbus-1/interfaces"
@@ -2923,15 +3038,91 @@ let
           ];
           nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
             dropEmptyArgCc
+            prev.patchelf
+          ];
+          # libcrypt.so.2 is DT_NEEDED. The module is dlopened, so the loader
+          # uses pam_unix.so's own RUNPATH, not the caller's. -rpath writes
+          # that path at link time.
+          buildInputs = (old.buildInputs or [ ]) ++ [
+            prev.libxcrypt
           ];
           preConfigure = (old.preConfigure or "") + ''
             export PATH="${dropEmptyArgCc}/bin''${PATH:+:}$PATH"
+            crypt_lib="${prev.lib.getLib prev.libxcrypt}/lib"
+            if [ ! -e "$crypt_lib/libcrypt.so.2" ]; then
+              echo "libxcrypt did not provide libcrypt.so.2" >&2
+              exit 1
+            fi
+            export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-rpath $crypt_lib"
           '';
           preBuild = (old.preBuild or "") + ''
             export PATH="${dropEmptyArgCc}/bin''${PATH:+:}$PATH"
+            crypt_lib="${prev.lib.getLib prev.libxcrypt}/lib"
+            export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-rpath $crypt_lib"
           '';
           postInstall = (old.postInstall or "") + ''
             mkdir -p "$doc" "$man"
+          '';
+          # patchelf is what still records the path if meson drops NIX_LDFLAGS.
+          # dlopen of pam_unix.so resolves libcrypt.so.2 from this RUNPATH.
+          postFixup = (old.postFixup or "") + ''
+            crypt_lib="${prev.lib.getLib prev.libxcrypt}/lib"
+            if [ ! -e "$crypt_lib/libcrypt.so.2" ]; then
+              echo "libxcrypt did not provide libcrypt.so.2" >&2
+              exit 1
+            fi
+            found=0
+            for so in "$out"/lib/security/*.so "$out"/lib/security/*.so.*; do
+              if [ ! -f "$so" ] && [ ! -L "$so" ]; then
+                continue
+              fi
+              elf=$so
+              if [ -L "$elf" ]; then
+                elf=$(readlink -f "$elf")
+              fi
+              if [ ! -f "$elf" ]; then
+                continue
+              fi
+              if ! patchelf --print-needed "$elf" | grep -F -q 'libcrypt.so.2'; then
+                continue
+              fi
+              found=1
+              got=$(patchelf --print-rpath "$elf")
+              case ":$got:" in
+                *":$crypt_lib:"*) ;;
+                *)
+                  if [ -n "$got" ]; then
+                    patchelf --set-rpath "$got:$crypt_lib" "$elf"
+                  else
+                    patchelf --set-rpath "$crypt_lib" "$elf"
+                  fi
+                  ;;
+              esac
+              got=$(patchelf --print-rpath "$elf")
+              case ":$got:" in
+                *":$crypt_lib:"*) ;;
+                *)
+                  echo "pam module rpath is missing libxcrypt: $elf" >&2
+                  exit 1
+                  ;;
+              esac
+            done
+            if [ "$found" -ne 1 ] && [ ! -f "$out/lib/security/pam_unix.so" ]; then
+              echo "pam_unix.so was not installed" >&2
+              exit 1
+            fi
+            if ! patchelf --print-needed "$out/lib/security/pam_unix.so" | grep -F -q 'libcrypt.so.2'; then
+              echo "pam_unix.so does not need libcrypt.so.2" >&2
+              exit 1
+            fi
+            got=$(patchelf --print-rpath "$out/lib/security/pam_unix.so")
+            case ":$got:" in
+              *":$crypt_lib:"*) ;;
+              *)
+                echo "pam_unix.so rpath is missing libxcrypt" >&2
+                exit 1
+                ;;
+            esac
           '';
         });
 
