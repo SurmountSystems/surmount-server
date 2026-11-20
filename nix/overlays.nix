@@ -474,6 +474,11 @@ let
             # from this build. The test copy is not part of the library.
             exit 0
             ;;
+          make-autosuspend-rules.py)
+            # Mail host does not use Chromium OS autosuspend rules.
+            # Meson -c writes stdout into the hwdb file. Print nothing.
+            exit 0
+            ;;
         esac
         if [ -f "$1" ]; then
           shebang=$(head -n 1 "$1" || true)
@@ -1003,6 +1008,60 @@ let
                             echo "copied keyctl.h does not name key_serial_t" >&2
                             exit 1
                           fi
+                          # systemd-tpm2-setup, systemd-tpm2-clear, and
+                          # systemd-tpm2-generator are userspace programs.
+                          # Upstream puts ENABLE_BOOTLOADER in the conditions
+                          # list and again on the nvpcr if, which uses and
+                          # rather than &&. -Dbootloader=enabled makes
+                          # meson.build require the python module elftools,
+                          # so that option stays disabled. Drop that
+                          # conditions entry and the whole nvpcr if. Leave
+                          # the openssl and tpm2 conditions. Do not add a
+                          # C file.
+                          if [ -f src/tpm2-setup/meson.build ]; then
+                            awk '
+                              BEGIN { skip = 0 }
+                              {
+                                stripped = $0
+                                gsub(/[[:space:]]/, "", stripped)
+                                if (stripped == "\047ENABLE_BOOTLOADER\047,") next
+                                if (skip == 1) {
+                                  if (stripped == "endif") skip = 0
+                                  next
+                                }
+                                if (stripped == "ifconf.get(\047ENABLE_BOOTLOADER\047)!=1" || stripped == "ifconf.get(\047ENABLE_BOOTLOADER\047)==0" || stripped == "ifconf.get(\047ENABLE_BOOTLOADER\047)==1andconf.get(\047HAVE_OPENSSL\047)==1andconf.get(\047HAVE_TPM2\047)==1") {
+                                  skip = 1
+                                  next
+                                }
+                                line = $0
+                                sub(/conf\.get\(\047ENABLE_BOOTLOADER\047\) *== *1 *&& */, "", line)
+                                sub(/ *&& *conf\.get\(\047ENABLE_BOOTLOADER\047\) *== *1/, "", line)
+                                sub(/conf\.get\(\047ENABLE_BOOTLOADER\047\) *!= *1 *&& */, "", line)
+                                sub(/ *&& *conf\.get\(\047ENABLE_BOOTLOADER\047\) *!= *1/, "", line)
+                                sub(/conf\.get\(\047ENABLE_BOOTLOADER\047\) *!= *1 *or */, "", line)
+                                sub(/ *or *conf\.get\(\047ENABLE_BOOTLOADER\047\) *!= *1/, "", line)
+                                sub(/conf\.get\(\047ENABLE_BOOTLOADER\047\) *== *1 *or */, "", line)
+                                sub(/ *or *conf\.get\(\047ENABLE_BOOTLOADER\047\) *== *1/, "", line)
+                                sub(/conf\.get\(\047ENABLE_BOOTLOADER\047\) *== *1 *and */, "", line)
+                                sub(/ *and *conf\.get\(\047ENABLE_BOOTLOADER\047\) *== *1/, "", line)
+                                if (line ~ /^[[:space:]]*if[[:space:]]*$/) next
+                                print line
+                              }
+                            ' src/tpm2-setup/meson.build > src/tpm2-setup/meson.build.userspace
+                            mv src/tpm2-setup/meson.build.userspace src/tpm2-setup/meson.build
+                            if ! grep -F -q "systemd-tpm2-setup" src/tpm2-setup/meson.build; then
+                              echo "tpm2-setup meson.build lost systemd-tpm2-setup" >&2
+                              exit 1
+                            fi
+                            if ! grep -F -q "HAVE_TPM2" src/tpm2-setup/meson.build; then
+                              echo "tpm2-setup meson.build lost HAVE_TPM2" >&2
+                              exit 1
+                            fi
+                            if grep -F -q "'ENABLE_BOOTLOADER'" src/tpm2-setup/meson.build; then
+                              echo "tpm2-setup meson.build still gates on ENABLE_BOOTLOADER" >&2
+                              exit 1
+                            fi
+                          fi
                           # sd-id128.c does not include linux/keyctl.h. The six
                           # KEY_ names it uses are -D flags on that one gcc
                           # command, not in NIX_CFLAGS_COMPILE. A global -D
@@ -1201,15 +1260,237 @@ let
               + " -I ../src/include/override"
               + " -idirafter ../src/include/bpf-insn-next";
           };
-          # This flag skips installing the interface XML. The export
-          # target still runs. meson-probe-stub accepts dbus_exporter.py
-          # and creates the ninja output without running that script.
-          # The libraries do not need that XML to link.
+          # systemd-minimal turns openssl and tpm2 off. The tpm2-setup
+          # executable still lists HAVE_OPENSSL and HAVE_TPM2, so those
+          # libraries have to be found or meson does not install the
+          # binary. Bootloader stays disabled.
+          buildInputs = (old.buildInputs or [ ]) ++ [
+            prev.stdenv.cc.cc.lib
+            final.openssl
+            final.tpm2-tss
+          ];
+          # Compile still needs the three relative include flags above.
+          # Fixup runs another compiler after the build directory is done.
+          # That compiler treats override/unistd.h include_next as an error
+          # under -Werror=pedantic. Drop only those three flags here.
+          preFixup = (old.preFixup or "") + ''
+            strip_systemd_inc() {
+              printf '%s\n' "$1" | sed \
+                -e 's/-I \.\.\/src\/include\/override-first//g' \
+                -e 's/-I \.\.\/src\/include\/override//g' \
+                -e 's/-idirafter \.\.\/src\/include\/bpf-insn-next//g'
+            }
+            export NIX_CFLAGS_COMPILE="$(strip_systemd_inc "$NIX_CFLAGS_COMPILE")"
+            export NIX_CFLAGS_COMPILE_BEFORE="$(strip_systemd_inc "$NIX_CFLAGS_COMPILE_BEFORE")"
+            # separateDebugInfo writes lib/debug/.build-id/*/*.source
+            # during fixupOutput, after preFixup and before
+            # noBrokenSymlinks. -e follows the link. Delete the link
+            # when that target is missing. Keep it when the target
+            # exists. Do not match a target basename.
+            drop_dangling_debug_source() {
+              root=$1
+              if [ -z "$root" ] || [ ! -d "$root" ]; then
+                return 0
+              fi
+              find "$root" -type l -name '*.source' -print | while IFS= read -r link; do
+                case "$link" in
+                  */lib/debug/*) ;;
+                  *) continue ;;
+                esac
+                if [ -e "$link" ]; then
+                  continue
+                fi
+                rm -f "$link"
+              done
+            }
+            drop_dangling_debug_source_outputs() {
+              name=
+              root=
+              for name in $(getAllOutputNames); do
+                root=''${!name}
+                drop_dangling_debug_source "$root"
+              done
+            }
+            drop_dangling_debug_source_outputs
+            fixupOutputHooks+=(drop_dangling_debug_source_outputs)
+          '';
+          # switch-to-configuration build.rs reads
+          # share/dbus-1/interfaces/org.freedesktop.systemd1.Manager.xml.
+          # -Ddbus-interfaces-dir=no skipped that install. Keep a real
+          # interfaces directory from upstream, or set this output when
+          # upstream did not. The exporter stub does not write the XML.
+          # postInstall writes it from the built systemd binary.
+          # The mail host does not need systemd PKCS#11. p11-kit-1
+          # requires libffi.pc, and that file is not in this build.
+          # The bootloader option name is bootloader. enabled makes
+          # meson.build:1890 require the python module elftools, so
+          # this build keeps -Dbootloader=disabled. The real
+          # systemd-tpm2-setup binary is built by dropping that gate
+          # in src/tpm2-setup/meson.build. openssl and tpm2 stay on so
+          # HAVE_OPENSSL and HAVE_TPM2 are 1.
           mesonFlags =
-            (builtins.filter (flag: !(prev.lib.hasPrefix "-Ddbus-interfaces-dir=" flag)) (
-              old.mesonFlags or [ ]
-            ))
-            ++ [ "-Ddbus-interfaces-dir=no" ];
+            let
+              kept = builtins.filter (
+                flag:
+                flag != "-Dp11kit=enabled"
+                && flag != "-Dbootloader=enabled"
+                && flag != "-Dbootloader=disabled"
+                && flag != "-Ddbus-interfaces-dir=no"
+                && flag != "-Dopenssl=enabled"
+                && flag != "-Dopenssl=disabled"
+                && flag != "-Dtpm2=enabled"
+                && flag != "-Dtpm2=disabled"
+              ) (old.mesonFlags or [ ]);
+              hasDbusInterfaces = builtins.any (flag: prev.lib.hasPrefix "-Ddbus-interfaces-dir=" flag) kept;
+            in
+            kept
+            ++ [
+              "-Dp11kit=disabled"
+              "-Dbootloader=disabled"
+              "-Dopenssl=enabled"
+              "-Dtpm2=enabled"
+            ]
+            ++ prev.lib.optionals (!hasDbusInterfaces) [
+              "-Ddbus-interfaces-dir=${placeholder "out"}/share/dbus-1/interfaces"
+            ];
+          # initrd-units copies this example unit and fails if it is absent.
+          # The mail host does not start TPM2 setup from the initrd.
+          postInstall = (old.postInstall or "") + ''
+                        tpm2_unit="$out/example/systemd/system/systemd-tpm2-setup-early.service"
+                        if [ ! -e "$tpm2_unit" ]; then
+                          mkdir -p "$(dirname "$tpm2_unit")"
+                          cat > "$tpm2_unit" << 'EOF'
+            [Unit]
+            Description=Early TPM2 setup is not installed on this host
+            DefaultDependencies=no
+
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/bin/sh -c "exit 0"
+            EOF
+                        fi
+                        # withBootloader is false, so system-units does not
+                        # copy systemd-boot example units. withTpm2Units stays
+                        # the value this package already computed, so these
+                        # four files are still required. Meson skips them when
+                        # ENABLE_BOOTLOADER is 0. Copy the existing source
+                        # units. Do not pass -Dbootloader=enabled.
+                        # Do not assign src. separateDebugInfo indexes that
+                        # Nix path as the debug source. A relative .in path
+                        # becomes a dangling .source link. The rendered
+                        # unit name is dest_name. The .in template is not
+                        # installed.
+                        copy_skipped_unit() {
+                          src_name=$1
+                          dest_name=$2
+                          dest="$out/example/systemd/system/$dest_name"
+                          if [ -e "$dest" ]; then
+                            return 0
+                          fi
+                          unit_src=
+                          for dir in units ../units; do
+                            if [ -f "$dir/$src_name" ]; then
+                              unit_src=$dir/$src_name
+                              break
+                            fi
+                          done
+                          if [ -z "$unit_src" ]; then
+                            echo "unit source $src_name is missing" >&2
+                            exit 1
+                          fi
+                          mkdir -p "$(dirname "$dest")"
+                          sed "s|{{LIBEXECDIR}}|$out/lib/systemd|g" "$unit_src" > "$dest"
+                          if [ ! -s "$dest" ]; then
+                            echo "unit $dest_name was not written" >&2
+                            exit 1
+                          fi
+                          if grep -F -q '{{LIBEXECDIR}}' "$dest"; then
+                            echo "unit $dest_name still has a libexec template" >&2
+                            exit 1
+                          fi
+                        }
+                        copy_skipped_unit "systemd-pcrlock@.service.in" "systemd-pcrlock@.service"
+                        copy_skipped_unit "systemd-pcrlock.socket" "systemd-pcrlock.socket"
+                        copy_skipped_unit "systemd-tpm2-clear.service.in" "systemd-tpm2-clear.service"
+                        copy_skipped_unit "systemd-tpm2-setup.service.in" "systemd-tpm2-setup.service"
+                        # Do not copy systemd-boot-random-seed.service.
+                        # The mail host uses grub. That unit is not installed
+                        # when the bootloader option is disabled, and a debug
+                        # .source link for it points at a missing file.
+                        # The bootloader option stays disabled. tpm2-setup is built
+                        # without that gate, so this path is the real binary.
+                        # A symlink whose target is missing makes initrd copy fail.
+                        # Copy through a symlink that has a real target. Do not write
+                        # a fake helper and do not delete the helper.
+                        make_real() {
+                          path=$1
+                          label=$2
+                          if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+                            echo "$label is not installed" >&2
+                            exit 1
+                          fi
+                          if [ -L "$path" ]; then
+                            if [ ! -f "$path" ]; then
+                              echo "$label symlink has no target" >&2
+                              exit 1
+                            fi
+                            cp -L "$path" "$path.real"
+                            rm -f "$path"
+                            mv "$path.real" "$path"
+                            chmod 755 "$path"
+                          fi
+                          if [ ! -f "$path" ] || [ -L "$path" ]; then
+                            echo "$label is not a regular file" >&2
+                            exit 1
+                          fi
+                        }
+                        if [ -e "$out/lib/systemd/systemd" ]; then
+                          make_real "$out/lib/systemd/systemd-tpm2-setup" "systemd-tpm2-setup"
+                          make_real "$out/lib/systemd/system-generators/systemd-tpm2-generator" "systemd-tpm2-generator"
+                          intf="$out/share/dbus-1/interfaces"
+                          mkdir -p "$intf"
+                          extract_bus_xml() {
+                            exe=$1
+                            if [ ! -e "$exe" ]; then
+                              return 0
+                            fi
+                            LD_LIBRARY_PATH="$out/lib:$out/lib/systemd''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+                              "$exe" --bus-introspect list \
+                              | awk 'NF >= 2 { print $2 }' > "$NIX_BUILD_TOP/bus-names"
+                            while IFS= read -r name; do
+                              if [ -z "$name" ]; then
+                                continue
+                              fi
+                              LD_LIBRARY_PATH="$out/lib:$out/lib/systemd''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+                                "$exe" --bus-introspect "$name" > "$intf/$name.xml"
+                              if [ ! -s "$intf/$name.xml" ]; then
+                                echo "empty dbus interface $name" >&2
+                                exit 1
+                              fi
+                            done < "$NIX_BUILD_TOP/bus-names"
+                          }
+                          extract_bus_xml "$out/lib/systemd/systemd"
+                          extract_bus_xml "$out/lib/systemd/systemd-logind"
+                          if [ ! -s "$intf/org.freedesktop.systemd1.Manager.xml" ]; then
+                            echo "org.freedesktop.systemd1.Manager.xml was not written" >&2
+                            exit 1
+                          fi
+                          if [ -e "$out/lib/systemd/systemd-logind" ] \
+                            && [ ! -s "$intf/org.freedesktop.login1.Manager.xml" ]; then
+                            echo "org.freedesktop.login1.Manager.xml was not written" >&2
+                            exit 1
+                          fi
+                        fi
+          '';
+          # -Dbootloader=disabled does not install systemd-boot example
+          # units. NixOS copies systemd-boot-random-seed.service when
+          # passthru.withBootloader stays true. The mail host uses grub.
+          # Keep withTpm2Units as this package already computed it.
+          # Do not pass -Dbootloader=enabled.
+          passthru = (old.passthru or { }) // {
+            withBootloader = false;
+          };
         });
 
       # Same 2.20.0 CLI nixpkgs builds from source. The source build's
@@ -1466,6 +1747,16 @@ let
               echo "libpython was copied" >&2
               exit 1
             fi
+            if [ ! -d "$nix_dir/lib/tmpfiles.d" ]; then
+              echo "nix archive has no lib/tmpfiles.d" >&2
+              exit 1
+            fi
+            mkdir -p "$out/lib/tmpfiles.d"
+            cp -a "$nix_dir/lib/tmpfiles.d/." "$out/lib/tmpfiles.d/"
+            if [ ! -f "$out/lib/tmpfiles.d/nix-daemon.conf" ]; then
+              echo "nix-daemon.conf was not installed" >&2
+              exit 1
+            fi
 
             runHook postInstall
           '';
@@ -1481,6 +1772,63 @@ let
       systemd = systemdDropJinja prev.systemd;
       systemdMinimal = systemdDropJinja prev.systemdMinimal;
       systemdLibs = systemdDropJinja prev.systemdLibs;
+      switch-to-configuration-ng = import ./switch-to-configuration-swap-borrow.nix { inherit prev; };
+
+      # update-mime-database is linked to libstdc++.so.6 and does not
+      # record the gcc library directory. systemd lists that directory
+      # as a build input so the link records libatomic. Use the same
+      # library here. g++ still finds libstdc++ on its built-in path and
+      # does not record an rpath. --add-rpath can leave DT_RPATH beside
+      # an existing DT_RUNPATH, and the loader ignores DT_RPATH then.
+      # Append the same -rpath the build input would add, then set the
+      # installed program's RUNPATH to that directory.
+      shared-mime-info = prev.shared-mime-info.overrideAttrs (old: {
+        buildInputs = (old.buildInputs or [ ]) ++ [ prev.stdenv.cc.cc.lib ];
+        nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ prev.patchelf ];
+        preConfigure = (old.preConfigure or "") + ''
+          cxx_lib="${prev.stdenv.cc.cc.lib}/lib"
+          if [ ! -e "$cxx_lib/libstdc++.so.6" ]; then
+            echo "gcc libstdc++ is missing" >&2
+            exit 1
+          fi
+          export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-L$cxx_lib -rpath $cxx_lib"
+        '';
+        postFixup = (old.postFixup or "") + ''
+          mime_bin="$out/bin/update-mime-database"
+          cxx_lib="${prev.stdenv.cc.cc.lib}/lib"
+          if [ ! -e "$cxx_lib/libstdc++.so.6" ]; then
+            echo "gcc libstdc++ is missing" >&2
+            exit 1
+          fi
+          if [ ! -f "$mime_bin" ]; then
+            echo "update-mime-database was not installed" >&2
+            exit 1
+          fi
+          if [ -L "$mime_bin" ]; then
+            mime_bin=$(readlink -f "$mime_bin")
+          fi
+          got=$(patchelf --print-rpath "$mime_bin")
+          case ":$got:" in
+            *":$cxx_lib:"*) new_rpath=$got ;;
+            *)
+              if [ -n "$got" ]; then
+                new_rpath="$got:$cxx_lib"
+              else
+                new_rpath="$cxx_lib"
+              fi
+              ;;
+          esac
+          patchelf --set-rpath "$new_rpath" "$mime_bin"
+          got=$(patchelf --print-rpath "$mime_bin")
+          case ":$got:" in
+            *":$cxx_lib:"*) ;;
+            *)
+              echo "update-mime-database rpath is missing libstdc++" >&2
+              exit 1
+              ;;
+          esac
+        '';
+      });
 
       # The release tarball already contains the generated headers.
       # The meson file still looks up an interpreter to regenerate them.
@@ -2374,6 +2722,16 @@ let
       # still builds. Perl bindings are unchanged.
       libapparmor = prev.libapparmor.override { withPython = false; };
 
+      # nixpkgs 26.05 passes "-D=linux-4-17=true". Muon rejects the empty key.
+      # The real options are linux-4-17 and system-console-users.
+      dbus-broker = prev.dbus-broker.overrideAttrs (_old: {
+        mesonFlags = [
+          "-Dlinux-4-17=true"
+          "-Dsystem-console-users=gdm,sddm,lightdm"
+        ];
+        doCheck = false;
+      });
+
       # Stock dbus enables X11 autolaunch and lists libx11. This host
       # has no X server. The shadowed callPackage still scrubs the
       # interpreter slot. Muon still runs find_program for the
@@ -2403,6 +2761,40 @@ let
           ++ [
             (mesonProbeStubFor prev)
           ];
+        # Muon joins an absolute includedir onto the prefix, so dbus-1.pc
+        # contains a doubled store path and pkg-config fails the link.
+        # A shared library does not need DBUS_STATIC_BUILD. Dependents
+        # still need libsystemd.pc when the Requires line stays public.
+        mesonFlags = (old.mesonFlags or [ ]) ++ [
+          "-Ddefault_library=shared"
+        ];
+        propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [
+          prev.systemdMinimal.dev
+        ];
+        postInstall = (old.postInstall or "") + ''
+          pc="$dev/lib/pkgconfig/dbus-1.pc"
+          if [ -f "$pc" ]; then
+            tmp=$(mktemp)
+            while IFS= read -r line || [ -n "$line" ]; do
+              case "$line" in
+                *//nix/store/*)
+                  key=''${line%%=*}
+                  val=''${line#*=}
+                  tail=''${val##*/nix/store/}
+                  printf '%s=/nix/store/%s\n' "$key" "$tail"
+                  ;;
+                *)
+                  printf '%s\n' "$line"
+                  ;;
+              esac
+            done < "$pc" > "$tmp"
+            mv "$tmp" "$pc"
+            if [ -e "$lib/lib/libdbus-1.so" ] || [ -e "$lib/lib/libdbus-1.so.3" ]; then
+              sed 's/ -DDBUS_STATIC_BUILD//g; s/^Requires: libsystemd$/Requires.private: libsystemd/' "$pc" > "$tmp"
+              mv "$tmp" "$pc"
+            fi
+          fi
+        '';
       });
 
       # e2fsprogs enables fuse2fs unless configure is told not to.
@@ -2456,6 +2848,28 @@ let
           substituteInPlace etc/pcscd.service.in \
             --replace-fail '@requires_polkit@' ""
         '';
+        postInstall = (old.postInstall or "") + ''
+          mkdir -p "$doc"
+        '';
+      });
+
+      # The guest tarball sets USE_PCSC ON after option(USE_PCSC OFF).
+      # substituteInPlace of that set() did not stop cmake from passing
+      # -DUSE_PCSC=1, which still compiles src/pcsc.c (winscard.h).
+      # Drop that flag and force OFF. Do not add pcsclite.
+      libfido2 = prev.libfido2.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          substituteInPlace CMakeLists.txt --replace-fail 'set(USE_PCSC ON)' 'set(USE_PCSC OFF)'
+        '';
+        cmakeFlags =
+          let
+            tried = builtins.tryEval (old.cmakeFlags or [ ]);
+            flags = if tried.success && builtins.isList tried.value then tried.value else [ ];
+          in
+          builtins.filter (flag: flag != "-DUSE_PCSC=1" && flag != "-DUSE_PCSC=ON") flags
+          ++ [
+            "-DUSE_PCSC=OFF"
+          ];
       });
 
       # The HTML administrators' guide xsltproc target failed.
@@ -2574,6 +2988,10 @@ let
                         test -f "$rel/grub-core/unidata.c"
                         cp -f "$rel/Makefile.util.am" Makefile.util.am
                         chmod u+w Makefile.util.am
+                        cp -f "$rel/Makefile.utilgcry.def" Makefile.utilgcry.def
+                        chmod u+w Makefile.utilgcry.def
+                        cp -f "$rel/grub-core/Makefile.gcry.def" grub-core/Makefile.gcry.def
+                        chmod u+w grub-core/Makefile.gcry.def
                         cp -f "$rel/grub-core/Makefile.core.am" grub-core/Makefile.core.am
                         chmod u+w grub-core/Makefile.core.am
                         cp -f "$rel/grub-core/unidata.c" grub-core/unidata.c

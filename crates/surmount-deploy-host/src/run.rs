@@ -506,13 +506,20 @@ fn ssh_status_label(code: Option<i32>) -> String {
 /// `result` symlink in the remote working directory. `--keep-going` is
 /// only on this build so one dry-run lists every failure. The switch
 /// command does not use it.
+fn daemon_job_show_lines() -> &'static str {
+    r#"deploy_host_show_jobs=$(nix config show max-jobs 2>/dev/null || true)
+deploy_host_show_cores=$(nix config show cores 2>/dev/null || true)
+printf '%s\n' "deploy-host: nix config show max-jobs=$deploy_host_show_jobs cores=$deploy_host_show_cores""#
+}
+
 fn build_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
     let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
+    let show = daemon_job_show_lines();
     let build = format!(
         "nixos-rebuild build --flake {flake_q} --option max-jobs 32 --option cores 32 --keep-going"
     );
-    format!("{bootstrap}\n{build}")
+    format!("{bootstrap}\n{show}\n{build}")
 }
 
 /// One remote switch. Prints `synthetic-built-generation:` after the rebuild.
@@ -526,6 +533,7 @@ fn build_remote_command(flake_ref: &str) -> String {
 fn switch_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
     let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
+    let show = daemon_job_show_lines();
     let switch = [
         "before=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
         // 32 matches surmount.remoteBuilder.maxJobs and buildCores.
@@ -539,7 +547,7 @@ fn switch_remote_command(flake_ref: &str) -> String {
         "exit \"$rc\"",
     ]
     .join("; ");
-    format!("{bootstrap}\n{switch}")
+    format!("{bootstrap}\n{show}\n{switch}")
 }
 
 /// Later readlink. The fake ssh prints the booted generation number for any

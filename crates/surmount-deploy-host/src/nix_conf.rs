@@ -62,11 +62,19 @@ pub(crate) fn bootstrap_gccarch_conf(conf: &str) -> GccarchConfDecision {
     }
     let mut out = String::new();
     let mut saw_extra = false;
+    let mut saw_jobs = false;
+    let mut saw_cores = false;
     for line in &lines {
         if assignment_key(line) == Some("extra-system-features") {
             saw_extra = true;
             out.push_str(&rewrite_extra_line(line));
             out.push('\n');
+        } else if assignment_key(line) == Some("max-jobs") {
+            saw_jobs = true;
+            out.push_str("max-jobs = 32\n");
+        } else if assignment_key(line) == Some("cores") {
+            saw_cores = true;
+            out.push_str("cores = 32\n");
         } else {
             out.push_str(line);
             out.push('\n');
@@ -78,6 +86,12 @@ pub(crate) fn bootstrap_gccarch_conf(conf: &str) -> GccarchConfDecision {
         out.push(' ');
         out.push_str(GCCARCH_X86_64_V3);
         out.push('\n');
+    }
+    if !saw_jobs {
+        out.push_str("max-jobs = 32\n");
+    }
+    if !saw_cores {
+        out.push_str("cores = 32\n");
     }
     GccarchConfDecision::Rewrite(out)
 }
@@ -325,17 +339,31 @@ deploy_host_rewrite_conf() {
   dest=$2
   tmp=$(mktemp "${dest}.XXXXXX") || return 1
   found_extra=0
+  found_jobs=0
+  found_cores=0
   while IFS= read -r line || [ -n "$line" ]; do
     k=$(deploy_host_assignment_key "$line")
     if [ "$k" = extra-system-features ]; then
       found_extra=1
       printf '%s\n' "$(deploy_host_rewrite_extra_line "$line")" >> "$tmp"
+    elif [ "$k" = max-jobs ]; then
+      found_jobs=1
+      printf '%s\n' "max-jobs = 32" >> "$tmp"
+    elif [ "$k" = cores ]; then
+      found_cores=1
+      printf '%s\n' "cores = 32" >> "$tmp"
     else
       printf '%s\n' "$line" >> "$tmp"
     fi
   done < "$src"
   if [ "$found_extra" -eq 0 ]; then
     printf '%s\n' "extra-system-features = surmount-remote $deploy_host_gccarch_token" >> "$tmp"
+  fi
+  if [ "$found_jobs" -eq 0 ]; then
+    printf '%s\n' "max-jobs = 32" >> "$tmp"
+  fi
+  if [ "$found_cores" -eq 0 ]; then
+    printf '%s\n' "cores = 32" >> "$tmp"
   fi
   if ! cat "$tmp" > "$dest"; then
     rm -f "$tmp"
@@ -582,7 +610,9 @@ system-features = nixos-test benchmark big-parallel kvm gccarch-x86-64-v3\n";
         let GccarchConfDecision::Rewrite(out) = bootstrap_gccarch_conf(input) else {
             panic!("must rewrite");
         };
-        assert!(out.contains("max-jobs = 8\n"), "{out}");
+        assert!(out.contains("max-jobs = 32\n"), "{out}");
+        assert!(out.contains("cores = 32\n"), "{out}");
+        assert!(!out.contains("max-jobs = 8\n"), "{out}");
         assert!(out.contains("sandbox = true\n"), "{out}");
         assert!(out.contains(SYSTEM_FEATURES_LINE), "{out}");
         assert!(
