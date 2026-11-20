@@ -49,5 +49,6 @@
     # Mail-host source builds: x86-64-v3. Default off (CI / generic).
     ./mail-host-cpu.nix
     ./mail-host-rust-cpu.nix
+    ./systemd-mount-namespace-off.nix
   ];
 }
