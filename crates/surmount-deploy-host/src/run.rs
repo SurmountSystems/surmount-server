@@ -84,7 +84,26 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
-    match crate::args::parse_args(args)? {
+    let owned: Vec<String> = args.into_iter().map(|s| s.as_ref().to_string()).collect();
+    if let Some(done) = crate::recipe_batch_01::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_02::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_03::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_04::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::recipe_batch_05::dispatch(&owned) {
+        return done;
+    }
+    if let Some(done) = crate::update_maintenance::maybe_dispatch(&owned) {
+        return done;
+    }
+    match crate::args::parse_args(owned.iter().map(String::as_str))? {
         Mode::Help => {
             print!("{USAGE}");
             Ok(())
@@ -191,56 +210,22 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
     }
 
     if !opts.skip_sync {
-        if opts.dry_run {
-            if let Some(id) = operator_ssh_identity(&opts.target) {
-                println!(
-                    "deploy-host: dry-run: ssh as {} uses {} (plus keepalives). Override: SURMOUNT_DEPLOY_SSH_IDENTITY",
-                    opts.target,
-                    id.display()
-                );
-            }
-            println!(
-                "deploy-host: dry-run: rsync public tree -> {}:{} / (excludes host-local, secrets patterns; not private-data admission control)",
-                opts.target,
-                shell_quote(&opts.remote_dir)
-            );
-            let excl = RSYNC_EXCLUDES.join(" ");
-            println!(
-                "deploy-host: dry-run: rsync -az --delete {excl} {}/ {}:{} /",
-                shell_quote(&repo_root.to_string_lossy()),
-                opts.target,
-                shell_quote(&opts.remote_dir)
-            );
-        } else {
-            ssh_run(
-                &opts.target,
-                &format!("mkdir -p {}", shell_quote(&opts.remote_dir)),
-            )?;
-            rsync_remote(
-                &["-az", "--delete"],
-                RSYNC_EXCLUDES,
-                &repo_root,
-                &opts.target,
-                &opts.remote_dir,
-            )?;
-        }
+        ssh_run(
+            &opts.target,
+            &format!("mkdir -p {}", shell_quote(&opts.remote_dir)),
+        )?;
+        rsync_remote(
+            &["-az", "--delete"],
+            RSYNC_EXCLUDES,
+            &repo_root,
+            &opts.target,
+            &opts.remote_dir,
+        )?;
     }
 
     if opts.host_local.is_some() && !opts.skip_host_local_check {
         let remote_hl = format!("{}/host-local", opts.remote_dir.trim_end_matches('/'));
-        if opts.dry_run {
-            println!(
-                "deploy-host: dry-run: ensure remote host-local at {}:{} (operator-placed; not from public git)",
-                opts.target,
-                shell_quote(&remote_hl)
-            );
-            println!(
-                "deploy-host: dry-run: rsync {} private host-local -> {}:{}/ (never into tracked hosts/; default without --delete unless --host-local-delete)",
-                hl_rsync_flags.join(" "),
-                opts.target,
-                shell_quote(&remote_hl)
-            );
-        } else if let Some(hl) = opts.host_local.as_ref() {
+        if let Some(hl) = opts.host_local.as_ref() {
             ssh_run(
                 &opts.target,
                 &format!("mkdir -p {}", shell_quote(&remote_hl)),
@@ -294,6 +279,22 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
     }
 
     let rebuild_flake_ref = format!("path:{}#{}", opts.remote_dir, opts.flake_attr);
+    if opts.dry_run {
+        // Build only. Do not switch, do not touch the system profile,
+        // and do not run post-switch smoke.
+        let build_remote_cmd = build_remote_command(&rebuild_flake_ref);
+        let (finish, _build_stdout) = ssh_captured_bash_script(&opts.target, &build_remote_cmd);
+        let build_rc = build_outcome(finish)?;
+        if build_rc != 0 {
+            return Err(ToolError::fail(format!(
+                "nix build failed (exit {build_rc}); the running generation was not switched"
+            )));
+        }
+        println!("deploy-host: nix build finished; the running generation was not switched");
+        let _ = io::stdout().flush();
+        return Ok(());
+    }
+
     let rebuild_remote_cmd = switch_remote_command(&rebuild_flake_ref);
     let smoke_name = smoke_remote_name();
     let smoke_remote_cmd = format!(
@@ -301,72 +302,37 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
         smoke = smoke_name
     );
 
-    let mut rebuild_rc = 0i32;
-    let mut smoke_rc = 0i32;
-    let mut built_generation: Option<u64> = None;
-    if opts.dry_run {
-        println!(
-            "deploy-host: dry-run: ssh keepalives ServerAliveInterval=30 ServerAliveCountMax=10 TCPKeepAlive=yes"
-        );
-        println!(
-            "deploy-host: dry-run: a dropped connection retries before nixos-rebuild; a switch SSH drop is not retried"
-        );
-        println!(
-            "deploy-host: dry-run: rebuild uses path: flake so host-local (rsync'd, not in public git) is visible to Nix (git flake would omit untracked/gitignored paths)"
-        );
-        println!(
-            "deploy-host: dry-run: ssh -- {} {}",
-            shell_quote(&opts.target),
-            shell_quote(&rebuild_remote_cmd)
-        );
-        println!(
-            "deploy-host: dry-run: post-switch smoke runs after a rebuild that finished (including a non-zero rebuild exit): ssh -- {} {}",
-            shell_quote(&opts.target),
-            shell_quote(&smoke_remote_cmd)
-        );
-        println!(
-            "deploy-host: dry-run: smoke checks generation + systemctl is-active sshd stalwart-mail surmount-management-ui (start UI if inactive) + loopback /health"
-        );
-    } else {
-        // One switch attempt. A drop after this starts may have changed the host.
-        // Capture stdout so the built-generation line can be read, and copy
-        // both streams through so a non-zero rebuild's own error stays visible.
-        let (finish, rebuild_stdout) = ssh_captured(&opts.target, &rebuild_remote_cmd);
-        built_generation = parse_built_generation(&rebuild_stdout);
-        if let RemoteFinish::Connection { code } = &finish {
-            eprintln!(
-                "deploy-host: nixos-rebuild exit={}",
-                ssh_status_label(*code)
-            );
-        }
-        rebuild_rc = switch_outcome(finish)?;
-        eprintln!("deploy-host: nixos-rebuild exit={rebuild_rc}");
-        eprintln!(
-            "deploy-host: running post-switch smoke on {} (after a finished rebuild)",
-            opts.target
-        );
-        smoke_rc = match retry_remote(&format!("post-switch smoke ssh -- {}", opts.target), || {
-            ssh_finish(&opts.target, &smoke_remote_cmd)
-        }) {
-            Ok(code) => code,
-            Err(err) => {
-                return Err(ToolError::fail(format!(
-                    "{err}; not starting a second switch"
-                )));
-            }
-        };
-        eprintln!("deploy-host: post-switch smoke exit={smoke_rc}");
+    // One switch attempt. A drop after this starts may have changed the host.
+    // Capture stdout so the built-generation line can be read, and copy
+    // both streams through so a non-zero rebuild's own error stays visible.
+    let (finish, rebuild_stdout) = ssh_captured_bash_script(&opts.target, &rebuild_remote_cmd);
+    let built_generation = parse_built_generation(&rebuild_stdout);
+    if let RemoteFinish::Connection { code } = &finish {
+        eprintln!("deploy-host: nix build exit={}", ssh_status_label(*code));
     }
+    let rebuild_rc = switch_outcome(finish)?;
+    eprintln!("deploy-host: nix build exit={rebuild_rc}");
+    eprintln!(
+        "deploy-host: running post-switch smoke on {} (after a finished rebuild)",
+        opts.target
+    );
+    let smoke_rc = match retry_remote(&format!("post-switch smoke ssh -- {}", opts.target), || {
+        ssh_finish(&opts.target, &smoke_remote_cmd)
+    }) {
+        Ok(code) => code,
+        Err(err) => {
+            return Err(ToolError::fail(format!(
+                "{err}; not starting a second switch"
+            )));
+        }
+    };
+    eprintln!("deploy-host: post-switch smoke exit={smoke_rc}");
 
     print!("{POST_SMOKE_TAIL}");
     let _ = io::stdout().flush();
-
-    if opts.dry_run {
-        return Ok(());
-    }
     if rebuild_rc != 0 && smoke_rc != 0 {
         return Err(ToolError::fail(format!(
-            "nixos-rebuild failed (exit {rebuild_rc}) and post-switch smoke failed (exit {smoke_rc})"
+            "nix build failed (exit {rebuild_rc}) and post-switch smoke failed (exit {smoke_rc})"
         )));
     }
     if rebuild_rc != 0 {
@@ -377,14 +343,14 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
             if let Some(built_n) = built_generation {
                 if read_profile_generation(&opts.target) == Some(built_n) {
                     eprintln!(
-                        "deploy-host: generation {built_n} is the generation the switch built; nixos-rebuild exit={rebuild_rc}; post-switch smoke exit={smoke_rc}"
+                        "deploy-host: generation {built_n} is the generation the switch built; nix build exit={rebuild_rc}; post-switch smoke exit={smoke_rc}"
                     );
                     return Ok(());
                 }
             }
         }
         return Err(ToolError::fail(format!(
-            "nixos-rebuild failed (exit {rebuild_rc}); post-switch smoke exit={smoke_rc} (activation may still have applied; inspect host)"
+            "nix build failed (exit {rebuild_rc}); post-switch smoke exit={smoke_rc} (activation may still have applied; inspect host)"
         )));
     }
     if smoke_rc != 0 {
@@ -500,6 +466,16 @@ fn ssh_rsh(target: &str) -> String {
 /// own status, including 1. No code means the client died on a signal.
 const SSH_ATTEMPTS: u32 = 3;
 
+/// NixOS system bash. sshd runs root's login shell (`fish -c <remote argv>`).
+/// A bare `name=value` in that argv is a fish syntax error before
+/// the system build. The POSIX script stays on stdin of `bash -s`.
+const REMOTE_BASH: &str = "/run/current-system/sw/bin/bash";
+
+/// Remote argv fish can parse. The gccarch assignment is not in this argv.
+fn posix_script_remote_argv() -> &'static [&'static str] {
+    &[REMOTE_BASH, "-s"]
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum RemoteFinish {
     Exited(i32),
@@ -529,22 +505,50 @@ fn ssh_status_label(code: Option<i32>) -> String {
     }
 }
 
+/// One remote build. Same gccarch bootstrap as `switch_remote_command`,
+/// then `nix build` of the toplevel with `--no-link`. Does not switch
+/// and does not read or write `/nix/var/nix/profiles/system`.
+/// `--keep-going` is only on this build so one dry-run lists every
+/// failure. The switch command does not use it.
+fn daemon_job_show_lines() -> &'static str {
+    r#"deploy_host_show_jobs=$(nix config show max-jobs 2>/dev/null || true)
+deploy_host_show_cores=$(nix config show cores 2>/dev/null || true)
+printf '%s\n' "deploy-host: nix config show max-jobs=$deploy_host_show_jobs cores=$deploy_host_show_cores""#
+}
+
+fn build_remote_command(flake_ref: &str) -> String {
+    let flake_q = shell_quote(flake_ref);
+    let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
+    let show = daemon_job_show_lines();
+    let build = crate::nixos_rebuild_bin::build_line(&flake_q);
+    format!("{bootstrap}\n{show}\n{build}")
+}
+
 /// One remote switch. Prints `synthetic-built-generation:` after the rebuild.
-/// A new profile link (`system-N-link`) is the generation the switch built.
-/// The same link name as before the switch is `unchanged`, not a generation.
-/// The fake ssh matches `*nixos-rebuild*` before `*readlink*` and does not run
-/// this script; it prints the same generation line itself.
+/// Before that build, bootstrap `gccarch-x86-64-v3` on the running daemon
+/// when `nix config show` system-features omits it. The bootstrap writes
+/// `/run/surmount-nix.conf` and bind-mounts it. That bind does not survive
+/// reboot. A new profile link (`system-N-link`) is the generation the switch
+/// built. The same link name as before the switch is `unchanged`, not a
+/// generation. The fake ssh matches `*nix build*` before `*readlink*`
+/// and does not run this script; it prints the same generation line itself.
 fn switch_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
-    [
+    let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
+    let show = daemon_job_show_lines();
+    let rebuild = crate::nixos_rebuild_bin::switch_line(&flake_q);
+    let switch = [
         "before=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
-        &format!("nixos-rebuild switch --flake {flake_q}"),
+        // 32 matches surmount.remoteBuilder.maxJobs and buildCores.
+        // cores 0 would use every online CPU. Do not pass cores 0.
+        rebuild.as_str(),
         "rc=$?",
         "after=$(readlink /nix/var/nix/profiles/system 2>/dev/null || true)",
         "if [ -n \"$after\" ] && [ \"$after\" != \"$before\" ]; then printf '%s\\n' \"synthetic-built-generation: $after\"; else printf '%s\\n' \"synthetic-built-generation: unchanged\"; fi",
         "exit \"$rc\"",
     ]
-    .join("; ")
+    .join("; ");
+    format!("{bootstrap}\n{show}\n{switch}")
 }
 
 /// Later readlink. The fake ssh prints the booted generation number for any
@@ -610,29 +614,54 @@ fn read_tee(mut src: impl Read, mut sink: impl Write) -> Vec<u8> {
     buf
 }
 
+fn ssh_command_args(host: &str, remote_args: &[&str]) -> Command {
+    let extra = ssh_extra_args(host);
+    let mut cmd = Command::new(ssh_bin());
+    cmd.args(&extra).arg("--").arg(host);
+    for arg in remote_args {
+        cmd.arg(*arg);
+    }
+    cmd
+}
+
+fn ssh_command(host: &str, remote_cmd: &str) -> Command {
+    ssh_command_args(host, &[remote_cmd])
+}
+
+/// `bash -s`. The caller writes the POSIX script to stdin. Fish never
+/// sees `deploy_host_gccarch_feature=...`.
+fn ssh_bash_stdin_command(host: &str) -> Command {
+    ssh_command_args(host, posix_script_remote_argv())
+}
+
+/// Local exec of the ssh program. Retry only ETXTBSY (os error 26).
+///
+/// A shebang script the caller just closed can still be busy when exec
+/// starts it. On the Nix builder that is the `fake-ssh` script this
+/// crate's tests pass through `SURMOUNT_DEPLOY_SSH`. Each attempt is a
+/// new `Command`. Any other spawn error returns on the first try. The
+/// last ETXTBSY returns that error and is not a successful smoke. The
+/// program did not start, so this is not a second remote switch.
+fn retry_local_exec<T>(mut once: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    const ATTEMPTS: u32 = 5;
+    for attempt in 0..ATTEMPTS {
+        match once() {
+            Ok(value) => return Ok(value),
+            Err(err) if err.raw_os_error() == Some(26) && attempt + 1 < ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    20 * u64::from(attempt + 1),
+                ));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::from_raw_os_error(26))
+}
+
 /// Run one SSH. Copy stdout and stderr through as they arrive so a long
 /// rebuild stays visible, and return stdout for the generation line.
 /// Stderr is not dropped.
-fn ssh_captured(host: &str, remote_cmd: &str) -> (RemoteFinish, String) {
-    let extra = ssh_extra_args(host);
-    let mut child = match Command::new(ssh_bin())
-        .args(&extra)
-        .arg("--")
-        .arg(host)
-        .arg(remote_cmd)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(e) => {
-            return (
-                RemoteFinish::Local(format!("ssh failed: {e}")),
-                String::new(),
-            );
-        }
-    };
+fn collect_ssh_child(mut child: std::process::Child) -> (RemoteFinish, String) {
     let Some(stdout) = child.stdout.take() else {
         return (
             RemoteFinish::Local("ssh stdout missing".to_string()),
@@ -657,6 +686,74 @@ fn ssh_captured(host: &str, remote_cmd: &str) -> (RemoteFinish, String) {
     (finish, String::from_utf8_lossy(&out_buf).into_owned())
 }
 
+fn ssh_captured(host: &str, remote_cmd: &str) -> (RemoteFinish, String) {
+    let child = match retry_local_exec(|| {
+        let mut cmd = ssh_command(host, remote_cmd);
+        cmd.stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd.spawn()
+    }) {
+        Ok(child) => child,
+        Err(e) => {
+            return (
+                RemoteFinish::Local(format!("ssh failed: {e}")),
+                String::new(),
+            );
+        }
+    };
+    collect_ssh_child(child)
+}
+
+/// Ship a POSIX script without putting `name=value` in the remote argv.
+/// A remote exit is kept when the peer closes the pipe early.
+fn ssh_captured_bash_script(host: &str, script: &str) -> (RemoteFinish, String) {
+    let mut child = match retry_local_exec(|| {
+        let mut cmd = ssh_bash_stdin_command(host);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd.spawn()
+    }) {
+        Ok(child) => child,
+        Err(e) => {
+            return (
+                RemoteFinish::Local(format!("ssh failed: {e}")),
+                String::new(),
+            );
+        }
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return (
+            RemoteFinish::Local("ssh stdin missing".to_string()),
+            String::new(),
+        );
+    };
+    let payload = script.to_string();
+    let writer = std::thread::spawn(move || {
+        let result = stdin.write_all(payload.as_bytes());
+        drop(stdin);
+        result
+    });
+    let (finish, out) = collect_ssh_child(child);
+    match writer.join() {
+        Ok(Ok(())) => (finish, out),
+        Ok(Err(e)) => match finish {
+            RemoteFinish::Exited(_) => (finish, out),
+            _ => (
+                RemoteFinish::Local(format!("ssh stdin write failed: {e}")),
+                out,
+            ),
+        },
+        Err(_) => (
+            RemoteFinish::Local("ssh stdin write thread failed".to_string()),
+            out,
+        ),
+    }
+}
+
 fn read_profile_generation(host: &str) -> Option<u64> {
     let (finish, text) = ssh_captured(host, PROFILE_GENERATION_REMOTE);
     match finish {
@@ -666,14 +763,7 @@ fn read_profile_generation(host: &str) -> Option<u64> {
 }
 
 fn ssh_finish(host: &str, remote_cmd: &str) -> RemoteFinish {
-    let extra = ssh_extra_args(host);
-    match Command::new(ssh_bin())
-        .args(&extra)
-        .arg("--")
-        .arg(host)
-        .arg(remote_cmd)
-        .status()
-    {
+    match retry_local_exec(|| ssh_command(host, remote_cmd).status()) {
         Ok(status) => classify_ssh_code(status.code()),
         Err(e) => RemoteFinish::Local(format!("ssh failed: {e}")),
     }
@@ -709,6 +799,22 @@ where
     )))
 }
 
+/// The build is one attempt. It must not fall through into a switch.
+fn build_outcome(finish: RemoteFinish) -> Result<i32, ToolError> {
+    match finish {
+        RemoteFinish::Exited(code) => Ok(code),
+        RemoteFinish::Connection { code } => {
+            let shown = ssh_status_label(code);
+            Err(ToolError::fail(format!(
+                "connection failed during nix build (ssh status {shown}); not switching the running generation"
+            )))
+        }
+        RemoteFinish::Local(msg) => Err(ToolError::fail(format!(
+            "connection failed during nix build ({msg}); not switching the running generation"
+        ))),
+    }
+}
+
 /// The switch is one attempt. Never call this in a retry loop.
 fn switch_outcome(finish: RemoteFinish) -> Result<i32, ToolError> {
     match finish {
@@ -716,11 +822,11 @@ fn switch_outcome(finish: RemoteFinish) -> Result<i32, ToolError> {
         RemoteFinish::Connection { code } => {
             let shown = ssh_status_label(code);
             Err(ToolError::fail(format!(
-                "connection failed during nixos-rebuild switch (ssh status {shown}); not starting a second switch"
+                "connection failed during nix build (ssh status {shown}); not starting a second switch"
             )))
         }
         RemoteFinish::Local(msg) => Err(ToolError::fail(format!(
-            "connection failed during nixos-rebuild switch ({msg}); not starting a second switch"
+            "connection failed during nix build ({msg}); not starting a second switch"
         ))),
     }
 }
@@ -737,11 +843,14 @@ fn ssh_run(host: &str, remote_cmd: &str) -> Result<(), ToolError> {
 fn rsync_local(flags: &[&str], src: &Path, dest: &Path) -> Result<(), ToolError> {
     let src_s = format!("{}/", src.display());
     let dest_s = format!("{}/", dest.display());
-    let mut cmd = Command::new("rsync");
-    cmd.args(flags).arg(&src_s).arg(&dest_s);
-    let st = cmd
-        .status()
-        .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
+    // Same ETXTBSY cap as the fake-ssh exec. The dry-run rsync is a
+    // script the test just closed. status() is the spawn.
+    let st = retry_local_exec(|| {
+        let mut cmd = Command::new("rsync");
+        cmd.args(flags).arg(&src_s).arg(&dest_s);
+        cmd.status()
+    })
+    .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
     if st.success() {
         Ok(())
     } else {
@@ -759,10 +868,12 @@ fn rsync_remote(
     let src_s = format!("{}/", src.display());
     let dest_s = format!("{target}:{}/", remote_dir.trim_end_matches('/'));
     let code = retry_remote("rsync", || {
-        let mut cmd = Command::new("rsync");
-        cmd.arg("-e").arg(ssh_rsh(target));
-        cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
-        match cmd.status() {
+        match retry_local_exec(|| {
+            let mut cmd = Command::new("rsync");
+            cmd.arg("-e").arg(ssh_rsh(target));
+            cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
+            cmd.status()
+        }) {
             Ok(status) => classify_rsync_code(status.code()),
             Err(e) => RemoteFinish::Local(format!("rsync failed: {e}")),
         }
@@ -944,15 +1055,164 @@ mod tests {
         assert_eq!(parse_generation_text("unchanged\n"), None);
     }
 
+    /// Lines before the rebuild command. That command is the one
+    /// `nix build`, not a second bootstrap command.
+    fn text_before_rebuild_line(cmd: &str, rebuild_at: usize) -> &str {
+        match cmd[..rebuild_at].rfind('\n') {
+            Some(i) => &cmd[..i],
+            None => "",
+        }
+    }
+
     #[test]
     fn generation_probe_is_not_a_second_switch() {
         assert!(!PROFILE_GENERATION_REMOTE.contains("nixos-rebuild"));
         assert!(!PROFILE_GENERATION_REMOTE.contains("post-switch-smoke"));
         assert!(PROFILE_GENERATION_REMOTE.contains("readlink"));
         let cmd = switch_remote_command("path:/tmp/repo#mail-vps");
-        assert!(cmd.contains("nixos-rebuild switch --flake"));
-        assert!(cmd.contains("path:/tmp/repo#mail-vps"));
+        assert!(cmd.contains("nix build"));
+        assert!(cmd.contains("exec result/bin/switch-to-configuration switch"));
+        assert!(!cmd.contains("nixos-rebuild"), "{cmd}");
+        assert!(!cmd.contains("python"), "{cmd}");
+        assert!(cmd.contains("--option max-jobs 32"));
+        assert!(cmd.contains("--option cores 32"));
+        assert!(!cmd.contains("--keep-going"), "{cmd}");
+        assert!(
+            cmd.contains(
+                "path:/tmp/repo#nixosConfigurations.mail-vps.config.system.build.toplevel"
+            )
+        );
+        assert!(cmd.contains("/nix/var/nix/profiles/system"));
         assert!(cmd.contains("synthetic-built-generation:"));
         assert!(!cmd.contains("post-switch-smoke"));
+        let rebuild_at = cmd
+            .find("switch-to-configuration")
+            .expect("system build command");
+        let bootstrap = text_before_rebuild_line(&cmd, rebuild_at);
+        assert!(
+            bootstrap.contains("/run/surmount-nix.conf"),
+            "bootstrap must run before the system build"
+        );
+        assert!(
+            bootstrap.contains("gccarch-x86-64-v3"),
+            "bootstrap must name the missing feature"
+        );
+        assert!(
+            !bootstrap.contains("nixos-rebuild"),
+            "bootstrap text must not add a second nixos-rebuild line for the fake ssh log"
+        );
+        assert!(
+            !bootstrap.contains("nix build"),
+            "bootstrap text must not add a second nix build"
+        );
+    }
+
+    #[test]
+    fn switch_bootstraps_gccarch_before_the_system_build() {
+        let cmd = switch_remote_command("path:/tmp/repo#mail-vps");
+        let rebuild_at = cmd.find("switch-to-configuration").expect("rebuild");
+        assert!(cmd.find("/run/surmount-nix.conf").unwrap() < rebuild_at);
+        assert!(cmd.find("mount --bind").unwrap() < rebuild_at);
+        assert!(cmd.find("systemctl restart nix-daemon").unwrap() < rebuild_at);
+        assert!(cmd.find("nix config show system-features").unwrap() < rebuild_at);
+        assert!(!cmd.contains("nix config show extra-system-features"));
+        assert!(cmd.contains("not starting the system build"));
+    }
+
+    #[test]
+    fn dry_run_command_is_build_and_does_not_switch_or_touch_profile() {
+        let cmd = build_remote_command("path:/tmp/repo#mail-vps");
+        assert!(
+            cmd.contains(
+                "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --keep-going --no-link --print-out-paths --option max-jobs 32 --option cores 32 path:/tmp/repo#nixosConfigurations.mail-vps.config.system.build.toplevel"
+            ),
+            "{cmd}"
+        );
+        assert!(
+            cmd.trim_end().ends_with(
+                "path:/tmp/repo#nixosConfigurations.mail-vps.config.system.build.toplevel"
+            ),
+            "{cmd}"
+        );
+        assert!(!cmd.contains("nixos-rebuild"), "{cmd}");
+        assert!(!cmd.contains("python"), "{cmd}");
+        assert!(!cmd.contains("switch-to-configuration"), "{cmd}");
+        assert!(!cmd.contains("/nix/var/nix/profiles/system"), "{cmd}");
+        assert!(!cmd.contains("nix-env"), "{cmd}");
+        assert!(!cmd.contains("nix-collect-garbage"), "{cmd}");
+        assert!(!cmd.contains("--upgrade"), "{cmd}");
+        assert!(!cmd.contains("post-switch-smoke"), "{cmd}");
+        assert!(!cmd.contains("synthetic-built-generation:"), "{cmd}");
+        let rebuild_at = cmd
+            .find("nice -n 19 nix build")
+            .expect("system build command");
+        let bootstrap = text_before_rebuild_line(&cmd, rebuild_at);
+        assert!(
+            bootstrap.contains("/run/surmount-nix.conf"),
+            "bootstrap must run before the system build"
+        );
+        assert!(
+            bootstrap.contains("gccarch-x86-64-v3"),
+            "bootstrap must name the missing feature"
+        );
+        assert!(
+            !bootstrap.contains("nixos-rebuild"),
+            "bootstrap text must not add a second nixos-rebuild line"
+        );
+        assert!(
+            !bootstrap.contains("nix build"),
+            "bootstrap text must not add a second nix build"
+        );
+        let switched = switch_remote_command("path:/tmp/repo#mail-vps");
+        assert!(switched.contains("nix build"));
+        assert!(switched.contains(
+            "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --print-out-paths --option max-jobs 32 --option cores 32 path:/tmp/repo#nixosConfigurations.mail-vps.config.system.build.toplevel --out-link result && (exec result/bin/switch-to-configuration switch)"
+        ));
+        assert!(!switched.contains("nixos-rebuild"), "{switched}");
+        assert!(!switched.contains("--keep-going"), "{switched}");
+        assert!(!switched.contains("--no-link"), "{switched}");
+    }
+
+    #[test]
+    fn rebuild_command_does_not_name_nixos_rebuild_or_python() {
+        let build = build_remote_command("path:/tmp/repo#mail-vps");
+        let switched = switch_remote_command("path:/tmp/repo#mail-vps");
+        for cmd in [&build, &switched] {
+            assert!(cmd.contains("nix build"), "{cmd}");
+            assert!(!cmd.contains("nixos-rebuild"), "{cmd}");
+            assert!(!cmd.contains("python"), "{cmd}");
+        }
+        assert!(!build.contains("switch-to-configuration"), "{build}");
+        assert!(
+            switched.contains("exec result/bin/switch-to-configuration switch"),
+            "{switched}"
+        );
+    }
+
+    #[test]
+    fn remote_argv_is_bash_s_and_the_assignment_stays_posix() {
+        let argv = posix_script_remote_argv();
+        assert_eq!(argv, ["/run/current-system/sw/bin/bash", "-s"]);
+        let joined = argv.join(" ");
+        assert!(
+            !joined.contains('='),
+            "fish must not see a bare assignment in the remote argv: {joined}"
+        );
+        assert!(
+            !joined.contains("set deploy_host_gccarch_feature"),
+            "{joined}"
+        );
+        let script = build_remote_command("path:/tmp/repo#mail-vps");
+        assert!(
+            script.contains("deploy_host_gccarch_feature=gccarch-x86-64-v3"),
+            "the POSIX assignment stays inside the bash script"
+        );
+        assert!(
+            !script.contains("set deploy_host_gccarch_feature"),
+            "do not rewrite the assignment as fish set"
+        );
+        let switched = switch_remote_command("path:/tmp/repo#mail-vps");
+        assert!(switched.contains("deploy_host_gccarch_feature=gccarch-x86-64-v3"));
+        assert!(!switched.contains("set deploy_host_gccarch_feature"));
     }
 }

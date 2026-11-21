@@ -1,0 +1,84 @@
+//! Remote system build and switch command strings.
+//!
+//! `build_line` is only `nix build` of the toplevel. It does not name
+//! `nixos-rebuild` and it does not run. `switch_line` builds that same
+//! toplevel into a result symlink and execs that result's
+//! `bin/switch-to-configuration`. The activator on generation 75 starts
+//! with bash, so this string is not a refusal of another language.
+//! Nothing here executes either string.
+
+/// `path:/dir#attr` becomes the toplevel installable `nix build` accepts.
+fn toplevel_installable(flake_q: &str) -> String {
+    match flake_q.split_once('#') {
+        Some((base, attr)) => {
+            format!("{base}#nixosConfigurations.{attr}.config.system.build.toplevel")
+        }
+        None => flake_q.to_string(),
+    }
+}
+
+pub fn build_line(flake_q: &str) -> String {
+    let installable = toplevel_installable(flake_q);
+    format!(
+        "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --keep-going --no-link --print-out-paths --option max-jobs 32 --option cores 32 {installable}"
+    )
+}
+
+/// Build the toplevel into `./result`, then exec that result's activator.
+/// The exec is in a subshell so the caller can record its exit status.
+/// Not executed by this function.
+pub fn switch_line(flake_q: &str) -> String {
+    let installable = toplevel_installable(flake_q);
+    format!(
+        "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --print-out-paths --option max-jobs 32 --option cores 32 {installable} --out-link result && (exec result/bin/switch-to-configuration switch)"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command_hides_rebuild_or_python(cmd: &str) -> bool {
+        // `nixos-rebuild` is also the prefix of the ng name and of the
+        // wrapped filename, so one check rejects both.
+        cmd.contains("nixos-rebuild") || cmd.contains("python")
+    }
+
+    #[test]
+    fn rebuild_line_is_nix_build_and_rejects_hidden_python() {
+        let installable =
+            "path:/tmp/repo#nixosConfigurations.mail-vps.config.system.build.toplevel";
+        let build = build_line("path:/tmp/repo#mail-vps");
+        let switch = switch_line("path:/tmp/repo#mail-vps");
+        assert_eq!(
+            build,
+            format!(
+                "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --keep-going --no-link --print-out-paths --option max-jobs 32 --option cores 32 {installable}"
+            )
+        );
+        assert!(build.starts_with("nice -n 19 nix build "));
+        assert!(build.contains("--keep-going"));
+        assert!(build.contains("--no-link"));
+        assert!(build.contains("--print-out-paths"));
+        assert!(build.contains("--option max-jobs 32"));
+        assert!(build.contains("--option cores 32"));
+        assert!(build.contains("nix-command flakes"));
+        assert!(!build.contains("&&"), "{build}");
+        assert!(!build.contains("switch-to-configuration"), "{build}");
+        assert!(!build.contains("--out-link"), "{build}");
+        assert!(switch.contains("--out-link result"), "{switch}");
+        assert!(
+            switch.contains("exec result/bin/switch-to-configuration switch"),
+            "{switch}"
+        );
+        assert!(!switch.contains("--keep-going"), "{switch}");
+        assert!(!switch.contains("--no-link"), "{switch}");
+        for cmd in [&build, &switch] {
+            assert!(cmd.contains("nix build"), "{cmd}");
+            assert!(
+                !command_hides_rebuild_or_python(cmd),
+                "command must not name nixos-rebuild or python: {cmd}"
+            );
+        }
+    }
+}

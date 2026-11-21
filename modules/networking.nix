@@ -20,6 +20,10 @@ in
   config = mkIf cfg.enable {
     networking.firewall = {
       enable = mkDefault true;
+      # Refused connections (not every packet) go to the kernel journal.
+      # logRefusedPackets stays off: that option is a packet debug flood.
+      # rejectPackets stays false so a scan does not get an ICMP reply.
+      logRefusedConnections = mkDefault true;
       allowedTCPPorts = [
         22 # SSH (consider restrict-to-admin nets later)
         25 # SMTP inbound
@@ -43,6 +47,12 @@ in
       # holds surmount-ban4/6 + whitelist sets (hardening.nix). App-level bans
       # live in management-ui; live nft element add still operator/helper residual.
       # Do not claim host drop works from unit env alone.
+    };
+
+    systemd.services.firewall.serviceConfig = {
+      SyslogIdentifier = "firewall";
+      LogRateLimitIntervalSec = "30s";
+      LogRateLimitBurst = 50000;
     };
 
     # Host name stays in hosts/*/configuration.nix so NixOS VM tests

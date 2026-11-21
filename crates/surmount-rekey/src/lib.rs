@@ -1,9 +1,13 @@
 //! SHC zero-knowledge backup re-key helper.
 //!
-//! Default rung is PGP: mint an X25519 age identity with the `age` crate
-//! (rage's library), wrap it with the operator's gpg, print only the public
-//! `age1...` recipient for the SHC Backups panel (kind pgp).
+//! Default rung is PGP: mint an X25519 age identity (Bech32 `AGE-SECRET-KEY-1`
+//! secret and `age1` recipient, same byte layout as rage), wrap it with the
+//! operator's gpg, print only the public `age1...` recipient for the SHC
+//! Backups panel (kind pgp).
 //! Never prints AGE-SECRET-KEY-1 on stdout.
+//!
+//! This crate does not depend on the `age` crate. age 0.12.1 always links
+//! hpke and p256, and that edge requires crypto-bigint 0.5.
 
 use std::fs;
 use std::io::Write;
@@ -11,8 +15,40 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use age::x25519::Identity;
-use secrecy::ExposeSecret;
+use bech32::{Bech32, Hrp};
+use secrecy::{ExposeSecret, SecretString};
+use x25519_dalek::{PublicKey, StaticSecret};
+
+const SECRET_KEY_PREFIX: Hrp = Hrp::parse_unchecked("AGE-SECRET-KEY-");
+const PUBLIC_KEY_PREFIX: Hrp = Hrp::parse_unchecked("age");
+
+/// X25519 age identity. Secret bytes are the unclamped 32-byte scalar that
+/// `StaticSecret` stores. The public recipient is the clamped Montgomery
+/// base-point product, Bech32 with HRP `age`. Same steps as age 0.12
+/// `Identity::generate` / `to_string` / `to_public`.
+struct X25519Identity {
+    secret: StaticSecret,
+}
+
+impl X25519Identity {
+    fn generate() -> Self {
+        Self {
+            secret: StaticSecret::random(),
+        }
+    }
+
+    fn secret_string(&self) -> Result<SecretString, RekeyError> {
+        let encoded = bech32::encode_lower::<Bech32>(SECRET_KEY_PREFIX, self.secret.as_bytes())
+            .map_err(|e| RekeyError::fail(format!("age identity encode: {e}")))?;
+        Ok(SecretString::from(encoded.to_uppercase()))
+    }
+
+    fn recipient(&self) -> Result<String, RekeyError> {
+        let pk = PublicKey::from(&self.secret);
+        bech32::encode_lower::<Bech32>(PUBLIC_KEY_PREFIX, pk.as_bytes())
+            .map_err(|e| RekeyError::fail(format!("age recipient encode: {e}")))
+    }
+}
 
 #[derive(Debug)]
 pub struct RekeyError {
@@ -67,14 +103,15 @@ pub fn default_gpg_recipient() -> String {
 /// Mint identity, write 0600 identity file, wrap with gpg unless dry_run.
 pub fn run_rekey(req: &RekeyRequest) -> Result<RekeyOutput, RekeyError> {
     fs::create_dir_all(&req.dir).map_err(|e| RekeyError::fail(format!("mkdir: {e}")))?;
-    let identity = Identity::generate();
-    let recipient = identity.to_public().to_string();
+    let identity = X25519Identity::generate();
+    let recipient = identity.recipient()?;
     if !recipient.starts_with("age1") {
         return Err(RekeyError::fail("age identity produced no age1 recipient"));
     }
+    let secret = identity.secret_string()?;
     let identity_path = req.dir.join("age-identity.txt");
     let envelope_path = req.dir.join("envelope.asc");
-    write_secret_file(&identity_path, identity.to_string().expose_secret())?;
+    write_secret_file(&identity_path, secret.expose_secret())?;
     if req.dry_run {
         fs::write(
             &envelope_path,
@@ -85,7 +122,7 @@ pub fn run_rekey(req: &RekeyRequest) -> Result<RekeyOutput, RekeyError> {
         gpg_wrap(
             &req.gpg_bin,
             &req.gpg_recipient,
-            identity.to_string().expose_secret().as_bytes(),
+            secret.expose_secret().as_bytes(),
             &envelope_path,
         )?;
     }
@@ -249,6 +286,24 @@ mod tests {
         p.set_mode(0o755);
         fs::set_permissions(&bin, p).unwrap();
         bin
+    }
+
+    #[test]
+    fn age_test_vector_recipient_matches_secret() {
+        // Published age 0.12 x25519 test vector (not a live key).
+        const TEST_SK: &str =
+            "AGE-SECRET-KEY-1GQ9778VQXMMJVE8SK7J6VT8UJ4HDQAJUVSFCWCM02D8GEWQ72PVQ2Y5J33";
+        const TEST_PK: &str = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa";
+        let parsed = bech32::primitives::decode::CheckedHrpstring::new::<Bech32>(TEST_SK)
+            .expect("age test secret is Bech32");
+        assert_eq!(parsed.hrp(), SECRET_KEY_PREFIX);
+        let bytes: Vec<u8> = parsed.byte_iter().collect();
+        let sk_bytes: [u8; 32] = bytes.as_slice().try_into().expect("32-byte scalar");
+        let identity = X25519Identity {
+            secret: StaticSecret::from(sk_bytes),
+        };
+        assert_eq!(identity.recipient().unwrap(), TEST_PK);
+        assert_eq!(identity.secret_string().unwrap().expose_secret(), TEST_SK);
     }
 
     #[test]

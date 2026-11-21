@@ -168,7 +168,7 @@ Legend: **Y** yes / **P** partial / **N** no or not serious yet / **?** unverifi
 - Not a decade of reverse-proxy corner cases (chunked edge cases, weird
   clients). For a few vhosts this is usually fine; do not claim "nginx parity."
 - Need explicit design for: graceful reload, log format, metrics, static sites,
-  optional `/stalwart-admin/` path proxy.
+  optional `/stalwart-admin/` path proxy (removed from modules/web.nix on 2026-11-02; SSH tunnel to loopback Stalwart HTTP is the bootstrap).
 - No upstream NixOS module to lean on.
 
 **Verdict:** best **pragmatic near-term Rust-first** path for Surmount if the
@@ -452,7 +452,7 @@ options shape.
 3. tower middleware: body limit, timeout, **governor** per IP.
 4. Reverse proxy:
    - `/` on `services.` hostname -> **UDS** management-ui
-   - optional `/stalwart-admin/` -> Stalwart **127.0.0.1:8080**
+   - optional `/stalwart-admin/` -> Stalwart **127.0.0.1:8080** (removed from modules/web.nix on 2026-11-02)
 5. Redirects for apex/www/mail hostname landing (mirror current nginx vhosts).
 6. Static file root hook for legacy sites (even if empty at first).
 7. NixOS module replaces `services.nginx` in `modules/web.nix`.
@@ -494,7 +494,7 @@ VM test; then delete nginx config paths.
 3. Edge binary + module flag `surmount.web.backend = "nginx" | "rust-edge"`.
 4. Staging rebuild; validate HTTP-01/ALPN renew.
 5. Remove nginx; update EDGE_AND_TLS, STACK, options, architecture-review.
-6. Harden rate limits; drop optional stalwart-admin path when product UI covers
+6. Harden rate limits. The public stalwart-admin path was removed from modules/web.nix on 2026-11-02.
    ops.
 
 ---

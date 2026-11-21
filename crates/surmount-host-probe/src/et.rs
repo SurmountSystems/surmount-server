@@ -310,7 +310,7 @@ pub fn format_et_status(st: EtPortStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     #[test]
     fn root_target_gets_identity_file() {
@@ -340,26 +340,50 @@ mod tests {
         );
     }
 
+    fn deploy_host_btop_source() -> &'static str {
+        include_str!("../../../crates/surmount-deploy-host/src/recipe_batch_03.rs")
+    }
+
+    fn run_btop_arm(src: &str) -> &str {
+        let start = src
+            .find("fn run_btop(")
+            .expect("recipe_batch_03.rs run_btop arm");
+        let rest = &src[start..];
+        let end = rest[1..].find("\nfn ").map(|i| i + 1).unwrap_or(rest.len());
+        &rest[..end]
+    }
+
     #[test]
-    fn laptop_justfile_btop_matches_et_argv() {
+    fn laptop_btop_arm_matches_et_argv() {
         let extra = btop_et_extra();
         let argv = build_et_argv(BTOP_ET_CLIENT, "root@surmount-1", &extra, None);
-        let just = include_str!("../../../justfile");
-        let recipe = just.split("btop *args:").nth(1).expect("just btop recipe");
-        let body = recipe.split("\n\n").next().expect("recipe body");
-        assert!(body.contains(BTOP_ET_CLIENT), "{body}");
-        assert!(!body.contains("nix run"), "{body}");
-        assert!(!body.contains("nix build"), "{body}");
-        assert!(!body.contains("/nix/store"), "{body}");
+        let src = deploy_host_btop_source();
+        let arm = run_btop_arm(src);
+        assert!(
+            arm.contains(".nix-profile/bin/et"),
+            "run_btop does not exec the Eternal Terminal client:\n{arm}"
+        );
+        assert!(
+            arm.contains("run_status(&et"),
+            "run_btop does not pass et to the process exec:\n{arm}"
+        );
+        assert!(
+            src.contains("Command::new(bin)"),
+            "run_status does not exec the et program"
+        );
+        assert!(!arm.contains("nix run"), "{arm}");
+        assert!(!arm.contains("nix build"), "{arm}");
+        assert!(!arm.contains("/nix/store"), "{arm}");
         for token in &argv {
             if token == BTOP_ET_CLIENT || token == "root@surmount-1" {
                 continue;
             }
             assert!(
-                body.contains(token.as_str()),
-                "just btop missing {token} from real argv {argv:?}\n{body}"
+                arm.contains(token.as_str()),
+                "run_btop missing {token} from real argv {argv:?}\n{arm}"
             );
         }
+        assert!(arm.contains("root@surmount-1"), "{arm}");
     }
 
     fn shell_join_argv(argv: &[String]) -> String {
@@ -378,32 +402,8 @@ mod tests {
             .join(" ")
     }
 
-    fn btop_recipe_body(just: &str) -> String {
-        let mut body = String::new();
-        let mut in_recipe = false;
-        for line in just.lines() {
-            if !in_recipe {
-                if line.starts_with("btop ") || line == "btop:" {
-                    in_recipe = true;
-                }
-                continue;
-            }
-            if !line.is_empty()
-                && !line.starts_with(' ')
-                && !line.starts_with('\t')
-                && !line.starts_with('#')
-            {
-                break;
-            }
-            body.push_str(line);
-            body.push('\n');
-        }
-        assert!(in_recipe, "justfile has no btop recipe");
-        body
-    }
-
     #[test]
-    fn btop_laptop_just_exec_matches_argv_not_nix() {
+    fn btop_arm_execs_et_not_nix() {
         let argv = btop_laptop_et_argv();
         let via_builder = build_et_argv(
             BTOP_ET_CLIENT,
@@ -436,32 +436,35 @@ mod tests {
         assert!(!joined.contains("nix copy"), "{joined}");
         assert!(!joined.contains("/nix/store"), "{joined}");
 
-        let just_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../justfile");
-        let just = std::fs::read_to_string(&just_path)
-            .unwrap_or_else(|err| panic!("read {}: {err}", just_path.display()));
-        let recipe = btop_recipe_body(&just);
-        let exec_line = recipe
-            .lines()
-            .map(str::trim)
-            .find(|line| line.starts_with("exec ") && line.contains(BTOP_ET_CLIENT))
-            .unwrap_or_else(|| panic!("btop recipe has no et client exec line:\n{recipe}"));
-        let rendered = shell_join_argv(&argv);
-        let tail = exec_line
-            .strip_prefix("exec ")
-            .unwrap_or_else(|| panic!("exec line is not exec: {exec_line}"));
-        let tail = tail.strip_suffix(" \"$@\"").unwrap_or_else(|| {
-            panic!("positional args must stay after the locked argv: {exec_line}")
-        });
-        assert_eq!(
-            tail, rendered,
-            "just btop exec drifted from btop_laptop_et_argv"
+        let src = deploy_host_btop_source();
+        let arm = run_btop_arm(src);
+        assert!(
+            arm.contains(".nix-profile/bin/et"),
+            "run_btop has no et client exec:\n{arm}"
         );
-        assert!(!recipe.contains("nix run"), "{recipe}");
-        assert!(!recipe.contains("nix build"), "{recipe}");
-        assert!(!recipe.contains("nix copy"), "{recipe}");
-        assert!(!recipe.contains("/nix/store"), "{recipe}");
-        assert!(!recipe.contains("surmount-btop-host"), "{recipe}");
-        assert!(!just.contains("nix run \".#surmount-btop-host\""), "{just}");
+        assert!(
+            arm.contains("run_status(&et"),
+            "run_btop does not exec et:\n{arm}"
+        );
+        assert!(arm.contains("\"-e\""), "{arm}");
+        assert!(arm.contains("\"-c\""), "{arm}");
+        assert!(arm.contains("\"btop\""), "{arm}");
+        assert!(arm.contains("\"-p\""), "{arm}");
+        assert!(arm.contains("\"2022\""), "{arm}");
+        assert!(arm.contains("\"--ssh-option\""), "{arm}");
+        assert!(arm.contains("IdentityFile="), "{arm}");
+        assert!(arm.contains("root@surmount-1"), "{arm}");
+        assert!(!arm.contains("nix run"), "{arm}");
+        assert!(!arm.contains("nix build"), "{arm}");
+        assert!(!arm.contains("nix copy"), "{arm}");
+        assert!(!arm.contains("/nix/store"), "{arm}");
+        assert!(!arm.contains("surmount-btop-host"), "{arm}");
+        let just = include_str!("../../../justfile");
+        assert!(
+            !just.contains("nix run \".#surmount-btop-host\""),
+            "just btop must not nix-run the host package"
+        );
+        let rendered = shell_join_argv(&argv);
         // Visible in the remote test log (--show-output). -e is et --noexit.
         eprintln!("BTOP_LAUNCH_ARGV={rendered}");
         eprintln!("BTOP_LAUNCH_NOEXIT_FLAG=-e");

@@ -49,8 +49,9 @@ pub struct DomainsInventory {
 /// Build config-backed domain inventory (not a live Stalwart directory list).
 ///
 /// Union, dedupe, stable-sort: primary + mail + services, derived
-/// `www.{primary}` and `mta-sts.{primary}`, extra mail hostnames, then
-/// every `static_vhosts` key. First role wins when a name appears twice.
+/// `www.{primary}`, `mta-sts.{primary}`, and `status.{primary}`, extra
+/// mail hostnames, then every `static_vhosts` key. First role wins when
+/// a name appears twice.
 pub fn domains_inventory(config: &AppConfig) -> DomainsInventory {
     let mut by_name: BTreeMap<String, String> = BTreeMap::new();
     let mut insert = |name: &str, role: &str| {
@@ -65,6 +66,10 @@ pub fn domains_inventory(config: &AppConfig) -> DomainsInventory {
     insert(&config.services_hostname, "services_hostname");
     insert(&format!("www.{}", config.primary_domain), "www");
     insert(&format!("mta-sts.{}", config.primary_domain), "mta_sts");
+    insert(
+        &crate::redirect::status_hostname(&config.primary_domain),
+        "status_hostname",
+    );
     for host in &config.extra_mail_hostnames {
         insert(host, "extra_mail_hostname");
     }
@@ -1151,6 +1156,7 @@ mod tests {
             "example.test",
             "www.example.test",
             "mta-sts.example.test",
+            "status.example.test",
             "mail.example.test",
             "services.example.test",
             "yiffa.app",
@@ -1183,6 +1189,11 @@ mod tests {
             inv.domains
                 .iter()
                 .any(|d| d.role == "mta_sts" && d.name == "mta-sts.example.test")
+        );
+        assert!(
+            inv.domains
+                .iter()
+                .any(|d| d.role == "status_hostname" && d.name == "status.example.test")
         );
         assert!(
             inv.domains

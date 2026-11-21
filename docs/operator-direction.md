@@ -32,6 +32,21 @@ A peer is collaborating. Agents must not compact this away as "noted."
 
 Standing copies: [../AGENTS.md](../AGENTS.md), [COMPACTION-PIN.md](COMPACTION-PIN.md).
 
+## What stays off, and the builder stays on (operator 2026-11-03)
+
+Operator answers while reviewing the service list. These override a
+public-module default when `just deploy` copies the private overlay
+from horizon onto surmount-1.
+
+1. surmount-1 stays a Nix builder and a Lean builder. `surmount-scram.service` stays. On 2026-11-04 the operator directed this repo to pin Lean 4.35. The pin is the official release tag v4.35.0 in `nix/packages/lean4.nix`, used by the nixbuilder login profile. It is not nixpkgs `pkgs.lean4` (4.29.1 on nixos-26.05). The live switch was not run as part of that pin.
+2. Vaultwarden stays off. The operator is not using it yet.
+3. Splora mainnet stays off. The other Splora instances already enabled in the private overlay stay as they are.
+4. Host renewal on surmount-1 is on. HTTP-01 on surmount-1 refreshes the Let's Encrypt production certificate that host already presents. horizon does not have to stay online for that renewal. Namecheap API credentials stay off surmount-1. No Namecheap ClientIp change. Closing horizon does not stop surmount-1 from serving the PEMs already on disk.
+5. Restic backups stay off for now.
+6. sshguard watches sshd. A ban is permanent after 3 failures. fail2ban is not installed. The management UI nftables ban helper stays off.
+7. Say horizon or surmount-1. The private overlay directory is not a machine name.
+8. `just deploy` keeps surmount-1 as the remote Nix builder. The private overlay on horizon already sets `surmount.remoteBuilder.enable = true`. The public module default of false applies only when that file is absent.
+
 ---
 
 ## 1. Host
@@ -168,7 +183,7 @@ Research: [research/pqconnect-and-pqc.md](research/pqconnect-and-pqc.md)
 | Ban | Any unauthorized access of any kind -> **immediate blacklist** on the box (precise signal classes still open; see research) |
 | Whitelist | Explicit whitelist IPs: never blacklisted; may bypass blacklist |
 | Hygiene | Track **last-used** on whitelist entries |
-| Implementation lean | Prefer nftables + custom Rust long-term; fail2ban is Python transitional sketch only |
+| Implementation lean | Prefer nftables + custom Rust long-term. sshguard is the sshd ban, permanent after 3 failures. fail2ban is not installed. |
 
 Research: [research/access-control-fail2ban.md](research/access-control-fail2ban.md).
 Module pointer: `modules/hardening.nix` header.
@@ -449,6 +464,36 @@ Living maps: [DNS.md](DNS.md), [../AGENTS.md](../AGENTS.md),
 [../RESIDUAL.md](../RESIDUAL.md).
 
 ---
+
+## 14. Follow-up (2026-11-07): existing tools, and the whole dry-run
+
+When a Python program blocks the mail-host build, the replacement is an
+existing Rust project. Prefer Rust over C. An existing C project is only
+the fallback when no Rust project does that job. Do not write a new C
+program to stand in for that Python. The C files added under
+`nix/packages/` during the 2026-11-07 dry-run loop are not that
+replacement.
+
+Jinja templates have existing Rust renderers. MiniJinja is one
+(https://github.com/mitsuhiko/minijinja, accessed: 2026-11-07). Do not
+reject a Rust renderer because it is not a line-for-line copy of the
+Python script, and do not write a C renderer in its place.
+
+One `just deploy-dry-run` transcript is the full failure list. Fix every
+builder-failed root from that transcript before the next dry-run. Do not
+fix one root and rerun while other roots from the same transcript remain.
+
+Dual-pin [../AGENTS.md](../AGENTS.md) and [COMPACTION-PIN.md](COMPACTION-PIN.md).
+
+Operator 2026-11-07, later the same day, always remember. Handwritten C
+is forbidden in this repo. That includes a `.c` or `.h` file, and C
+embedded in Nix, bash, a patch, or any other file that emits a C
+program at build time. The operator cannot audit that code. Removing
+Python is to shrink the attack surface. Handwritten C is the same
+class of unauditable code. Upstream projects that are written in C may
+remain as dependencies. Do not replace removed C with new C. Remove
+every `.c` and `.h` file we added. The earlier sentence that an
+existing C project is a fallback does not allow handwritten C.
 
 ## Related updates
 

@@ -80,14 +80,28 @@ in
         RateLimitIntervalSec=${log.rateLimitIntervalSec}
         RateLimitBurst=${log.rateLimitBurst}
         ForwardToSyslog=no
+        # Pin debug so a unit console at debug (Arti) is stored. trace is
+        # not requested. This is not a guest disk size.
+        MaxLevelStore=debug
       '';
 
       # Auth failures and disconnects without passwords. Not DEBUG3.
+      # sshd_config DEBUG violates user privacy. VERBOSE stays the level.
       services.openssh.settings.LogLevel = log.sshdLogLevel;
 
+      # sshd is un-niced. Raise only the per-unit journal burst so auth
+      # lines are not dropped at the systemd default of 10000/30s.
+      systemd.services.sshd.serviceConfig = {
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
+      };
+
       # Per-unit burst so nix-daemon start/stop/OOM lines survive a flood.
-      # Do not Nice= this unit here (remote-builder owns Nice when enabled).
+      # Identifier is set here when logging is on. remote-builder sets the
+      # same identifier when the builder cap is on. Do not Nice= this unit
+      # here (remote-builder owns Nice when enabled).
       systemd.services.nix-daemon.serviceConfig = {
+        SyslogIdentifier = "nix-daemon";
         LogRateLimitIntervalSec = "30s";
         LogRateLimitBurst = 50000;
       };

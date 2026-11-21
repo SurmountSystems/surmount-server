@@ -66,7 +66,7 @@
 #      a production leaf that names mail.<apex>, run
 #      `just point-stalwart-mail-tls -- --live --restart` on the host.
 #      Same durable PEMs as Axum. Not product browser :443.
-#  14. Review fail2ban/ssh exposure; lock SSH to admin nets if possible.
+#  14. Review sshguard bans and SSH exposure; lock SSH to admin nets if possible.
 #  15. Enable surmount.artiHiddenService when HS identity is on host (later).
 #      With https UI, leave arti backendAddress null so the module auto-
 #      binds loopback cleartext API for the onion reverse-proxy (or set
@@ -97,9 +97,78 @@
     (modulesPath + "/profiles/qemu-guest.nix")
   ];
 
+  # nixos/lib/eval-config.nix imports nixos/modules/module-list.nix, and
+  # that list imports services/hardware/bluetooth.nix. The dry-run throws
+  # "mail-host eval refuses python3" while evaluating that module's pkgs
+  # argument. This mail host has no Bluetooth radio. Drop the module.
+  # The same throw names services/torrent/transmission.nix while evaluating
+  # pkgs for services.transmission.settings. This mail host does not run
+  # Transmission. Drop that module too.
+  # The next dry-run names services/networking/harmonia.nix while evaluating
+  # the module argument pkgs. This mail host does not run Harmonia.
+  # Drop that module too.
+  # The dry-run after that names services/web-apps/mattermost.nix while
+  # evaluating the module argument pkgs. This mail host does not run
+  # Mattermost. Drop that module too. Do not rebind python3.
+  # The next dry-run names services/networking/pdns-recursor.nix while
+  # evaluating the module argument pkgs. This mail host resolves DNS as
+  # a client. It does not run the PowerDNS recursor service. Drop that
+  # module too. Do not rebind python3.
+  # The dry-run after that names
+  # services/monitoring/prometheus/xmpp-alerts.nix while evaluating the
+  # module argument pkgs. This mail host does not run Prometheus XMPP
+  # alerts. Drop that module too. Do not rebind python3.
+  # The dry-run after that says the option hardware.bluetooth does not
+  # exist. The definition is upstream
+  # services/desktop-managers/gnome.nix line
+  # `hardware.bluetooth.enable = mkDefault true` inside
+  # `lib.mkIf serviceCfg.core-os-services.enable`. This mail host does
+  # not run a GNOME desktop. services.desktopManager.gnome.enable is
+  # not set true (upstream default false). Drop that module. Do not
+  # restore services/hardware/bluetooth.nix.
+  # The next dry-run names the same missing option, and the first
+  # definition Nix prints is services/desktop-managers/cosmic.nix
+  # (`hardware.bluetooth.enable = lib.mkDefault true` inside
+  # `lib.mkIf cfg.enable`). lib/modules.nix shows only
+  # `head merged.unmatchedDefns`, so the other always-imported
+  # assigners are not printed yet. Each enable below defaults false
+  # and this host does not set it true. Drop those modules too.
+  # Do not restore services/hardware/bluetooth.nix.
+  # system/boot/kexec.nix stays disabled. nixpkgs kexec.nix sets
+  # boot.kexec.enable's default to
+  # lib.meta.availableOn pkgs.stdenv.hostPlatform pkgs.kexec-tools.
+  # This host does not set boot.kexec.enable = true.
+  # systemd-logind stays enabled. switch-to-configuration-ng calls
+  # logind.list_users() on every switch.
+  disabledModules = [
+    "services/hardware/bluetooth.nix" # No Bluetooth radio. hardware.bluetooth.enable is not set true.
+    "services/torrent/transmission.nix" # No BitTorrent client. services.transmission.enable is not set true.
+    "services/networking/harmonia.nix" # No Nix binary cache. services.harmonia.cache.enable is not set true.
+    "services/web-apps/mattermost.nix" # No chat server. services.mattermost.enable is not set true.
+    "services/networking/pdns-recursor.nix" # DNS client only. services.pdns-recursor.enable is not set true.
+    "services/monitoring/prometheus/xmpp-alerts.nix" # No Alertmanager XMPP hook. services.prometheus.xmpp-alerts.enable is not set true.
+    "services/desktop-managers/gnome.nix" # No GNOME desktop. services.desktopManager.gnome.enable is not set true.
+    "services/desktop-managers/cosmic.nix" # No COSMIC desktop. services.desktopManager.cosmic.enable is not set true.
+    "services/desktop-managers/budgie.nix" # No Budgie desktop. services.desktopManager.budgie.enable is not set true.
+    "services/desktop-managers/pantheon.nix" # No Pantheon desktop. services.desktopManager.pantheon.enable is not set true.
+    "services/desktop-managers/lomiri.nix" # No Lomiri shell. services.desktopManager.lomiri.enable is not set true.
+    "services/x11/desktop-managers/cinnamon.nix" # No Cinnamon desktop. services.xserver.desktopManager.cinnamon.enable is not set true.
+    "hardware/xpadneo.nix" # No Xbox controller. hardware.xpadneo.enable is not set true.
+    "hardware/facter/bluetooth.nix" # No Facter Bluetooth probe. hardware.facter.detected.bluetooth.enable is not set true.
+    "programs/gpaste.nix" # No clipboard manager. programs.gpaste.enable is not set true.
+    "services/x11/display-managers/lightdm-greeters/lomiri.nix" # No LightDM. services.xserver.displayManager.lightdm.greeters.lomiri.enable is not set true.
+    "services/x11/desktop-managers/phosh.nix" # No phone shell. services.xserver.desktopManager.phosh.enable is not set true.
+    "services/networking/ncdns.nix" # No Namecoin DNS bridge. services.ncdns.enable is not set true.
+    "system/boot/systemd/tpm2.nix" # No TPM2 measured boot. systemd.tpm2.enable is not set true.
+    "system/boot/kexec.nix" # No kexec reboot. boot.kexec.enable is not set true, and the default evaluates pkgs.kexec-tools.
+  ];
+
   # ---- Surmount stack ------------------------------------------------------
   surmount = {
     enable = true;
+    # Measured guest CPU is x86-64-v3 (no avx512). Source builds only.
+    # Flake packages.* and the generic CI host stay untuned.
+    mailHostCpu.enable = true;
     primaryDomain = "surmount.systems";
     mailHostname = "mail.surmount.systems";
     servicesHostname = "services.surmount.systems";
@@ -280,7 +349,7 @@
     fsType = "ext4";
   };
 
-  time.timeZone = "UTC";
+  time.timeZone = "America/Denver";
   i18n.defaultLocale = "en_US.UTF-8";
 
   # ---- Networking (provider-specific) --------------------------------------
@@ -306,6 +375,13 @@
     ];
   };
 
+  # Fish 4 is the Rust rewrite. usePython stays off so the mail-host
+  # closure does not gain a Python build for man pages.
+  programs.fish.enable = true;
+  programs.fish.generateCompletions = false;
+  programs.fish.package = pkgs.fish.override { usePython = false; };
+  users.users.root.shell = config.programs.fish.package;
+
   # ---- Nix -----------------------------------------------------------------
   nix.settings = {
     experimental-features = [
@@ -323,23 +399,44 @@
     trusted-public-keys = [
       "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
     ];
-    # Host cargo cache. An administrator creates the directory.
-    extra-sandbox-paths = [
-      "/var/cache/grok-oss-cargo-target"
-    ];
   };
 
   nixpkgs.config.allowUnfree = false;
 
+  # nixos-render-docs is a Python application. The mail host does not
+  # install the NixOS HTML manual or the configuration man page that
+  # renderer builds. nftables and the firewall stay enabled.
+  documentation.nixos.enable = false;
+
+  # The mail host has no font package. Fontconfig 2.17.1 configure
+  # probes Python.
+  fonts.fontconfig.enable = false;
+
   # ---- Minimal conveniences ------------------------------------------------
   environment.systemPackages = with pkgs; [
+    # This nixpkgs vim is the small editor. It does not take an
+    # interpreter-feature argument. vim-full is the package that
+    # defaults that feature on, and this host does not install it.
     vim
     htop
     curl
     dig
     tcpdump
-    git
+    # nixos-26.05 git defaults pythonSupport to true, which installs
+    # the interpreter. rustSupport pulls cargo, and cargo's build
+    # input is that same interpreter. The mail host still has git.
+    # Both flags stay off. The manual stays off in the pins overlay.
+    (git.override {
+      pythonSupport = false;
+      rustSupport = false;
+    })
+    scc
+    fio
+    sysstat
   ];
+
+  # Wrapped Ookla CLI on PATH. Periodic JSON timer stays off.
+  surmount.speedtest.enable = true;
 
   # Journal persistence + size cap live in modules/logging.nix
   # (surmount.logging; Storage=persistent, SystemMaxUse scaffold 1G).

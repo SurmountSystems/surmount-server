@@ -4,7 +4,7 @@ Plain English. No assumption that the reader already knows Fix ladder codes.
 Ladder detail still lives in [fix-and-fixos.md](fix-and-fixos.md) if you
 want depth.
 
-**Last updated:** 2026-10-18 (nixpkgs-rust is commit `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, rustc 1.99.1, `pkgs.arti` 2.7.0. grok-oss is commit pin `182293cb30fa5414dd47686b92708103519b7462`. Crane stayed `bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a`. sops-nix stayed `44931708c62937c2b1bf7953902989fa5bb9ee1b`. tau stayed `d2e1955b0491f538a486007d0d3ab779d95a828f`. The package build uses `surmount-rust-1.99.1`.) Prior 2026-10-18 (flake input tau is the operator-synced repo SurmountSystems/tau at rev d2e1955b0491f538a486007d0d3ab779d95a828f, and surmount.tau.enable defaults false.) Prior 2026-10-17 (nixpkgs-rust moved to nixpkgs master `c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81`, rustc 1.99.0, `pkgs.arti` 2.7.0. Crane moved to `bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a`, one internal flake.lock commit after `47b6b27`. sops-nix stayed `44931708`. grok-oss is commit pin `decb052744d25b63dbca8a95ca65b4ad794b9ad5` on `github:SurmountSystems/grok-oss`, not floating `main`. nixpkgs nixos-26.05 stayed `26f4107e47e3ad0ffd0db220469ba83b6f6d96e8`. splora stayed `5164864cb7349fabc961b5e6c9da2829106bff5f`. advisory-db stayed `999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b`. surmount-site stayed `82e07195e6aa221efe838e652ed8d2d8535b5cac`. Stalwart server 0.16.26, cli 1.0.13, webui 1.0.11, spam-filter 3.0.2, and vandelay 1.0.12 were still the latest GitHub tags. The package build still uses `surmount-rust-1.99.0`.) Prior 2026-10-17 (nixpkgs-rust `93b590222c0327b3d952e8e30905e2bd5fed3293`, rustc 1.99.0, `pkgs.arti` 2.7.0. Stalwart server 0.16.26, vandelay 1.0.12. sops-nix `44931708`. Crane stayed `47b6b27`. grok-oss is commit pin `decb052744d25b63dbca8a95ca65b4ad794b9ad5`, crate version still 1.0.45 in `xai-grok-version`. nixpkgs nixos-26.05 is `26f4107e47e3ad0ffd0db220469ba83b6f6d96e8`. splora is `5164864cb7349fabc961b5e6c9da2829106bff5f`. advisory-db is `999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b`. surmount-site stayed `82e07195e6aa221efe838e652ed8d2d8535b5cac`. The package build still uses `surmount-rust-1.99.0`.) Prior 2026-10-14 (grok-oss `main` moved to `b7ab91532c9e8008081b4f281794be43ecae73a6`, GitHub pull 167, crate version 1.0.45 in `xai-grok-version`. The package build still uses `surmount-rust-1.99.0`.) Prior 2026-10-10 (nixpkgs-rust moved off nixos-unstable to `c9f19b6be67332ce2ee7520c1630c804685df838`, rustc 1.99.0, `pkgs.arti` still 2.6.0. Host nixos-26.05 `pkgs.rustc` is still 1.95.0. grok-oss was `github:SurmountSystems/grok-oss/main` at `d1d3b7377e85c760caf17b74cf6d319301a77d1e`. Crane stayed `47b6b27ed9a3a9181415e4367d0c30ab2a0e0250`.) Prior 2026-10-03 (flake lock moved: nixpkgs nixos-26.05 `774debe7a0d1b496e35677ad955a1011c6ff74f3`, nixpkgs-rust `c59305bab2065cfecc4944690d9eedbb56f3a9fa` with rustc 1.98.1 and `pkgs.arti` 2.6.0, advisory-db `ef6173cbc5c50ec8166f9a5b28f07834144373ee`, splora `32f52e8da3ae860a36d39bce334e80e7e624d5a8`, crane `47b6b27ed9a3a9181415e4367d0c30ab2a0e0250`, sops-nix `5efb5a6f4f5ab192817d28557dd4d650fa14d866`. surmount-site stayed `82e07195e6aa221efe838e652ed8d2d8535b5cac`. grok-oss stayed `6edf5fda9507c9e3c9c9f5a67871ebb3ce6cca7d` because branch `remote-1` is gone. Stalwart FODs are server 0.16.24, cli 1.0.13, webui 1.0.11, spam-filter 3.0.2, and vandelay 1.0.11. The Arti package stayed 2.6.0.) Prior 2026-09-19 (`surmount.sploraIndexer` is the host-local single-knob wrap over imported `nixosModules.splora`; flake input `splora` on the `surmount` branch, then locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`; prior lock `22d6dcf7f76c1cacc23220d80203099018cde3aa`; instance options already include cookieFile, daemonRpcAddr, jsonrpcImport, daemonDir = null, publicHealth, db cache 24, httpSocketFile default `/run/splora/${name}.http.sock`; this repo does not wrap crane src). Prior 2026-09-01 (this tree briefly wrapped crane src; that wrap is deleted). Prior 2026-09-01 (flake input `splora` from `github:SurmountSystems/splora` on the `surmount` branch; not in-tree). Prior 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
+**Last updated:** 2026-10-23 (grok-oss and tau are not mail-host packages. The flake does not take those inputs and does not wire `packages.grok-oss` or `packages.tau`. Default mail-vps does not enable `surmount.grokOss` or `surmount.tau`. Host-local must not re-enable them. nixpkgs-rust stayed `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, rustc 1.99.1. Host channel stayed nixos-26.05. Wrapped `speedtest` is `pkgs.ookla-speedtest` plus license/GDPR flags. `scc` is the nixpkgs package. `fio` and `sysstat` are nixpkgs packages on the mail-vps PATH.) Prior 2026-10-20 (grok-oss is commit pin `6703706cc7419ba71af549c1562017f302173c19`. nixpkgs-rust stayed `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, rustc 1.99.1. Host channel stayed nixos-26.05. Wrapped `speedtest` is `pkgs.ookla-speedtest` plus license/GDPR flags. `scc` is the nixpkgs package.) Prior 2026-10-19 (grok-oss is commit pin `525538172dc21391bc690a4cc4a8706a5c554e47`. nixpkgs-rust stayed `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, rustc 1.99.1. Crane stayed `bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a`. sops-nix stayed `44931708c62937c2b1bf7953902989fa5bb9ee1b`. tau stayed `d2e1955b0491f538a486007d0d3ab779d95a828f`. Host channel stayed nixos-26.05. The package build uses `surmount-rust-1.99.1`.) Prior 2026-10-18 (nixpkgs-rust is commit `9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, rustc 1.99.1, `pkgs.arti` 2.7.0. grok-oss is commit pin `182293cb30fa5414dd47686b92708103519b7462`. Crane stayed `bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a`. sops-nix stayed `44931708c62937c2b1bf7953902989fa5bb9ee1b`. tau stayed `d2e1955b0491f538a486007d0d3ab779d95a828f`. The package build uses `surmount-rust-1.99.1`.) Prior 2026-10-18 (flake input tau is the operator-synced repo SurmountSystems/tau at rev d2e1955b0491f538a486007d0d3ab779d95a828f, and surmount.tau.enable defaults false.) Prior 2026-10-17 (nixpkgs-rust moved to nixpkgs master `c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81`, rustc 1.99.0, `pkgs.arti` 2.7.0. Crane moved to `bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a`, one internal flake.lock commit after `47b6b27`. sops-nix stayed `44931708`. grok-oss is commit pin `decb052744d25b63dbca8a95ca65b4ad794b9ad5` on `github:SurmountSystems/grok-oss`, not floating `main`. nixpkgs nixos-26.05 stayed `26f4107e47e3ad0ffd0db220469ba83b6f6d96e8`. splora stayed `5164864cb7349fabc961b5e6c9da2829106bff5f`. advisory-db stayed `999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b`. surmount-site stayed `82e07195e6aa221efe838e652ed8d2d8535b5cac`. Stalwart server 0.16.26, cli 1.0.13, webui 1.0.11, spam-filter 3.0.2, and vandelay 1.0.12 were still the latest GitHub tags. The package build still uses `surmount-rust-1.99.0`.) Prior 2026-10-17 (nixpkgs-rust `93b590222c0327b3d952e8e30905e2bd5fed3293`, rustc 1.99.0, `pkgs.arti` 2.7.0. Stalwart server 0.16.26, vandelay 1.0.12. sops-nix `44931708`. Crane stayed `47b6b27`. grok-oss is commit pin `decb052744d25b63dbca8a95ca65b4ad794b9ad5`, crate version still 1.0.45 in `xai-grok-version`. nixpkgs nixos-26.05 is `26f4107e47e3ad0ffd0db220469ba83b6f6d96e8`. splora is `5164864cb7349fabc961b5e6c9da2829106bff5f`. advisory-db is `999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b`. surmount-site stayed `82e07195e6aa221efe838e652ed8d2d8535b5cac`. The package build still uses `surmount-rust-1.99.0`.) Prior 2026-10-14 (grok-oss `main` moved to `b7ab91532c9e8008081b4f281794be43ecae73a6`, GitHub pull 167, crate version 1.0.45 in `xai-grok-version`. The package build still uses `surmount-rust-1.99.0`.) Prior 2026-10-10 (nixpkgs-rust moved off nixos-unstable to `c9f19b6be67332ce2ee7520c1630c804685df838`, rustc 1.99.0, `pkgs.arti` still 2.6.0. Host nixos-26.05 `pkgs.rustc` is still 1.95.0. grok-oss was `github:SurmountSystems/grok-oss/main` at `d1d3b7377e85c760caf17b74cf6d319301a77d1e`. Crane stayed `47b6b27ed9a3a9181415e4367d0c30ab2a0e0250`.) Prior 2026-10-03 (flake lock moved: nixpkgs nixos-26.05 `774debe7a0d1b496e35677ad955a1011c6ff74f3`, nixpkgs-rust `c59305bab2065cfecc4944690d9eedbb56f3a9fa` with rustc 1.98.1 and `pkgs.arti` 2.6.0, advisory-db `ef6173cbc5c50ec8166f9a5b28f07834144373ee`, splora `32f52e8da3ae860a36d39bce334e80e7e624d5a8`, crane `47b6b27ed9a3a9181415e4367d0c30ab2a0e0250`, sops-nix `5efb5a6f4f5ab192817d28557dd4d650fa14d866`. surmount-site stayed `82e07195e6aa221efe838e652ed8d2d8535b5cac`. grok-oss stayed `6edf5fda9507c9e3c9c9f5a67871ebb3ce6cca7d` because branch `remote-1` is gone. Stalwart FODs are server 0.16.24, cli 1.0.13, webui 1.0.11, spam-filter 3.0.2, and vandelay 1.0.11. The Arti package stayed 2.6.0.) Prior 2026-09-19 (`surmount.sploraIndexer` is the host-local single-knob wrap over imported `nixosModules.splora`; flake input `splora` on the `surmount` branch, then locked rev `be3603dbd8e6ef0c24e37fe07beaf8067bfa2d0b`; prior lock `22d6dcf7f76c1cacc23220d80203099018cde3aa`; instance options already include cookieFile, daemonRpcAddr, jsonrpcImport, daemonDir = null, publicHealth, db cache 24, httpSocketFile default `/run/splora/${name}.http.sock`; this repo does not wrap crane src). Prior 2026-09-01 (this tree briefly wrapped crane src; that wrap is deleted). Prior 2026-09-01 (flake input `splora` from `github:SurmountSystems/splora` on the `surmount` branch; not in-tree). Prior 2026-08-27 (workspace clippy style allows in `crates/Cargo.toml`; flake clippy is `-D warnings` only. Overlay/packages/`just` still `nix run` only.)
 **Operator direction:** [operator-direction.md](operator-direction.md)
 
 ---
@@ -46,11 +46,12 @@ package bumps in this repo.
 | `nix/packages/stalwart-spam-filter.nix` | Spam rules FODs |
 | `nix/packages/management-ui.nix` | Surmount Axum UI (crane) |
 | `nix/packages/surmount-public-site.nix` | Apex/www static site from flake input `github:SurmountSystems/site` (no NPM; operator bumps rev) |
-| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.7.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti`. Kept equal to nixpkgs-rust `pkgs.arti.version` |
+| `nix/packages/arti-onion-service.nix` | Surmount-owned Arti **2.8.0** source build + `onion-service-service` (HS publish); distinct from stock `pkgs.arti`. `cargoHash` is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. Does not reuse nixpkgs-rust `pkgs.arti` **2.7.0** `cargoDeps` |
 | `nix/packages/surmount-private-data.nix` | Private-data pattern scanner (crane). `nix run .#surmount-private-data`. Pre-commit + `just check-private-data` / `just private-data`. |
 | `nix/packages/surmount-host-logs.nix` | Host journal status/follow (crane). `nix run .#surmount-host-logs`. `just host-logs`. Journald stays source of truth. |
 | `nix/packages/surmount-shc.nix` | SHC customer user-api client (crane; rDNS PTR + tickets). `nix run .#surmount-shc`. `just rdns-shc`. No python3. |
 | `nix/packages/surmount-niced-builder.nix` | Niced ssh-ng nix-daemon helper (crane). `nix run .#surmount-niced-builder`. Installed as `/etc/surmount/niced-builder` when remote builder is on. MemoryMax stays on the NixOS module. Not a mail wrapper. |
+| `nix/packages/lean4.nix` | Official Lean **4.35.0** linux x86_64 release (tag `v4.35.0`). `nix run` is not the builder path. `modules/remote-builder.nix` puts `lean`, `lake`, `leanc`, and `leanmake` on the nixbuilder login PATH from this pin. Not channel `pkgs.lean4` (4.29.1). |
 | `nix/packages/surmount-leftover-homes.nix` | Refuse leftover repo `.agents` / `.grok` homes (crane). `nix run .#surmount-leftover-homes`. Fixtures live under `crates/surmount-leftover-homes/testdata/`. |
 | `nix/packages/surmount-host-probe.nix` | inxi (no TTY), btop (TTY), hybrid TLS probe, Eternal Terminal client. `nix run .#surmount-inxi-host` / `.#surmount-btop-host` / `.#surmount-tls-hybrid` / `.#surmount-et`. |
 | `nix/packages/surmount-static-sites.nix` | Apex/www publish + proven DS3018xs extra vhosts. `nix run .#surmount-deploy-static-sites` / `.#surmount-sync-static-sites`. |
@@ -64,8 +65,8 @@ package bumps in this repo.
 | `nix/packages/surmount-mail-import.nix` | Maildir++ import via Vandelay (crane). `nix run .#surmount-mail-import-maildir`. |
 | `nix/packages/surmount-secrets-install.nix` | Domain A to Domain B install + Vaultwarden export-to-staging (crane). `nix run .#secrets-install-host` / `.#secrets-export-bw-to-staging`. |
 | `nix/packages/surmount-secrets-prompt.nix` | Domain A no-echo intake (crane). `nix run .#surmount-secrets-prompt`. `just secrets-prompt`. |
-| `nix/packages/surmount-rekey.nix` | SHC backup re-key paste (age crate + gpg wrap). `nix run .#surmount-rekey`. `just rekey`. Prints `age1...` for type PGP. Never prints the age secret. |
-| `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary) |
+| `nix/packages/surmount-rekey.nix` | SHC backup re-key paste (X25519 age identity + gpg wrap, not the age crate). `nix run .#surmount-rekey`. `just rekey`. Prints `age1...` for type PGP. Never prints the age secret. |
+| `nix/overlays.nix` | Extra pins (flake `surmountOverlay` is primary). tzdata 2026e sets `doCheck = false` (same change as NixOS/nixpkgs pull 582069). Nix package pin is **2.35.4** (commit `21286d605815196c3fff1960550ab08700fc4e6f`) on the nixos-26.05 2.35.3 recipe. Channel `pkgs.nix` was stable **2.34.9**. NixOS stays **nixos-26.05** because 26.11 is not released. Release notes still read 2026.11/??. Branch-off is scheduled 2026-11-16 to 2026-11-23. Release is scheduled 2026-11-23 to 2026-11-30. See [NixOS 26.11 release schedule](https://github.com/NixOS/nixpkgs/issues/567567) (accessed: 2026-11-05). |
 | `modules/stalwart-service.nix` | 0.16+ `config.json` service (disables both stock paths: `services/mail/stalwart-mail.nix` and `services/mail/stalwart.nix`; option `services.stalwart`; unit stays `stalwart-mail.service`) |
 | `modules/*.nix` | Surmount NixOS modules |
 | `flake.nix` / `flake.lock` | Inputs, checks, host entrypoints |
@@ -86,7 +87,14 @@ HTTP/3 stay on this-tree Axum. Do not start five indexers. Do not set
 `services.splora.enable` or `surmount.sploraIndexer.enable` on the public
 sample host.
 
-Flake input tau is the operator-synced repo SurmountSystems/tau at rev d2e1955b0491f538a486007d0d3ab779d95a828f, and surmount.tau.enable defaults false.
+Tau is not a mail-host package. This flake does not take a tau input
+and does not overlay `pkgs.tau`. `surmount.tau.enable` defaults false
+and eval fails if it is true. Do not re-enable from host-local.
+
+Grok OSS is not a mail-host package. This flake does not take a
+grok-oss input and does not overlay `pkgs.grok-oss`.
+`surmount.grokOss.enable` defaults false and eval fails if it is true.
+Do not re-enable from host-local.
 
 ### Upstream crane omits Menhera config from Nix src (Splora)
 
@@ -126,19 +134,18 @@ thin just alias.
 
 **Arti note:** stock nixpkgs `pkgs.arti` often lags (client-default, not
 HS-capable). Surmount owns the Arti pin at
-`nix/packages/arti-onion-service.nix` (`2.7.0` from GitLab `arti-v2.7.0`).
-That version is this lock's nixpkgs-rust `pkgs.arti.version` (rev
-`9ecc0a672e9ef2ca4eec8e87dbee653607a7d332`, rustc 1.99.1). The package enables
-cargo feature `onion-service-service` and is exposed as
+`nix/packages/arti-onion-service.nix` (`2.8.0` from GitLab `arti-v2.8.0`).
+nixpkgs-rust `pkgs.arti.version` on rev
+`9ecc0a672e9ef2ca4eec8e87dbee653607a7d332` is still **2.7.0** (rustc 1.99.1).
+The package does not use that `cargoDeps`. `cargoHash` for 2.8.0 is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=.
+The package enables cargo feature `onion-service-service` and is exposed as
 `pkgs.artiOnionService` / `packages.*.arti-onion-service` (it does **not**
 replace `pkgs.arti`). rustc
 comes from flake input `nixpkgs-rust` when Arti MSRV exceeds the host
-channel pin. Vendor crates use matching `nixpkgs-rust` `arti.cargoDeps`
-with a version assert (crates.io `fetch-cargo-vendor` 403 workaround); bump
-`nixpkgs-rust` until `pkgs.arti.version` matches, or restore plain `cargoHash`
-when crates.io vendor works again. Module `arti-hidden-service.nix` prefers
+channel pin. Module `arti-hidden-service.nix` prefers
 the Surmount package when `package` is null. Cargo build is heavy and is
-**not** in `checks.*.ci`; eval-only version/feature/passthru contract is.
+**not** in `checks.*.ci`; the eval contract asserts version 2.8.0 and does
+not embed a fake hash.
 Live Tor publish remains residual (operator HS keys + network verify). No
 official multi-arch Arti release binaries, so this is source build not binary
 FOD.
@@ -290,6 +297,24 @@ Stalwart binaries.
 ---
 
 ## 6. Version validation
+
+### tzdata 2026e `now.ck` (2026-11-04)
+
+Locked nixpkgs is `github:NixOS/nixpkgs/nixos-26.05` rev
+`7dcdd87373d72e7a2173e4db02e20d3d7f495cfd`. That rev builds tzdata
+2026e with `doCheck = true`. On or after 2026-11-01 the `now.ck` test
+fails (`make: *** [Makefile:1006: now.ck] Error 1`) because
+America/Phoenix and America/Vancouver are identical from now on. The
+same check also names America/Mexico_City with America/Edmonton, and
+America/Jamaica with America/Winnipeg. That is a date-dependent check,
+not a gcc failure and not an x86-64-v3 failure. The failing step is
+`awk -f checknow.awk zonenow.tab` (make target `now.ck`). `nix/overlays.nix`
+copies [NixOS/nixpkgs pull 582069](https://github.com/NixOS/nixpkgs/pull/582069)
+(accessed: 2026-11-04) until this lock contains that change. The overlay
+sets `doCheck = false` with the same IANA thread comment as the pull.
+The flake applies that file beside
+`surmountOverlay` for `mkPkgs` and for `nixosConfigurations.mail-vps`.
+`gcc.arch` and x86-64-v3 stay as they are. `surmount-remote` stays.
 
 When touching package pins:
 

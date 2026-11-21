@@ -335,7 +335,7 @@ ports; docs lag is called out per row where it matters.
 - **Claim the tree currently implies:** Management UI listens
   **127.0.0.1:8090** (default). Stalwart 0.16 first-boot HTTP management is
   **:8080** (upstream safe defaults; may bind all interfaces). nginx proxies
-  `/` -> UI :8090 and `/stalwart-admin/` -> `127.0.0.1:8080`. UI env
+  `/` -> UI :8090. The public `/stalwart-admin/` proxy was removed from modules/web.nix on 2026-11-02. UI env
   `SURMOUNT_STALWART_URL=http://127.0.0.1:8080`. Living OPS/MIGRATION/
   SEARCH_AND_UI mopped to that story (2026-08-07). Some joins may still lag.
 - **Where it lives:** `modules/options.nix` (port 8090),
@@ -407,13 +407,14 @@ ports; docs lag is called out per row where it matters.
 
 ## 16. Spam-filter (and WebUI) FODs not auto-applied
 
-- **Claim the tree currently implies:** spam-filter **3.0.0** and webui
-  **1.0.7** are fetched as FODs and installed under
-  `/etc/surmount/stalwart/` (`spam-filter.toml`,
-  `spam-filter-rules.json.gz`, `webui.zip`). They are **not** automatically
-  pointed into the running engine. 0.16 first-boot may still try GitHub for
-  resources until operator WebUI or `stalwart-cli apply` sets hermetic
-  `file://` URLs. Spam-filter TOML is **anti-spam config**, not the message DB.
+- **Claim the tree currently implies:** spam-filter **3.0.4** and webui
+  **2.0.4** are fetched as FODs and installed under
+  `/etc/surmount/stalwart/` (`spam-filter-rules.json.gz`, `webui.zip`).
+  v3.0.3 dropped `spam-filter.toml` from the release. They are **not**
+  automatically pointed into the running engine. First boot may still try
+  GitHub for resources until operator WebUI or `stalwart-cli apply` sets
+  hermetic `file://` URLs. The rules archive is **anti-spam config**, not
+  the message DB.
 - **Where it lives:** `nix/packages/stalwart-spam-filter.nix`,
   `stalwart-webui.nix`, `modules/mail.nix` (`environment.etc`),
   `.grok/joins/stalwart-current.md`, `docs/DATASTORES.md` section 5.4
@@ -626,8 +627,8 @@ ports; docs lag is called out per row where it matters.
 ## 27. Doc and join lag (meta-assumption risk)
 
 - **Claim (living modules):** Stalwart HTTP management **:8080**, Surmount UI
-  default **:8090**, engine **0.16.15** config.json via `services.stalwart`,
-  spam-filter **3.0.0** FODs under `/etc/surmount/stalwart/`, stock modules
+  default **:8090**, engine **1.0.2** config.json via `services.stalwart`,
+  spam-filter **3.0.4** rules archive under `/etc/surmount/stalwart/`, stock modules
   dual-disabled.
 - **Where lag lived:** older STACK/MIGRATION/OPS/SEARCH port rows, DATASTORES
   5.2 TOML eval, foundation join. Mop pass 2026-08-07 fixed living MIGRATION /

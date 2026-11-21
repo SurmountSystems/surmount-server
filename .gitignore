@@ -27,6 +27,9 @@ secrets/**/*.decrypted.*
 # See docs/deploy-host-local.md.
 /host-local/
 
+# `just vendor` writes locked source trees here. Never commit.
+/vendor/
+
 # sops age keys must never land in the repo
 keys.txt
 *.agekey

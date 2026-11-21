@@ -16,16 +16,18 @@ acme_directory = "https://acme-staging-v02.api.letsencrypt.org/directory"
 
 # Edge certificate hostnames for laptop DNS-01 (documentation domains only).
 # Sample list: services (UI), mail (IMAP/SMTP TLS; first-class), apex + www
-# (public UNDER CONSTRUCTION). Optional: mta-sts.<domain> on the *private*
-# laptop profile when serving MTA-STS HTTPS (not this sample). Enable
-# mtaStsMode=testing only after that name is on the production leaf.
-# Private live profile should include mail.<apex> so Evolution sees a
-# browser-trusted name. See docs/DNS.md and docs/EDGE_AND_TLS.md.
+# (public UNDER CONSTRUCTION), status (systems dashboard). Optional:
+# mta-sts.<domain> on the *private* laptop profile when serving MTA-STS
+# HTTPS (not this sample). Enable mtaStsMode=testing only after that name
+# is on the production leaf. Private live profile should include mail.<apex>
+# so Evolution sees a browser-trusted name. See docs/DNS.md and
+# docs/EDGE_AND_TLS.md.
 acme_domains = [
   "services.example.invalid",
   "mail.example.invalid",
   "example.invalid",
   "www.example.invalid",
+  "status.example.invalid",
 ]
 
 # Optional overrides. Defaults are durable Domain B (H-PEM):

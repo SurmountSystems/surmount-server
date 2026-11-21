@@ -69,6 +69,8 @@ before a commit object exists:
 | Git hook | `script/git-hooks/pre-commit` is a short shebang that execs the scanner. Git needs that file. It is not a product bash driver. |
 | Self-test | crate tests in `crates/surmount-private-data` |
 
+The crate test `bad_age_fixture_is_hit` fails if `crates/surmount-private-data/testdata/bad-age.txt` is missing, and when that file is present it scans the file bytes and requires the age-secret-key class. `crates/surmount-rekey/src/lib.rs` is an excluded test sample for the tree and staged gates, and `rekey_age_test_vector_is_excluded_and_still_detected` fails if that key is removed.
+
 **Classes (regex / path only; never real values in the tool):** PEM / OpenSSH
 private key blocks; `AGE-SECRET-KEY-1...`; common token shapes (`ghp_`,
 `github_pat_`, `AKIA...`, etc.); password/secret/token assignment heuristic;
@@ -84,17 +86,16 @@ Provisioned-host UI screenshots must not be copied into the tree, residual,
 reports, or hooks.
 
 ```bash
-just check-private-data -- --staged   # pre-commit twin (alias: just private-data)
-just check-private-data -- --tree     # full tracked tree (CI twin)
-nix run .#surmount-private-data -- --tree
+surmount-private-data --staged   # commit hook, when the binary is on PATH
+surmount-private-data --tree     # full tracked tree; not the commit hook
 # crate tests: cd crates && cargo test -p surmount-private-data
-# or: nix build .#checks.<system>.surmount-private-data-test
 ```
 
-`nix run .#surmount-private-data` (alias `just check-private-data` /
-`just private-data`). Pre-commit prefers the binary on PATH, then a
-`crates/target` build, then `nix run .#surmount-private-data -- --staged`
-so a commit TTY does not need a nix shell. GHA runs the flake package
+The commit hook runs `surmount-private-data --staged` from PATH, or from
+`crates/target/release` or `crates/target/debug`. A missing binary fails
+the commit. The hook does not start a build and does not fetch a
+closure. `just check-private-data` (alias `just private-data`) is a
+separate operator command, not the hook. GHA runs the flake package
 `--tree` and `just ci` includes crate tests. This gate is admission
 control only; it does not replace the standing never-secrets law above.
 
@@ -155,7 +156,7 @@ not grow that set.
   **operator direction YYYY-MM-DD** labels.
 - **No ADR jargon.** Plain English open choices only:
   [open-choices.md](open-choices.md).
-- Evidence for Stalwart stores (current pin 0.16.15):
+- Evidence for Stalwart stores (the 0.16.15 research note; living pin is 1.0.2 in `nix/packages/stalwart-mail.nix`):
   `docs/research/stalwart-0.16.15-stores-evidence.md`.
   Historical 0.11.8 only:
   `docs/research/stalwart-stores-evidence-2026-07-30.md`.

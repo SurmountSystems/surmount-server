@@ -1,654 +1,209 @@
 # Surmount Server developer tasks.
-# Host quality bar: just check = fmt (check-only) then clippy then test.
-# Full flake aggregate: just ci (alias: just check-ci) -> nix build checks.<system>.ci
-# GHA job display name is `just ci` (branch-protection check context footgun).
-# Operator bins: nix run .#<app> -- args. just aliases only nix-run (no leftover script/*.sh).
-# End-to-end: nix run .#e2e / nix run .#e2e-host. Host e2e is never in checks.ci.
+# A recipe body is one `nix run .#<name> -- "$@"` line, or a dependency
+# list with no shell. The matching flake app execs surmount-deploy-host
+# with that recipe name (argv0). just deploy is the operator switch.
+# Agents run just deploy-dry-run. They must not run just deploy.
 # Guest (remote builder) down: BUILD_LOCAL=true just <recipe>
-#   sets NIX_CONFIG builders empty so this laptop compiles. Not a SKU.
+# sets NIX_CONFIG builders empty so this laptop compiles. Not a SKU.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set positional-arguments := true
 
 # Honor BUILD_LOCAL for every recipe that calls nix (including nix run).
 export NIX_CONFIG := if env_var_or_default("BUILD_LOCAL", "") == "" { env_var_or_default("NIX_CONFIG", "") } else { "builders =\nmax-jobs = auto\n" }
 
-# ssh-ng builder client. Nix 2.34 prepends NIX_SSHOPTS, and OpenSSH keeps
-# the first value of each option. Nix does not set these itself. This does
-# not retry a nixos-rebuild switch. remote-nix-build retries a dropped
-# nix build only. An operator-set NIX_SSHOPTS is left as-is.
+# ssh-ng keepalives. An operator-set NIX_SSHOPTS is left as-is.
 export NIX_SSHOPTS := env_var_or_default("NIX_SSHOPTS", "-o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o ConnectionAttempts=3")
 
-# Prefer CI_SYSTEM when set (GHA); else host flake system.
-system := env_var_or_default("CI_SYSTEM", `nix eval --impure --raw --expr 'builtins.currentSystem'`)
-
-# List recipes (default).
 default:
-    @just --list
+    nix run .#default -- "$@"
 
-# CI-style quality bar on the host (same order as typical CI gates):
-#   fmt check (error if dirty) -> clippy (-D warnings) -> cargo test.
-# Reverse of the common local loop (test, clippy, fmt). Does not write files.
-# Does not run module-eval / flake aggregate; use `just ci` for that.
 check: fmt clippy test
 
-# Full flake CI aggregate (management-ui + e2e pure + module-eval + nixfmt + ops crates).
-# Same as: nix build .#checks.<system>.ci
-# Heavy mail-vm / stalwart FOD / full toplevel stay out (see check-heavy).
-# GHA runs this recipe; job display name must stay `just ci`.
 ci:
-    nix build --print-build-logs ".#checks.{{system}}.ci"
+    nix run .#ci -- "$@"
 
-# Force the same `just ci` aggregate onto the ssh-ng builder (max-jobs 0).
-# This laptop must not rustc. Refuses BUILD_LOCAL. Not GHA. Not grok-build's
-# workspace-cargo-quality / nextest helper. Guest must list surmount-remote.
-# Flake eval is local and can take minutes with no rustc; say that first.
-# Do not pass -v/--debug: one -v prints every nixpkgs file (flood).
-# -L streams remote rustc. --print-out-paths prints the store path on
-# success so a cache hit is not a blank prompt. No --log-format raw:
-# that hid "these N derivations" / waiting-for-machine and looked dead.
-# No 20s heartbeat. No --store ssh-ng. Machines file plus max-jobs 0.
-# NIX_SSHOPTS keepalives are separate from that heartbeat. A dropped
-# ssh-ng connection retries the nix build. A derivation failure does not.
-# This is not a nixos-rebuild switch.
 check-remote:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ -n "${BUILD_LOCAL:-}" ]]; then
-      echo "just check-remote: refuse BUILD_LOCAL (that is laptop rustc)" >&2
-      exit 2
-    fi
-    exec just remote-nix-build ".#checks.{{system}}.ci" "check-remote"
+    nix run .#check-remote -- "$@"
 
-# Same force-remote path for cargo-audit (also in checks.ci).
-# Same ssh-ng keepalive and connection retry as check-remote.
-# A derivation failure is not retried.
 audit-remote:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ -n "${BUILD_LOCAL:-}" ]]; then
-      echo "just audit-remote: refuse BUILD_LOCAL" >&2
-      exit 2
-    fi
-    exec just remote-nix-build ".#checks.{{system}}.cargo-audit" "audit-remote"
+    nix run .#audit-remote -- "$@"
 
-# One ssh-ng nix build. Retries a dropped connection. Does not retry a
-# derivation that actually failed, and does not run nixos-rebuild.
 remote-nix-build installable label:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ -n "${BUILD_LOCAL:-}" ]]; then
-      echo "just {{label}}: refuse BUILD_LOCAL (that is laptop rustc)" >&2
-      exit 2
-    fi
-    installable="{{installable}}"
-    label="{{label}}"
-    echo "==> just ${label}: nix build ${installable} (max-jobs 0)" >&2
-    echo "==> just ${label}: eval can take a few minutes; then remote logs or a store path" >&2
-    echo "==> just ${label}: ssh-ng keepalives via NIX_SSHOPTS; connection drops retry; derivation failures do not" >&2
+    nix run .#remote-nix-build -- "$@"
 
-    is_connection_drop() {
-      local log="$1"
-      # A finished remote builder (rustc, cargo fmt, and the like) is not a drop.
-      if grep -E -q 'builder failed with exit code|Reason: builder failed' "$log"; then
-        return 1
-      fi
-      grep -E -q 'failed to start SSH connection|failed to start SSH master connection|unable to open connection to remote store|unexpected end-of-file|unexpected EOF|kex_exchange_identification|Connection reset by peer|Connection timed out|Connection refused|Broken pipe|closed by remote host|Timeout, server .+ not responding' "$log"
-    }
-
-    max=3
-    attempt=1
-    log=""
-    outf=""
-    fifo=""
-    trap 'rm -f "${log:-}" "${outf:-}" "${fifo:-}"' EXIT
-    while [[ "$attempt" -le "$max" ]]; do
-      log="$(mktemp)"
-      outf="$(mktemp)"
-      fifo="$(mktemp -u)"
-      mkfifo "$fifo"
-      tee "$log" <"$fifo" >&2 &
-      tee_pid=$!
-      set +e
-      nix build --option max-jobs 0 --option warn-dirty false --print-build-logs --print-out-paths --no-link "$installable" >"$outf" 2>"$fifo"
-      rc=$?
-      set -e
-      wait "$tee_pid" || true
-      rm -f "$fifo"
-      fifo=""
-      if [[ "$rc" -eq 0 ]]; then
-        echo "==> just ${label}: ok" >&2
-        cat "$outf"
-        rm -f "$log" "$outf"
-        log=""
-        outf=""
-        exit 0
-      fi
-      if is_connection_drop "$log"; then
-        rm -f "$log" "$outf"
-        log=""
-        outf=""
-        if [[ "$attempt" -lt "$max" ]]; then
-          echo "==> just ${label}: connection failed (attempt ${attempt} of ${max}); retrying the nix build" >&2
-          attempt=$((attempt + 1))
-          sleep 2
-          continue
-        fi
-        echo "==> just ${label}: connection failed after ${max} attempts" >&2
-        exit 1
-      fi
-      rm -f "$log" "$outf"
-      log=""
-      outf=""
-      echo "==> just ${label}: build failed (not a connection drop); not retrying" >&2
-      exit "$rc"
-    done
-    echo "==> just ${label}: connection failed after ${max} attempts" >&2
-    exit 1
-
-# Offline RustSec audit of crates/Cargo.lock (advisory-db flake input).
-# warn-dirty is off because this command runs after nix flake update
-# and cargo update, while those lock files are still uncommitted.
 audit:
-    nix build --option warn-dirty false --print-build-logs ".#checks.{{system}}.cargo-audit"
+    nix run .#audit -- "$@"
 
-# Ban sha1/md5 crates in the lockfile (cargo-deny bans).
 deny:
-    nix build --print-build-logs ".#checks.{{system}}.cargo-deny-bans"
+    nix run .#deny -- "$@"
 
-# Alias kept so docs/muscle-memory (`just check-ci`) still work.
 check-ci: ci
 
-# Format check only (CI-style). Errors if Rust or Nix is not formatted.
-# Does not rewrite files. Use `just fmt-write` to apply formatting.
 fmt:
-    cargo fmt --check
-    find modules tests hosts nix -name '*.nix' -print0 | xargs -0 -r nix run ".#formatter.{{system}}" -- --check
-    nix run ".#formatter.{{system}}" -- --check flake.nix
+    nix run .#fmt -- "$@"
 
-# Apply formatting (writes). Not part of `just check`.
 fmt-write:
-    cargo fmt
-    find modules tests hosts nix -name '*.nix' -print0 | xargs -0 -r nix run ".#formatter.{{system}}" --
-    nix run ".#formatter.{{system}}" -- flake.nix
+    nix run .#fmt-write -- "$@"
 
-# Rust unit/integration tests only (fast host loop). Hermetic crate tests live
-# in flake checks.<system>.ci; prefer `just ci` when Nix is the quality bar.
 test:
-    cargo test
+    nix run .#test -- "$@"
 
-# Clippy with warnings denied (CI-style).
 clippy:
-    cargo clippy --all-targets -- -D warnings
+    nix run .#clippy -- "$@"
 
-# Local management console for day-to-day UI work (no VPS, no Stalwart required).
-# Foreground: Ctrl-C to stop. Override any SURMOUNT_* env before running.
-# Opens http://127.0.0.1:8080/ (or SURMOUNT_LISTEN).
-# Auth default: SURMOUNT_AUTH_MODE=off (open console). To gate with Nostr:
-#   export SURMOUNT_AUTH_MODE=nostr
-#   export SURMOUNT_NOSTR_ALLOWLIST=npub1...
-#   export SURMOUNT_SESSION_SECRET=$(openssl rand -hex 32)
-# Product onion path is host surmount.artiHiddenService (hostname under
-# onionServiceStateDir). Lab overrides: SURMOUNT_ONION_URL or
-# SURMOUNT_ONION_HOSTNAME_FILE (optional local leftover path is lab only).
 dev:
-    #!/usr/bin/env bash
-    set -euo pipefail
+    nix run .#dev -- "$@"
 
-    export SURMOUNT_LISTEN="${SURMOUNT_LISTEN:-127.0.0.1:8080}"
-    export SURMOUNT_PRIMARY_DOMAIN="${SURMOUNT_PRIMARY_DOMAIN:-demo.local}"
-    export SURMOUNT_MAIL_HOSTNAME="${SURMOUNT_MAIL_HOSTNAME:-mail.demo.local}"
-    export SURMOUNT_SERVICES_HOSTNAME="${SURMOUNT_SERVICES_HOSTNAME:-services.demo.local}"
-    export SURMOUNT_STALWART_URL="${SURMOUNT_STALWART_URL:-http://127.0.0.1:8081}"
-
-    if [[ -z "${SURMOUNT_ONION_URL:-}" && -n "${SURMOUNT_ONION_HOSTNAME_FILE:-}" && -r "${SURMOUNT_ONION_HOSTNAME_FILE}" ]]; then
-      line="$(tr -d '[:space:]' <"${SURMOUNT_ONION_HOSTNAME_FILE}" || true)"
-      if [[ -n "$line" ]]; then
-        export SURMOUNT_ONION_URL="$line"
-      fi
-    fi
-
-    listen="$SURMOUNT_LISTEN"
-    host_port="${listen##*:}"
-    if command -v ss >/dev/null 2>&1; then
-      while read -r pid; do
-        [[ -z "${pid:-}" ]] && continue
-        if [[ -r "/proc/$pid/cmdline" ]] \
-          && tr '\0' ' ' <"/proc/$pid/cmdline" | grep -q 'surmount-management-ui'; then
-          echo "dev: stopping prior surmount-management-ui (pid $pid) on $listen"
-          kill "$pid" 2>/dev/null || true
-          sleep 0.4
-        fi
-      done < <(ss -ltnp 2>/dev/null | sed -n "s/.*:${host_port} .*pid=\\([0-9][0-9]*\\).*/\\1/p" | sort -u)
-    fi
-
-    echo "dev: management console → http://${listen}/  (Stalwart probe ${SURMOUNT_STALWART_URL})"
-    if [[ -n "${SURMOUNT_ONION_URL:-}" ]]; then
-      echo "dev: onion surface → ${SURMOUNT_ONION_URL}"
-    else
-      echo "dev: onion not provisioned (host: surmount.artiHiddenService + hostname under onionServiceStateDir; lab: SURMOUNT_ONION_URL or SURMOUNT_ONION_HOSTNAME_FILE)"
-    fi
-    exec cargo run -p surmount-management-ui --bin surmount-management-ui
-
-# Local comprehensive end-to-end (hermetic; optional Tor when present).
 e2e:
-    nix run ".#e2e"
+    nix run .#e2e -- "$@"
 
-# Host end-to-end (requires SURMOUNT_E2E_HOST=1; exit 2 if unset). Never a flake check.
 e2e-host:
-    nix run ".#e2e-host"
+    nix run .#e2e-host -- "$@"
 
-# Apex/www from github:SurmountSystems/site, plus extra vhosts. Docs: docs/OPS.md, docs/EDGE_AND_TLS.md
-# `just publish` publishes static sites (not a NixOS generation).
-[positional-arguments]
 publish *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    nice -n 19 nix flake update surmount-site
-    root="$(nice -n 19 nix build --print-build-logs --no-link --print-out-paths ".#surmount-public-site")"
-    export SURMOUNT_PUBLIC_SITE_ROOT="${root}"
-    exec nix run ".#surmount-deploy-static-sites" -- "$@"
+    nix run .#publish -- "$@"
 
-# Default target is root@surmount-1. Extra arguments append after the host-local flag.
-# This is the operator's real switch. Agents must not run `just deploy`. Agents run `just deploy-dry-run`.
-[positional-arguments]
+# Operator switch. Agents must not run this. Agents run deploy-dry-run.
 deploy *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-deploy-host" -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local "$@"
+    nix run .#deploy -- "$@"
 
-# Same mail-host command as `just deploy`, with `--dry-run` before `--target`. Extra arguments append.
-# Agents may run `just deploy-dry-run`. Do not pass `--install-secrets` unless secrets should be copied.
-[positional-arguments]
 deploy-dry-run *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-deploy-host" -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local "$@"
+    nix run .#deploy-dry-run -- "$@"
 
-# Operator deploy driver (public tree sync + host-local checks + #mail-vps).
-# Docs: docs/deploy-host-local.md
-[positional-arguments]
 deploy-host *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-deploy-host" -- "$@"
+    nix run .#deploy-host -- "$@"
 
-# Interactive btop on the mail host via Eternal Terminal (not raw SSH).
-# Laptop: exec the Eternal Terminal client at $HOME/.nix-profile/bin/et.
-# That is the client command -v et prints. Do not nix run or copy a binary.
-# Host btop is the one already installed on the mail host. -e (--noexit) leaves a shell.
-# Nested guest: local btop, no et. Needs a live tty.
-[positional-arguments]
 btop *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    if [[ -f /etc/surmount/root-justfile ]]; then
-      exec btop "$@"
-    fi
-    exec "$HOME/.nix-profile/bin/et" -k 5 -p 2022 --ssh-option "IdentityFile=${SURMOUNT_DEPLOY_SSH_IDENTITY:-$HOME/.ssh/id_ed25519}" -e -c btop root@surmount-1 "$@"
+    nix run .#btop -- "$@"
 
-[positional-arguments]
 host-inxi *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-inxi-host" -- "$@"
+    nix run .#host-inxi -- "$@"
 
-[positional-arguments]
 et *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-et" -- "$@"
+    nix run .#et -- "$@"
 
-# Attach grok-oss on the mail host via SSH + tmux as user grok (not Eternal Terminal).
-# Nested guest: the crate attaches local tmux session grok-oss as user grok.
-[positional-arguments]
 grok-oss *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-grok-oss" -- "$@"
+    nix run .#grok-oss -- "$@"
 
-# Print grok-oss running --json from the mail host as user grok.
-# SSH, no TTY, no HTTP bind. Nested guest prints local JSON.
-[positional-arguments]
 grok-oss-running *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-grok-oss" -- --running "$@"
+    nix run .#grok-oss-running -- "$@"
 
-[positional-arguments]
 host-logs *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-host-logs" -- "$@"
+    nix run .#host-logs -- "$@"
 
-# Read-only guest diagnose: units + nixbuilder user-slice MemoryMax.
-# Target: --target, else SURMOUNT_DEPLOY_TARGET, else agent-target.env.
-# Does not print addresses. Does not mutate the guest.
 host-status *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    target="${SURMOUNT_DEPLOY_TARGET:-}"
-    envf="${HOME}/.local/share/surmount/agent-target.env"
-    if [[ -z "${target}" && -r "${envf}" ]]; then
-      # shellcheck disable=SC1090
-      set -a
-      # shellcheck disable=SC1091
-      source "${envf}"
-      set +a
-      target="${SURMOUNT_DEPLOY_TARGET:-}"
-    fi
-    if [[ "${1:-}" == "--target" ]]; then
-      target="${2:-}"
-    fi
-    if [[ -z "${target}" ]]; then
-      echo "host-status: set SURMOUNT_DEPLOY_TARGET or --target USER@HOST" >&2
-      exit 2
-    fi
-    ssh -o BatchMode=yes -o ConnectTimeout=8 -- "${target}" \
-      'u=$(id -u nixbuilder 2>/dev/null || echo ""); echo gen=$(readlink /run/current-system | sed "s|.*/||"); echo qemu=$(systemctl is-active qemu-guest-agent 2>/dev/null || echo n/a); echo et=$(systemctl is-active eternal-terminal 2>/dev/null || echo n/a); for s in sshd stalwart-mail surmount-management-ui; do printf "%s=%s " "$s" "$(systemctl is-active $s)"; done; echo; if [[ -n "$u" ]]; then echo "nixbuilder_uid=$u"; systemctl show "user-${u}.slice" -p MemoryMax,MemoryCurrent,Description --no-pager; fi; echo lake=$(pgrep -c -x lake 2>/dev/null || echo 0)'
+    nix run .#host-status -- "$@"
 
-# Laptop: SSH surmount-scram --now to the guest.
-# Default target: SURMOUNT_DEPLOY_TARGET, else agent-target.env, else root@surmount-1.
-# Guest /root/justfile `just scram` is local (no SSH). Does not start Lake.
 scram *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    target="${SURMOUNT_DEPLOY_TARGET:-}"
-    envf="${HOME}/.local/share/surmount/agent-target.env"
-    if [[ -z "${target}" && -r "${envf}" ]]; then
-      set -a
-      # shellcheck disable=SC1091
-      source "${envf}"
-      set +a
-      target="${SURMOUNT_DEPLOY_TARGET:-}"
-    fi
-    if [[ "${1:-}" == "--target" ]]; then
-      target="${2:-}"
-      shift 2 || true
-    fi
-    if [[ -z "${target}" ]]; then
-      target="root@surmount-1"
-    fi
-    echo "scram: ${target} surmount-scram --now" >&2
-    ssh -o BatchMode=yes -o ConnectTimeout=8 -- "${target}" -- surmount-scram --now
+    nix run .#scram -- "$@"
 
-
-
-# Targeted NixOS eval contracts (not module-eval-contract).
 test-logging-eval:
-    nix eval --impure --json --file tests/logging-contract.nix
+    nix run .#test-logging-eval -- "$@"
 
 test-sshd-hostkeys-eval:
-    nix eval --impure --json --file tests/sshd-hostkeys-contract.nix
+    nix run .#test-sshd-hostkeys-eval -- "$@"
 
 test-eternal-terminal-eval:
-    nix eval --impure --json --file tests/eternal-terminal-contract.nix
+    nix run .#test-eternal-terminal-eval -- "$@"
 
 test-inxi-eval:
-    nix eval --impure --json --file tests/inxi-contract.nix
+    nix run .#test-inxi-eval -- "$@"
+
+test-btop-eval:
+    nix run .#test-btop-eval -- "$@"
+
+test-perf-tools-eval:
+    nix run .#test-perf-tools-eval -- "$@"
 
 test-remote-builder-eval:
-    nix eval --impure --json --file tests/remote-builder-contract.nix
+    nix run .#test-remote-builder-eval -- "$@"
 
-[positional-arguments]
 check-private-data *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-private-data" -- "$@"
+    nix run .#check-private-data -- "$@"
 
 alias private-data := check-private-data
 
-[positional-arguments]
 check-leftover-agent-homes *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-leftover-homes" -- "$@"
+    nix run .#check-leftover-agent-homes -- "$@"
 
-# D1 host hybrid TLS negotiation probe (operator; env-gated). Never a flake check.
 check-tls-hybrid:
-    nix run ".#surmount-tls-hybrid"
+    nix run .#check-tls-hybrid -- "$@"
 
-# Interactive no-echo Domain A secret intake (laptop). Docs: docs/SECRETS.md
-[positional-arguments]
 secrets-prompt *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-secrets-prompt" -- "$@"
+    nix run .#secrets-prompt -- "$@"
 
-[positional-arguments]
 rekey *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-rekey" -- "$@"
+    nix run .#rekey -- "$@"
 
-[positional-arguments]
 diskstation-afp-mount *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-diskstation-afp-mount" -- "$@"
+    nix run .#diskstation-afp-mount -- "$@"
 
-[positional-arguments]
 diskstation-discover *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-diskstation-discover" -- "$@"
+    nix run .#diskstation-discover -- "$@"
 
-[positional-arguments]
 sync-static-sites-from-ds3018xs *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-sync-static-sites" -- "$@"
+    nix run .#sync-static-sites-from-ds3018xs -- "$@"
 
-[positional-arguments]
 mailplus-copy-uid *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-copy-mailplus-uid" -- "$@"
+    nix run .#mailplus-copy-uid -- "$@"
 
-[positional-arguments]
 add-stalwart-token *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#add-stalwart-token" -- "$@"
+    nix run .#add-stalwart-token -- "$@"
 
-[positional-arguments]
 bootstrap-stalwart-token *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#bootstrap-stalwart-api-token" -- "$@"
+    nix run .#bootstrap-stalwart-token -- "$@"
 
-[positional-arguments]
 stalwart-recovery-unlock *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#stalwart-recovery-unlock" -- "$@"
+    nix run .#stalwart-recovery-unlock -- "$@"
 
-[positional-arguments]
 fix-public-dashboard *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-fix-public-dashboard" -- "$@"
+    nix run .#fix-public-dashboard -- "$@"
 
-[positional-arguments]
 secrets-install-host *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#secrets-install-host" -- "$@"
+    nix run .#secrets-install-host -- "$@"
 
-[positional-arguments]
 secrets-export-bw-to-staging *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#secrets-export-bw-to-staging" -- "$@"
+    nix run .#secrets-export-bw-to-staging -- "$@"
 
-[positional-arguments]
 host-cutover *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-host-cutover" -- "$@"
+    nix run .#host-cutover -- "$@"
 
-[positional-arguments]
 cutover-step step *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    step="{{step}}"
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-host-cutover" -- --step "${step}" "$@"
+    nix run .#cutover-step -- "$@"
 
-[positional-arguments]
 render-host-profile-acme *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-render-host-profile-acme" -- "$@"
+    nix run .#render-host-profile-acme -- "$@"
 
-[positional-arguments]
 domain-audit *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-domain-audit" -- "$@"
+    nix run .#domain-audit -- "$@"
 
-[positional-arguments]
 dns-zone-namecheap *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-dns-zone" -- "$@"
+    nix run .#dns-zone-namecheap -- "$@"
 
-[positional-arguments]
 rdns-shc *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-shc" -- "$@"
+    nix run .#rdns-shc -- "$@"
 
-[positional-arguments]
 free-stalwart-public-443 *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#free-stalwart-public-443" -- "$@"
+    nix run .#free-stalwart-public-443 -- "$@"
 
-[positional-arguments]
 register-dkim *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#register-dkim" -- "$@"
+    nix run .#register-dkim -- "$@"
 
-[positional-arguments]
 point-stalwart-mail-tls *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#point-stalwart-mail-tls" -- "$@"
+    nix run .#point-stalwart-mail-tls -- "$@"
 
-[positional-arguments]
 laptop-renew-cert *args:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [[ "${1:-}" == "--" ]]; then
-      shift
-    fi
-    exec nix run ".#surmount-laptop-renew-cert" -- "$@"
+    nix run .#laptop-renew-cert -- "$@"
 
-# Optional heavy checks (not in `just check` / `just ci`).
 check-heavy:
-    nix build --print-build-logs ".#checks.{{system}}.mail-vm-test"
+    nix run .#check-heavy -- "$@"
+
+vendor:
+    nix run .#vendor -- "$@"
+
+update-flakes:
+    nix run .#update-flakes -- "$@"
+
+update-software:
+    nix run .#update-software -- "$@"

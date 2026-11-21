@@ -14,11 +14,15 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "stalwart-webui";
-  version = "1.0.11";
+  # Checked 2026-11-16 on surmount-1: GitHub releases/latest is v2.0.6
+  # (published 2026-11-13T11:38:18Z, not a prerelease). Asset name is still
+  # webui.zip. Hash is nix store prefetch-file on the /mnt/hdd store, then
+  # nix hash file --sri. The file starts with a zip local header.
+  version = "2.0.6";
 
   src = fetchurl {
     url = "https://github.com/stalwartlabs/webui/releases/download/v${finalAttrs.version}/webui.zip";
-    hash = "sha256-1n5oyroCAkMBx52p8V/kZd6b9Tgs7lS9+cMJqXtBeaU=";
+    hash = "sha256-M62Pr7qKn1Zsdl9AM5wd3UEa/joxyakIBz37LBeOt/M=";
   };
 
   dontUnpack = true;

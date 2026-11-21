@@ -33,7 +33,7 @@
   lib,
   stdenv,
   fetchurl,
-  autoPatchelfHook,
+  patchelf,
   makeWrapper,
   openssl,
   zlib,
@@ -41,21 +41,21 @@
 }:
 
 let
-  # Checked 2026-10-17: GitHub tag v0.16.26 (released 2026-10-11).
-  # v0.16.25 and v0.16.26 say an upgrade from 0.16.x replaces the binary.
-  # Those notes do not change the settings schema. UPGRADING/v0_16.md is
-  # the 0.15-and-below migration, which this pin already passed.
-  version = "0.16.26";
+  # Checked 2026-11-16 on surmount-1: GitHub releases/latest is v1.1.0
+  # (published 2026-11-09T13:23:08Z, not a prerelease). Gnu asset names are
+  # unchanged. Each tarball contains one binary named stalwart. Hashes are
+  # nix store prefetch-file on the /mnt/hdd store, then nix hash file --sri.
+  version = "1.1.0";
 
   # Release asset hashes (gnu libc). musl variants exist upstream if needed.
   sources = {
     x86_64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-x86_64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-7VCV//2Lat342EJMBqV0lIFycW4F9S85Td/vP8K9IhE=";
+      hash = "sha256-Yub9r2j23ftFqg3BwoV4p+BfHl6aDJX8z+Hq5wnU7Lw=";
     };
     aarch64-linux = fetchurl {
       url = "https://github.com/stalwartlabs/stalwart/releases/download/v${version}/stalwart-aarch64-unknown-linux-gnu.tar.gz";
-      hash = "sha256-uqWBIx97SlO/7pAPfhhrXPRgWHRVimKYPjiI0McPp8k=";
+      hash = "sha256-4f9kDw04ANcqBJFue0AvGeKOkQbtPtcZqHbSONn3NWc=";
     };
   };
 
@@ -68,7 +68,7 @@ stdenv.mkDerivation (finalAttrs: {
   inherit version src;
 
   nativeBuildInputs = [
-    autoPatchelfHook
+    patchelf
     makeWrapper
   ];
 
@@ -87,6 +87,7 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   dontBuild = true;
+  dontPatchELF = true;
 
   installPhase = ''
     runHook preInstall
@@ -97,10 +98,16 @@ stdenv.mkDerivation (finalAttrs: {
     runHook postInstall
   '';
 
-  # Keep OpenSSL discoverable if the binary is dynamically linked against it.
-  autoPatchelfIgnoreMissingDeps = [
-    # Some builds are mostly static; ignore soft missing libs if any.
-  ];
+  postFixup = ''
+    patchelf \
+      --set-interpreter "${stdenv.cc.bintools.dynamicLinker}" \
+      --set-rpath "${lib.makeLibraryPath [
+        openssl
+        zlib
+        stdenv.cc.cc.lib
+      ]}" \
+      "$out/bin/stalwart"
+  '';
 
   passthru = {
     # FOD companions (file:// pins for hermetic hosts).

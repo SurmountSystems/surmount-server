@@ -199,8 +199,9 @@ Empty RocksDB + safe defaults (join + module comments):
 | 587 / 143 | submission / IMAP plain | **not** default in 0.16 safe defaults |
 
 Surmount management UI default moved **8080 -> 8090** so it does not fight
-Stalwart HTTP. nginx proxies UI on 8090 and `/stalwart-admin/` to
-`127.0.0.1:8080`. Env: `SURMOUNT_STALWART_URL=http://127.0.0.1:8080`.
+Stalwart HTTP. nginx, when the escape is on, proxies the UI only.
+The public `/stalwart-admin/` path was removed. Env:
+`SURMOUNT_STALWART_URL=http://127.0.0.1:8080`.
 
 Plain 587 is a common MUA expectation; if you need it, it is an apply-time
 listener choice, not something Nix pins today.
@@ -471,13 +472,13 @@ Doc and comment lag can cause wrong operator actions. Prefer one story:
 |----------|-------------------|--------------|
 | `docs/STACK.md` diagram and ports table | may still lag if old diagram cells remain | UI **:8090**, Stalwart **:8080** (verify diagram) |
 | `docs/MIGRATION.md` | *(mopped 2026-08-07)* :8081 references | Management HTTP **:8080** |
-| `docs/STACK.md` / README / open-choices engine wording | *(mopped earlier)* soft "after bump" | Pin is **0.16.15** (still not "accepted forever") |
-| `docs/DATASTORES.md` section 5.x | *(mopped 2026-08-07)* had TOML-shaped eval + spam v2.0.5 | Living text: 0.16 config.json; spam-filter **3.0.0**; `services.stalwart` |
+| `docs/STACK.md` / README / open-choices engine wording | *(mopped earlier)* soft "after bump" | Pin is **1.0.2** (re-read 2026-11-03; still not "accepted forever") |
+| `docs/DATASTORES.md` section 5.x | *(mopped 2026-08-07)* had TOML-shaped eval + spam v2.0.5 | Living text: DataStore config.json; spam-filter **3.0.4** rules archive only; `services.stalwart` |
 | `docs/OPS.md` / `MIGRATION.md` / `SEARCH_AND_UI.md` ports | *(mopped 2026-08-07)* Stalwart **:8081** / UI **:8080** mixups | Stalwart **:8080**, UI default **:8090** |
 | `docs/fix-and-fixos.md` section 3 "today" | Stalwart still largely from nixpkgs until packaging lands | Packaging **landed** (L1 evidence): Surmount FODs + service module |
 | `.grok/joins/foundation.md` | Older port/module story | Defer to `stalwart-current.md` + modules |
 | README "Stalwart admin fallback" ssh example | *(mopped earlier)* was 8081 | Living example uses **8080** |
-| open-choices "Engine version" | *(mopped earlier)* soft "after bump" prose | Living pin **0.16.15** + package path |
+| open-choices "Engine version" | *(mopped earlier)* soft "after bump" prose | Living pin **1.0.2** + package path |
 
 ### 6.2 Code / ops implications to stop treating as settled product law
 

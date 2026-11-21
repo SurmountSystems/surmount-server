@@ -24,6 +24,20 @@ let
   cfg = config.surmount;
   inherit (lib) mkIf mkMerge mkDefault;
   uiUpstream = "${cfg.managementUi.listenAddress}:${toString cfg.managementUi.port}";
+  # enableACME on these vhosts is what creates the nixpkgs ACME units.
+  acmeCertNames = lib.unique [
+    cfg.servicesHostname
+    cfg.mailHostname
+    cfg.primaryDomain
+    "www.${cfg.primaryDomain}"
+  ];
+  acmeJournal = name: {
+    serviceConfig = {
+      SyslogIdentifier = name;
+      LogRateLimitIntervalSec = "30s";
+      LogRateLimitBurst = 50000;
+    };
+  };
 in
 {
   config = mkIf (cfg.enable && cfg.web.enable) (mkMerge [
@@ -42,6 +56,9 @@ in
 
         # Mild request-size guard; mail blobs go through Stalwart, not nginx.
         clientMaxBodySize = mkDefault "25m";
+        # Default error_log level is error. notice adds TLS and worker
+        # notices without debug buffers (those can include certificate bytes).
+        logError = "stderr notice";
 
         virtualHosts = {
           # Primary management UI
@@ -55,17 +72,9 @@ in
                 proxy_read_timeout 120s;
               '';
             };
-            # Optional path to Stalwart native admin (temporary fallback).
-            # Stalwart 0.16 first-boot default HTTP listener is :8080 (all
-            # interfaces). Prefer SSH tunnel and/or rebind to loopback via
-            # WebUI / stalwart-cli apply before exposing this path publicly.
-            locations."/stalwart-admin/" = {
-              proxyPass = "http://127.0.0.1:8080/";
-              extraConfig = ''
-                # Bootstrap only. Consider removing once management-ui covers ops.
-                proxy_set_header Host $host;
-              '';
-            };
+            # No public /stalwart-admin/ proxy. That path published loopback
+            # Stalwart HTTP on the services vhost. Bootstrap is an SSH tunnel
+            # to the loopback listener, not a clearnet location.
           };
 
           # Mail hostname: ACME cert useful for Stalwart TLS file paths later.
@@ -93,6 +102,32 @@ in
         }
         // cfg.web.extraVhosts;
       };
+
+      # Journal identity for the transitional edge and for the ACME units
+      # this escape creates (acme-<cert>, acme-order-renew-<cert>). The
+      # renew timer is acme-renew-<cert> and has no exec log of its own.
+      # In-process host ACME stays off. web.enable stays the gate.
+      systemd.services = lib.mkMerge [
+        {
+          nginx.serviceConfig = {
+            SyslogIdentifier = "nginx";
+            LogRateLimitIntervalSec = "30s";
+            LogRateLimitBurst = 50000;
+          };
+        }
+        (lib.listToAttrs (
+          map (cert: {
+            name = "acme-${cert}";
+            value = acmeJournal "acme-${cert}";
+          }) acmeCertNames
+        ))
+        (lib.listToAttrs (
+          map (cert: {
+            name = "acme-order-renew-${cert}";
+            value = acmeJournal "acme-order-renew-${cert}";
+          }) acmeCertNames
+        ))
+      ];
     }
   ]);
 }

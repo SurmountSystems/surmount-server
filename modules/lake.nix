@@ -119,7 +119,12 @@ in
       systemd.services.stalwart-mail.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
       systemd.services.surmount-management-ui.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
       systemd.services.sshd.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
-      systemd.services.surmount-arti-hidden-service.serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
+      # Do not instantiate the daemon unit when startDaemon is false.
+      # A bare serviceConfig assignment would create it with enable defaulting
+      # to true. OOM protection still applies when the daemon is requested.
+      systemd.services.surmount-arti-hidden-service = lib.mkIf cfg.artiHiddenService.startDaemon {
+        serviceConfig.OOMScoreAdjust = lib.mkDefault (-300);
+      };
     })
   ];
 }

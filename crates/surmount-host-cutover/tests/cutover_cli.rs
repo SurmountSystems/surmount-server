@@ -118,6 +118,11 @@ exit 0
             "dns-zone-namecheap",
             "#!/bin/sh\necho dns-zone-namecheap \"$@\"\nexit 0\n",
         );
+        // deploy-host --dry-run execs ssh and rsync. The Nix check
+        // sandbox has neither binary. These fakes keep that dry-run
+        // off the network, matching the deploy-host crate tests.
+        write_exec(&tools, "fake-ssh", "#!/bin/sh\nexit 0\n");
+        write_exec(&tools, "rsync", "#!/bin/sh\nexit 0\n");
         Self {
             work,
             repo,
@@ -141,6 +146,10 @@ exit 0
         c.env("SURMOUNT_CUTOVER_FREE_443", &self.free443);
         c.env("SURMOUNT_CUTOVER_DNS_ZONE", &self.dns);
         c.env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &self.secrets);
+        let tools = self.work.join("tools");
+        let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+        c.env("PATH", format!("{}:{path}", tools.display()));
+        c.env("SURMOUNT_DEPLOY_SSH", tools.join("fake-ssh"));
         c
     }
 
