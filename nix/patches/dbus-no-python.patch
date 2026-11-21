@@ -1,0 +1,60 @@
+--- a/meson.build
++++ b/meson.build
+@@ -84,7 +84,8 @@
+ ###############################################################################
+ # System detection
+ 
+-python = find_program('python3')
++# This host has no python3. Docs and the install script do not call it.
++# The socket directory below is /tmp, which is the Unix fallback.
+ 
+ host_os = host_machine.system()
+ 
+@@ -1052,13 +1053,8 @@
+ endif
+ data_config.set('DATADIR_FROM_PKGSYSCONFDIR', datadir_from_pkgsysconfdir)
+ 
+-#### Find socket directories
+-values = run_command(python, '-c',
+-    'import os; [print(os.getenv(e, "")) for e in ["TMPDIR", "TEMP", "TMP"]]',
+-    check: true,
+-).stdout()
+-values += '/tmp'
+-default_socket_dir = values.strip().split('\n')[0]
++# Unix fallback from the old probe, and the nixpkgs session_socket_dir.
++default_socket_dir = '/tmp'
+ 
+ test_socket_dir = get_option('test_socket_dir')
+ if test_socket_dir == ''
+@@ -1242,13 +1239,12 @@
+ if tools
+     subdir('tools')
+ endif
+-subdir('test')
++# test/data/meson.build runs copy_data_for_tests.py. modular_tests is off.
++# libdbus installs from subdir('dbus'). dbus-daemon installs from subdir('bus').
+ subdir('doc')
+ subdir('cmake')
+ 
+-meson.add_install_script('meson_post_install.py',
+-    '@0@'.format(relocation),
+-)
+-
++# meson_post_install.py is python. Relocation is disabled, and the
++# launch-helper setuid step is not required for the store install.
+ pkgconfig.generate(
+     libdbus,
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -102,8 +102,9 @@
+ 
+ xdgdir = custom_target('gen-xdgdir',
+     command: [
+-        python,
+-        files('mkdir-m700.py'),
++        'mkdir',
++        '-p',
++        '-m', '700',
+         meson.current_build_dir() / 'XDG_RUNTIME_DIR',
+     ],
+     output: 'XDG_RUNTIME_DIR'

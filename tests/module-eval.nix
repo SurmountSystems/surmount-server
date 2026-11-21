@@ -4343,12 +4343,17 @@ let
     assert requireJournalBurst "nix-daemon" sc;
     "t72-nix-daemon-journal-when-builder-on-ok";
 
-  # Mail-host install and build closure, not only the firewall tool's
-  # direct nativeBuildInputs. nftables stays on so firewall-nftables.nix
+  # Mail-host install closure: installed outputs and the runtime
+  # references of those outputs, not only the firewall tool's direct
+  # nativeBuildInputs. nftables stays on so firewall-nftables.nix
   # actually installs nixos-firewall-tool. A Haskell derivation anywhere
   # under those roots fails this assert. A derivation whose name or pname
   # contains python, python3, pythonPackages, dbus-python, pandas, pip, or
-  # json-schema-for-humans fails the same walk. An empty walk does not pass.
+  # json-schema-for-humans fails the same walk. The glibc library's
+  # python3Minimal is a native build input for scripts/gen-as-const.py.
+  # Installed glibc outputs do not reference it, so that one configure
+  # edge is not an install reference. Any other python introducer still
+  # fails. An empty walk does not pass.
   t73-no-haskell-mail-host-closure =
     let
       e = evalSurmount {
@@ -4417,6 +4422,8 @@ let
       # recorded and their inputs are not walked, because one
       # interpreter outPath re-enters every module. A Python or
       # Haskell derivation on a non-perl input list is still checked.
+      # runtimeEdgeNames are the install references. nativeBuildInputs
+      # is build time. It is not an install reference.
       edgeNames = [
         "buildInputs"
         "nativeBuildInputs"
@@ -4441,7 +4448,35 @@ let
         "paths"
         "propagatedUserEnvPackages"
       ];
+      # Same slot as buildInputs / propagatedBuildInputs when a
+      # derivation still exposes the offset names. paths is a buildEnv
+      # of installed outputs.
+      runtimeEdgeNames = [
+        "buildInputs"
+        "propagatedBuildInputs"
+        "depsHostTarget"
+        "depsHostTargetPropagated"
+        "propagatedUserEnvPackages"
+        "paths"
+      ];
       directDeps = pkg: lib.concatMap (name: asDrvs (pkg.${name} or null)) edgeNames;
+      drvId = drv: drv.name or drv.pname or "";
+      listedIn =
+        names: pkg: dep:
+        let
+          id = drvId dep;
+        in
+        id != ""
+        && builtins.any (other: drvId other == id) (
+          lib.concatMap (name: asDrvs (pkg.${name} or null)) names
+        );
+      # pname "glibc" is the library in nixpkgs glibc/default.nix.
+      # glibc-locales does not match glibc-[0-9]. Do not treat every
+      # glibc edge as absent. Only this parent's non-runtime python.
+      isGlibcLibrary =
+        drv:
+        (drv.pname or "") == "glibc"
+        || builtins.match "glibc-[0-9].*" (drv.name or "") != null;
       optionalDrvs = value: asDrvs value;
       # perl-5.42.3's outPath re-enters every module and overflows the
       # Nix stack. Key perl derivations by name so the walk still sees
@@ -4495,7 +4530,7 @@ let
           }) roots
         )
       );
-      closure = builtins.genericClosure {
+      rawClosure = builtins.genericClosure {
         inherit startSet;
         operator =
           item:
@@ -4518,6 +4553,26 @@ let
               depth = depth + 1;
             }) (directDeps item.drv);
       };
+      rawByKey = builtins.listToAttrs (
+        map (item: {
+          name = item.key;
+          value = item;
+        }) rawClosure
+      );
+      # Absent only when the parent is the glibc library and this
+      # python derivation is not in that parent's runtime edges.
+      # A non-glibc introducer stays in the install closure.
+      isGlibcConfigureInterpreter =
+        item:
+        let
+          via = item.viaKey or null;
+          parent = if via == null then null else rawByKey.${via} or null;
+        in
+        parent != null
+        && isPythonDrv item.drv
+        && isGlibcLibrary parent.drv
+        && !listedIn runtimeEdgeNames parent.drv item.drv;
+      closure = builtins.filter (item: !isGlibcConfigureInterpreter item) rawClosure;
       closureByKey = builtins.listToAttrs (
         map (item: {
           name = item.key;
@@ -4543,6 +4598,20 @@ let
       badPythonDesc = lib.concatMapStringsSep ", " (
         item: item.drv.name or item.drv.pname or "unknown"
       ) badPython;
+      # Python whose parent is not the glibc library. A root python
+      # has no parent and still fails. The glibc configure interpreter
+      # is not in closure, so it is not this list.
+      nonGlibcPython = builtins.filter (
+        item:
+        let
+          via = item.viaKey or null;
+          parent = if via == null then null else closureByKey.${via} or null;
+        in
+        isPythonDrv item.drv && (parent == null || !isGlibcLibrary parent.drv)
+      ) closure;
+      nonGlibcPythonDesc = lib.concatMapStringsSep ", " (
+        item: item.drv.name or item.drv.pname or "unknown"
+      ) nonGlibcPython;
       tool = e.pkgs.nixos-firewall-tool;
       toolInstalled = builtins.any (
         p: lib.hasInfix "nixos-firewall-tool" (p.name or "")
@@ -4608,6 +4677,9 @@ let
       in
       "mail-host build and install closure still reaches Python via ${chain}; chains: ${sampleChains}; introducers: ${introText}: ${badPythonDesc}"
     );
+    assert lib.assertMsg (
+      nonGlibcPython == [ ]
+    ) "non-glibc introducer of a python-named derivation: ${nonGlibcPythonDesc}";
     assert lib.assertMsg (
       !sourceHas "prev.nixos-firewall-tool" ../nix/overlays.nix
     ) "nixos-firewall-tool must be writeShellScriptBin, not the upstream derivation";

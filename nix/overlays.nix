@@ -1365,6 +1365,35 @@ let
                   ;;
               esac
             fi
+            # udevadm and the other helpers list libmount.so.1 in
+            # DT_NEEDED. Their RUNPATH is only lib/systemd, so the
+            # loader cannot open libmount. Record that directory for
+            # every ELF in this output that needs the soname. Those
+            # binaries also list libseccomp.so.2. cgtop already records
+            # both directories.
+            find "$out" -type f -print | while IFS= read -r candidate; do
+              resolved=$(resolve_elf "$candidate") || continue
+              if patchelf --print-needed "$resolved" | grep -F -x -q libmount.so.1; then
+                add_rpath "$resolved" "$mount_lib"
+              fi
+              if patchelf --print-needed "$resolved" | grep -F -x -q libseccomp.so.2; then
+                add_rpath "$resolved" "$seccomp_lib"
+              fi
+            done
+            if [ -e "$out/bin/udevadm" ]; then
+              udev=$(resolve_elf "$out/bin/udevadm") || {
+                echo "udevadm is not an ELF" >&2
+                exit 1
+              }
+              udev_rpath=$(patchelf --print-rpath "$udev")
+              case ":$udev_rpath:" in
+                *":$mount_lib:"*) ;;
+                *)
+                  echo "udevadm RUNPATH is missing libmount" >&2
+                  exit 1
+                  ;;
+              esac
+            fi
           '';
           # switch-to-configuration build.rs reads
           # share/dbus-1/interfaces/org.freedesktop.systemd1.Manager.xml.
@@ -2711,6 +2740,11 @@ let
       # interpreter slot. Do not put an interpreter on PATH.
       # The dbus checks run interpreter scripts, so skip them.
       dbus = (prev.dbus.override { x11Support = false; }).overrideAttrs (old: {
+        # meson.build:87 find_program('python3') is removed in this patch.
+        # Do not rebind python3. The nix file only adds the patch.
+        patches = (old.patches or [ ]) ++ [
+          ./patches/dbus-no-python.patch
+        ];
         doCheck = false;
         nativeBuildInputs =
           let
@@ -2763,6 +2797,69 @@ let
               mv "$tmp" "$pc"
             fi
           fi
+        '';
+      });
+
+      # kbd lists the stock auto-patchelf hook. That program is Python
+      # and its shebang is /usr/bin/env, which the sandbox does not
+      # have. Do not run it. Do not install a shell named python3.
+      # gcc links the ELFs. postFixup records a store directory when a
+      # NEEDED soname is in $out/lib or a build input.
+      kbd = prev.kbd.overrideAttrs (old: {
+        dontAutoPatchelf = true;
+        nativeBuildInputs =
+          let
+            tried = builtins.tryEval (old.nativeBuildInputs or [ ]);
+            inputs = if tried.success && builtins.isList tried.value then tried.value else [ ];
+          in
+          builtins.filter (
+            dep:
+            let
+              one = builtins.tryEval dep;
+              name = if one.success then one.value.name or "" else "";
+              pname = if one.success then one.value.pname or "" else "";
+            in
+            one.success
+            && !(prev.lib.hasInfix "auto-patchelf" name)
+            && !(prev.lib.hasInfix "auto-patchelf" pname)
+            && !(prev.lib.hasInfix "python" name)
+            && !(prev.lib.hasInfix "Python" name)
+            && !(prev.lib.hasInfix "python" pname)
+            && !(prev.lib.hasInfix "Python" pname)
+          ) inputs;
+        postFixup = (old.postFixup or "") + ''
+          add_rpath() {
+            elf=$1
+            dir=$2
+            if [ ! -d "$dir" ]; then
+              return 0
+            fi
+            got=$(patchelf --print-rpath "$elf" 2>/dev/null) || return 0
+            case ":$got:" in
+              *":$dir:"*) return 0 ;;
+            esac
+            if [ -n "$got" ]; then
+              patchelf --set-rpath "$got:$dir" "$elf"
+            else
+              patchelf --set-rpath "$dir" "$elf"
+            fi
+          }
+          find "$out" -type f -print | while IFS= read -r elf; do
+            patchelf --print-needed "$elf" >/dev/null 2>&1 || continue
+            patchelf --print-needed "$elf" | while IFS= read -r soname; do
+              if [ -z "$soname" ]; then
+                continue
+              fi
+              if [ -e "$out/lib/$soname" ]; then
+                add_rpath "$elf" "$out/lib"
+              fi
+              for dir in $buildInputs; do
+                if [ -e "$dir/lib/$soname" ]; then
+                  add_rpath "$elf" "$dir/lib"
+                fi
+              done
+            done
+          done
         '';
       });
 
@@ -4821,6 +4918,117 @@ let
               if grep -R -n -E 'add_subdirectory[[:space:]]*\([[:space:]]*clangd[[:space:]]*\)' \
                 --include=CMakeLists.txt . ; then
                 echo "clangd subdirectory still configured" >&2
+                exit 1
+              fi
+              # HTMLLogger.cpp includes HTMLLogger.inc. That file is
+              # produced by bundle_resources.py. Do not run that script.
+              # No other translation unit names HTMLLogger. Drop the
+              # source and the custom command. Logger::html is defined
+              # only in that file. DataflowAnalysisContext.cpp still
+              # calls it. That call is removed below. Do not delete
+              # DataflowAnalysisContext.cpp. The rest of that file is
+              # the dataflow context the library links.
+              strip_html_logger() {
+                cm=$1
+                if [ ! -f "$cm" ]; then
+                  return 0
+                fi
+                chmod u+w "$cm"
+                tmp=$(mktemp)
+                awk '
+                  BEGIN { skip = 0 }
+                  index($0, "HTMLLogger.cpp") { next }
+                  index($0, "add_custom_command(OUTPUT HTMLLogger.inc") { skip = 1; next }
+                  skip {
+                    if (index($0, "set_target_properties(clangAnalysisFlowSensitiveResources")) {
+                      skip = 0
+                    }
+                    next
+                  }
+                  index($0, "clangAnalysisFlowSensitiveResources") { next }
+                  $0 ~ /^[[:space:]]*DEPENDS[[:space:]]*$/ { next }
+                  { print }
+                ' "$cm" > "$tmp"
+                cat "$tmp" > "$cm"
+                rm -f "$tmp"
+                if grep -F -q HTMLLogger.cpp "$cm"; then
+                  echo "HTMLLogger.cpp is still compiled" >&2
+                  exit 1
+                fi
+                if grep -F -q bundle_resources.py "$cm"; then
+                  echo "HTMLLogger still runs bundle_resources.py" >&2
+                  exit 1
+                fi
+                # LLVMProcessSources.cmake globs *.cpp in this directory and
+                # rejects a file that the target does not list. Removing the
+                # line is not enough. Remove the unlisted source. Do not
+                # restore bundle_resources.py.
+                dir=$(dirname "$cm")
+                rm -f "$dir/HTMLLogger.cpp"
+                if [ -e "$dir/HTMLLogger.cpp" ]; then
+                  echo "HTMLLogger.cpp is still in the source directory" >&2
+                  exit 1
+                fi
+              }
+              for cm in \
+                clang/lib/Analysis/FlowSensitive/CMakeLists.txt \
+                lib/Analysis/FlowSensitive/CMakeLists.txt
+              do
+                strip_html_logger "$cm"
+              done
+              if [ ! -f clang/lib/Analysis/FlowSensitive/CMakeLists.txt ] \
+                && [ ! -f lib/Analysis/FlowSensitive/CMakeLists.txt ]; then
+                echo "FlowSensitive CMakeLists.txt is missing" >&2
+                exit 1
+              fi
+              # The link of libclang-cpp fails with an undefined
+              # reference to Logger::html from DataflowAnalysisContext.cpp.
+              # HTMLLogger.cpp was the only translation unit that
+              # included HTMLLogger.inc, and it is already removed.
+              # Drop the HTML-only lines. Keep the existing textual
+              # logger return. Do not add a generator.
+              strip_html_logger_call() {
+                src=$1
+                if [ ! -f "$src" ]; then
+                  return 0
+                fi
+                chmod u+w "$src"
+                tmp=$(mktemp)
+                awk '
+                  BEGIN { drop = 0 }
+                  index($0, "if (DataflowLog.empty())") { next }
+                  index($0, "llvm::StringRef Dir = DataflowLog") { drop = 1; next }
+                  drop {
+                    if (index($0, "Logger::html")) {
+                      drop = 0
+                    }
+                    next
+                  }
+                  { print }
+                ' "$src" > "$tmp"
+                cat "$tmp" > "$src"
+                rm -f "$tmp"
+                if grep -F -q "Logger::html" "$src"; then
+                  echo "DataflowAnalysisContext.cpp still calls Logger::html" >&2
+                  exit 1
+                fi
+                if ! grep -F -q "Logger::textual" "$src"; then
+                  echo "textual logger return is missing" >&2
+                  exit 1
+                fi
+              }
+              html_call_found=0
+              for src in \
+                clang/lib/Analysis/FlowSensitive/DataflowAnalysisContext.cpp \
+                lib/Analysis/FlowSensitive/DataflowAnalysisContext.cpp
+              do
+                if [ -f "$src" ]; then
+                  html_call_found=1
+                  strip_html_logger_call "$src"
+                fi
+              done
+              if [ "$html_call_found" -eq 0 ]; then
+                echo "DataflowAnalysisContext.cpp is missing" >&2
                 exit 1
               fi
             '';

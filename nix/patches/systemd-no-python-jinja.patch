@@ -131,6 +131,11 @@
  
  custom_target(
          output : 'installed-unit-files.txt',
+@@ -3023,3 +3015,3 @@
+ if conf.get('ENABLE_HWDB') == 1
+-        alias_target('hwdb', auto_suspend_rules, executables_by_name.get('systemd-hwdb'), hwdb_units)
++        alias_target('hwdb', executables_by_name.get('systemd-hwdb'), hwdb_units)
+ endif
 --- a/tools/meson.build
 +++ b/tools/meson.build
 @@ -7,5 +7,4 @@
@@ -139,4 +144,31 @@
 -dbus_exporter_py               = files('dbus_exporter.py')
  find_unused_library_symbols_py = files('find-unused-library-symbols.py')
  generate_gperfs                = files('generate-gperfs.py')
+--- a/hwdb.d/meson.build
++++ b/hwdb.d/meson.build
+@@ -45,13 +45,8 @@
+         '82-net-auto-link-local.hwdb')
  
+ if conf.get('ENABLE_HWDB') == 1
+-        auto_suspend_rules = custom_target(
+-                output : '60-autosuspend-chromiumos.hwdb',
+-                command : make_autosuspend_rules_py,
+-                capture : true,
+-                install : true,
+-                install_dir: udevhwdbdir,
+-                install_tag: 'hwdb')
++        # Do not run tools/make-autosuspend-rules.py. The mail host
++        # does not install the generated Chromium OS autosuspend hwdb.
+ 
+         install_data(hwdb_files_notest,
+                      hwdb_files_test,
+@@ -70,8 +65,7 @@
+                 test('parse-hwdb',
+                      files('parse_hwdb.py'),
+                      suite : 'dist',
+-                     args : [hwdb_files_test,
+-                             auto_suspend_rules],
++                     args : [hwdb_files_test],
+                      timeout : 90)
+         endif
+ endif
