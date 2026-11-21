@@ -251,6 +251,23 @@ pandas, pip, and json-schema-for-humans. That walk is
 walk does not pass. Git on the mail host keeps `pythonSupport` false.
 Do not add a replacement Python or Haskell tool.
 
+## Hiding Python is not removal
+
+Hiding Python is not removal. These three shapes are concealment, not
+removal.
+
+1. A colon no-op of a Python path is concealment, not removal.
+2. A shell script that execs a Python store path is concealment, not removal.
+3. An empty directory substituted for a Python program, while the mail
+   host still builds or installs that program, is concealment, not
+   removal.
+
+Delete the attribute or the call. Do not leave the Python derivation
+in the mail-host build closure. Do not replace that program with
+handwritten C, a Meson program body, or a new Python program.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Existing Rust or C, and every dry-run root together (operator 2026-11-07)
 
 When a Python program is in the way, use an existing Rust project.
@@ -311,6 +328,30 @@ patching line.
 
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
+## systemd meson.build may drop python3 (operator 2026-11-20)
+
+Operator direction 2026-11-20 allows a change to systemd's meson.build
+on this mail host. The change exists only to remove the required
+python3 plus jinja2 find_installation and to call minijinja for the
+templates that script rendered. This is not permission to rebind
+python3, to disable systemd or logind, or to paste a Meson program
+body for any other package.
+
+Top-level python3, python, and python3Minimal stay throws. Do not
+rebind them. Do not restore systemdMesonPython. python3 stays refused.
+
+glibc's python3Minimal in `nix/glibc-header-gen-overlay.nix` stays.
+No Rust or C replacement for gen-as-const.py was found.
+
+logind stays enabled. Do not disable systemd, networking, sshd,
+journald, PAM, or nix-daemon.
+
+Every other package still must not carry a Meson program body in a
+Nix file we own. The section above still forbids that. This subsection
+does not weaken that forbid.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## Edge and security (operator direction 2026-07-30)
 
 - **No nginx** as product edge. In-tree nginx is **transitional-to-delete**.
@@ -344,6 +385,18 @@ Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
   operator explicitly approves something further in chat or writing.
 - Do not say "we decided" or "locked" without that approval.
 - Operator direction files are dated working direction, not eternal law.
+
+## Stalwart data is not disposable (operator 2026-11-20)
+
+The live Stalwart data directory on surmount-1 is not disposable. Do not
+delete it. Do not replace it. Do not reimport over it. Do not migrate
+into it. Do not point the service at a new empty store and call that the
+fix. Stopping `stalwart-mail` is allowed so a failing process stops
+retrying a write. A `cargo update` of this repo rewrites this repo's
+lock. It does not upgrade the Stalwart binary and it does not open that
+data directory. The binary in `nix/packages/stalwart-mail.nix` is the
+upstream tarball. Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md)
+section 5.
 
 ## Packages and forks
 

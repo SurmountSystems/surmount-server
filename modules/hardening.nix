@@ -43,6 +43,12 @@ let
 in
 {
   config = mkMerge [
+    # NixOS installs nixos-rebuild-ng by default. That program is Python.
+    # The mail host does not install it and does not wrap a store path of it.
+    (mkIf cfg.enable {
+      system.tools.nixos-rebuild.enable = false;
+    })
+
     (mkIf (cfg.enable && cfg.hardening.enable) {
       services.openssh = {
         enable = true;

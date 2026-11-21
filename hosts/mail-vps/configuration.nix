@@ -97,6 +97,72 @@
     (modulesPath + "/profiles/qemu-guest.nix")
   ];
 
+  # nixos/lib/eval-config.nix imports nixos/modules/module-list.nix, and
+  # that list imports services/hardware/bluetooth.nix. The dry-run throws
+  # "mail-host eval refuses python3" while evaluating that module's pkgs
+  # argument. This mail host has no Bluetooth radio. Drop the module.
+  # The same throw names services/torrent/transmission.nix while evaluating
+  # pkgs for services.transmission.settings. This mail host does not run
+  # Transmission. Drop that module too.
+  # The next dry-run names services/networking/harmonia.nix while evaluating
+  # the module argument pkgs. This mail host does not run Harmonia.
+  # Drop that module too.
+  # The dry-run after that names services/web-apps/mattermost.nix while
+  # evaluating the module argument pkgs. This mail host does not run
+  # Mattermost. Drop that module too. Do not rebind python3.
+  # The next dry-run names services/networking/pdns-recursor.nix while
+  # evaluating the module argument pkgs. This mail host resolves DNS as
+  # a client. It does not run the PowerDNS recursor service. Drop that
+  # module too. Do not rebind python3.
+  # The dry-run after that names
+  # services/monitoring/prometheus/xmpp-alerts.nix while evaluating the
+  # module argument pkgs. This mail host does not run Prometheus XMPP
+  # alerts. Drop that module too. Do not rebind python3.
+  # The dry-run after that says the option hardware.bluetooth does not
+  # exist. The definition is upstream
+  # services/desktop-managers/gnome.nix line
+  # `hardware.bluetooth.enable = mkDefault true` inside
+  # `lib.mkIf serviceCfg.core-os-services.enable`. This mail host does
+  # not run a GNOME desktop. services.desktopManager.gnome.enable is
+  # not set true (upstream default false). Drop that module. Do not
+  # restore services/hardware/bluetooth.nix.
+  # The next dry-run names the same missing option, and the first
+  # definition Nix prints is services/desktop-managers/cosmic.nix
+  # (`hardware.bluetooth.enable = lib.mkDefault true` inside
+  # `lib.mkIf cfg.enable`). lib/modules.nix shows only
+  # `head merged.unmatchedDefns`, so the other always-imported
+  # assigners are not printed yet. Each enable below defaults false
+  # and this host does not set it true. Drop those modules too.
+  # Do not restore services/hardware/bluetooth.nix.
+  # system/boot/kexec.nix stays disabled. nixpkgs kexec.nix sets
+  # boot.kexec.enable's default to
+  # lib.meta.availableOn pkgs.stdenv.hostPlatform pkgs.kexec-tools.
+  # This host does not set boot.kexec.enable = true.
+  # systemd-logind stays enabled. switch-to-configuration-ng calls
+  # logind.list_users() on every switch.
+  disabledModules = [
+    "services/hardware/bluetooth.nix" # No Bluetooth radio. hardware.bluetooth.enable is not set true.
+    "services/torrent/transmission.nix" # No BitTorrent client. services.transmission.enable is not set true.
+    "services/networking/harmonia.nix" # No Nix binary cache. services.harmonia.cache.enable is not set true.
+    "services/web-apps/mattermost.nix" # No chat server. services.mattermost.enable is not set true.
+    "services/networking/pdns-recursor.nix" # DNS client only. services.pdns-recursor.enable is not set true.
+    "services/monitoring/prometheus/xmpp-alerts.nix" # No Alertmanager XMPP hook. services.prometheus.xmpp-alerts.enable is not set true.
+    "services/desktop-managers/gnome.nix" # No GNOME desktop. services.desktopManager.gnome.enable is not set true.
+    "services/desktop-managers/cosmic.nix" # No COSMIC desktop. services.desktopManager.cosmic.enable is not set true.
+    "services/desktop-managers/budgie.nix" # No Budgie desktop. services.desktopManager.budgie.enable is not set true.
+    "services/desktop-managers/pantheon.nix" # No Pantheon desktop. services.desktopManager.pantheon.enable is not set true.
+    "services/desktop-managers/lomiri.nix" # No Lomiri shell. services.desktopManager.lomiri.enable is not set true.
+    "services/x11/desktop-managers/cinnamon.nix" # No Cinnamon desktop. services.xserver.desktopManager.cinnamon.enable is not set true.
+    "hardware/xpadneo.nix" # No Xbox controller. hardware.xpadneo.enable is not set true.
+    "hardware/facter/bluetooth.nix" # No Facter Bluetooth probe. hardware.facter.detected.bluetooth.enable is not set true.
+    "programs/gpaste.nix" # No clipboard manager. programs.gpaste.enable is not set true.
+    "services/x11/display-managers/lightdm-greeters/lomiri.nix" # No LightDM. services.xserver.displayManager.lightdm.greeters.lomiri.enable is not set true.
+    "services/x11/desktop-managers/phosh.nix" # No phone shell. services.xserver.desktopManager.phosh.enable is not set true.
+    "services/networking/ncdns.nix" # No Namecoin DNS bridge. services.ncdns.enable is not set true.
+    "system/boot/systemd/tpm2.nix" # No TPM2 measured boot. systemd.tpm2.enable is not set true.
+    "system/boot/kexec.nix" # No kexec reboot. boot.kexec.enable is not set true, and the default evaluates pkgs.kexec-tools.
+  ];
+
   # ---- Surmount stack ------------------------------------------------------
   surmount = {
     enable = true;

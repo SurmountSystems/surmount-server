@@ -11,7 +11,7 @@
   lib,
   stdenv,
   fetchurl,
-  autoPatchelfHook,
+  patchelf,
   openssl,
   zlib,
 }:
@@ -47,7 +47,7 @@ stdenv.mkDerivation {
     inherit (spec) url hash;
   };
 
-  nativeBuildInputs = [ autoPatchelfHook ];
+  nativeBuildInputs = [ patchelf ];
   buildInputs = [
     openssl
     zlib
@@ -57,12 +57,24 @@ stdenv.mkDerivation {
   sourceRoot = spec.dir;
 
   dontBuild = true;
+  dontPatchELF = true;
 
   installPhase = ''
     runHook preInstall
     mkdir -p $out/bin
     install -Dm755 stalwart-cli $out/bin/stalwart-cli
     runHook postInstall
+  '';
+
+  postFixup = ''
+    patchelf \
+      --set-interpreter "${stdenv.cc.bintools.dynamicLinker}" \
+      --set-rpath "${lib.makeLibraryPath [
+        openssl
+        zlib
+        stdenv.cc.cc.lib
+      ]}" \
+      "$out/bin/stalwart-cli"
   '';
 
   meta = {

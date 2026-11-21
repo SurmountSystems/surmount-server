@@ -1,0 +1,142 @@
+--- a/man/meson.build
++++ b/man/meson.build
+@@ -114,7 +114,8 @@
+ 
+ ############################################################
+ 
+-have_lxml = run_command(xml_helper_py, check: false).returncode() == 0
++# xml_helper.py imports lxml. Do not execute it. Indices stay off.
++have_lxml = false
+ if not have_lxml
+         message('python-lxml not available, not making man page indices')
+ endif
+--- a/meson.build
++++ b/meson.build
+@@ -1704,10 +1704,7 @@
+ #####################################################################
+ 
+ pymod = import('python')
+-python = pymod.find_installation('python3', required : true, modules : ['jinja2'])
+-if not python.language_version().version_compare('>=3.9')
+-        error('Python >= 3.9 is required')
+-endif
++# Jinja templates are rendered by minijinja-cli. Do not require python3.
+ 
+ #####################################################################
+ 
+--- a/src/core/meson.build
++++ b/src/core/meson.build
+@@ -109,8 +109,7 @@
+ bpf_delegate_configs_inc = custom_target(
+         input : [generate_bpf_delegate_configs, bpf_delegate_sources],
+         output : 'bpf-delegate-configs.inc',
+-        command : [python,
+-                   generate_bpf_delegate_configs,
++        command : [generate_bpf_delegate_configs,
+                    'code',
+                    bpf_delegate_sources],
+         capture : true)
+@@ -118,8 +117,7 @@
+ bpf_delegate_xml = custom_target(
+         input : [generate_bpf_delegate_configs, bpf_delegate_sources],
+         output : 'bpf-delegate.xml',
+-        command : [python,
+-                   generate_bpf_delegate_configs,
++        command : [generate_bpf_delegate_configs,
+                    'doc',
+                    bpf_delegate_sources],
+         capture : true)
+--- a/src/shared/meson.build
++++ b/src/shared/meson.build
+@@ -321,11 +321,11 @@
+ generated_sources += [target1, target2]
+ shared_sources += [target1, target2]
+ 
+-ethtool_link_mode_py = files('ethtool-link-mode.py')
++ethtool_link_modes_sh = files('ethtool-link-modes')
+ ethtool_link_mode_inc = custom_target(
+-        input : [ethtool_link_mode_py, ethtool_link_mode_sources],
++        input : [ethtool_link_modes_sh, ethtool_link_mode_sources],
+         output : 'ethtool-link-mode.inc',
+-        command : [python, ethtool_link_mode_py, '--header', cpp, system_include_args],
++        command : [ethtool_link_modes_sh, '--header', cpp, system_include_args],
+         capture : true)
+ 
+ generated_sources += ethtool_link_mode_inc
+@@ -333,9 +333,9 @@
+ sources += shared_sources
+ 
+ ethtool_link_mode_xml = custom_target(
+-        input : [ethtool_link_mode_py, ethtool_link_mode_sources],
++        input : [ethtool_link_modes_sh, ethtool_link_mode_sources],
+         output : 'ethtool-link-mode.xml',
+-        command : [python, ethtool_link_mode_py, '--xml', cpp, system_include_args],
++        command : [ethtool_link_modes_sh, '--xml', cpp, system_include_args],
+         capture : true)
+ man_page_depends += ethtool_link_mode_xml
+ 
+--- a/src/basic/meson.build
++++ b/src/basic/meson.build
+@@ -178,29 +178,29 @@
+ ############################################################
+ 
+-filesystem_sets_py = files('filesystem-sets.py')
++filesystem_sets_sh = files('filesystem-sets-sh')
+ filesystem_sets_c = custom_target(
+         output : 'filesystem-sets.c',
+-        command : [filesystem_sets_py,
++        command : [filesystem_sets_sh,
+                    'fs-type-to-string',
+                    'filesystem-sets',
+                    'fs-in-group'],
+         capture : true)
+ 
+ filesystems_gperf_gperf = custom_target(
+         output : 'filesystems-gperf.gperf',
+-        command : [filesystem_sets_py,
++        command : [filesystem_sets_sh,
+                    'gperf'],
+         capture : true)
+ 
+ filesystems_gperf_h = custom_target(
+         input : filesystems_gperf_gperf,
+         output : 'filesystems-gperf.h',
+         command : [gperf, '@INPUT@', '--output-file', '@OUTPUT@'])
+ 
+ generated_sources += [filesystem_sets_c, filesystems_gperf_gperf, filesystems_gperf_h]
+ basic_sources += [filesystem_sets_c, filesystems_gperf_h]
+ 
+ test('kernel-filesystem-magics',
+-     filesystem_sets_py,
++     filesystem_sets_sh,
+      args : ['check'],
+      env : ['CPP=@0@'.format(cpp)])
+--- a/meson.build
++++ b/meson.build
+@@ -2995,14 +2992,9 @@
+ alias_target('update-dbus-docs', update_dbus_docs)
+ alias_target('update-man-rules', update_man_rules)
+ 
+-if not meson.is_cross_build()
+-        custom_target(
+-                'export-dbus-interfaces',
+-                output : fs.name(dbus_interfaces_dir),
+-                install : dbus_interfaces_dir != 'no',
+-                install_dir : fs.parent(dbus_interfaces_dir),
+-                command : [dbus_exporter_py, '@OUTPUT@', dbus_programs])
+-endif
++# Do not run tools/dbus_exporter.py. That file is python3.
++# The interfaces directory is written after install from
++# systemd --bus-introspect. No C file includes this output.
+ 
+ custom_target(
+         output : 'installed-unit-files.txt',
+--- a/tools/meson.build
++++ b/tools/meson.build
+@@ -7,5 +7,4 @@
+ check_version_sh               = files('check-version.sh')
+ elf2efi_py                     = files('elf2efi.py')
+-dbus_exporter_py               = files('dbus_exporter.py')
+ find_unused_library_symbols_py = files('find-unused-library-symbols.py')
+ generate_gperfs                = files('generate-gperfs.py')
+ 

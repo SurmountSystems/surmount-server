@@ -233,7 +233,7 @@ deploy_host_list_has_arch() {
   set -f
   found=0
   for tok in $1; do
-    if [ "$tok" = "$deploy_host_gccarch_token" ]; then
+    if [ "$tok" = "$deploy_host_gccarch_feature" ]; then
       found=1
       break
     fi
@@ -298,7 +298,7 @@ deploy_host_ensure_extra_tokens() {
     if [ "$tok" = surmount-remote ]; then
       has_remote=1
     fi
-    if [ "$tok" = "$deploy_host_gccarch_token" ]; then
+    if [ "$tok" = "$deploy_host_gccarch_feature" ]; then
       has_arch=1
     fi
     if [ -z "$out" ]; then
@@ -318,9 +318,9 @@ deploy_host_ensure_extra_tokens() {
   fi
   if [ "$has_arch" -eq 0 ]; then
     if [ -z "$out" ]; then
-      out=$deploy_host_gccarch_token
+      out=$deploy_host_gccarch_feature
     else
-      out="$out $deploy_host_gccarch_token"
+      out="$out $deploy_host_gccarch_feature"
     fi
   fi
   printf '%s' "$out"
@@ -357,7 +357,7 @@ deploy_host_rewrite_conf() {
     fi
   done < "$src"
   if [ "$found_extra" -eq 0 ]; then
-    printf '%s\n' "extra-system-features = surmount-remote $deploy_host_gccarch_token" >> "$tmp"
+    printf '%s\n' "extra-system-features = surmount-remote $deploy_host_gccarch_feature" >> "$tmp"
   fi
   if [ "$found_jobs" -eq 0 ]; then
     printf '%s\n' "max-jobs = 32" >> "$tmp"
@@ -448,7 +448,7 @@ fi
 /// extra tokens.
 pub(crate) fn gccarch_bootstrap_remote() -> String {
     format!(
-        "set +e\ndeploy_host_gccarch_token={GCCARCH_X86_64_V3}\ndeploy_host_run_nix_conf={RUN_NIX_CONF}\n{SHELL_FUNCTIONS}\n{SHELL_DRIVER}"
+        "set +e\ndeploy_host_gccarch_feature={GCCARCH_X86_64_V3}\ndeploy_host_run_nix_conf={RUN_NIX_CONF}\n{SHELL_FUNCTIONS}\n{SHELL_DRIVER}"
     )
 }
 
@@ -659,7 +659,7 @@ system-features = nixos-test benchmark big-parallel kvm gccarch-x86-64-v3\n";
         let dest = dir.join("out.conf");
         fs::write(&src, conf).map_err(|err| err.to_string())?;
         let script = format!(
-            "deploy_host_gccarch_token={GCCARCH_X86_64_V3}\n\
+            "deploy_host_gccarch_feature={GCCARCH_X86_64_V3}\n\
              deploy_host_run_nix_conf={RUN_NIX_CONF}\n\
              {SHELL_FUNCTIONS}\n\
              if deploy_host_file_system_features_has_token \"$1\"; then\n\
@@ -746,7 +746,7 @@ system-features = nixos-test benchmark big-parallel kvm gccarch-x86-64-v3\n";
     #[test]
     fn shell_blob_token_is_exact() {
         let script = format!(
-            "deploy_host_gccarch_token={GCCARCH_X86_64_V3}\n\
+            "deploy_host_gccarch_feature={GCCARCH_X86_64_V3}\n\
              deploy_host_run_nix_conf={RUN_NIX_CONF}\n\
              {SHELL_FUNCTIONS}\n\
              if deploy_host_blob_has_token \"$1\"; then echo YES; else echo NO; fi\n"

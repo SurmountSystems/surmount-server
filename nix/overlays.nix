@@ -24,11 +24,12 @@
 #             was the remaining Haskell edge after nixfmt-rs. It is now
 #             a non-Haskell script. Referencing ghc, haskellPackages,
 #             haskell.compiler, hadrian, ShellCheck, python, python3,
-#             python3Minimal, or pythonPackages throws. This overlay
-#             still drops glibc's python3Minimal input and
-#             libapparmor's python3Packages input. The library sandbox
-#             tool that runs scripts/gen-as-const.py is
-#             nix/glibc-header-gen-overlay.nix, not a system package.
+#             python3Minimal, or pythonPackages throws. Top-level python3
+#             stays a throw. nix/glibc-header-gen-overlay.nix puts the
+#             pre-throw interpreter back on the glibc derivation only.
+#             libapparmor's python3Packages input stays dropped. The
+#             library sandbox tool that runs scripts/gen-as-const.py is
+#             that glibc overlay, not a system package.
 #             libapparmor is overridden with
 #             withPython false, so the C library stays and the Python
 #             bindings are not configured. This overlay does not add a
@@ -383,122 +384,6 @@ let
       exec ${gen}/bin/filesystem-sets-gen "$@"
     '';
 
-  # Meson 1.10 find_installation runs python_info.py and reads one
-  # JSON object from stdout. import checks still use -c. The
-  # derivation name must not contain the interpreter token. The
-  # symlink name is the command meson already searches for.
-  mesonProbeStubFor =
-    prev:
-    prev.runCommand "meson-probe-stub"
-      {
-        probeName = "python" + "3";
-      }
-      ''
-        mkdir -p "$out/bin"
-        cat > "$out/bin/meson-probe-stub" << 'END'
-        #!/bin/sh
-        set -eu
-        if [ "$#" -eq 0 ]; then
-          printf '%s\n' '3.12.0'
-          exit 0
-        fi
-        case "$1" in
-          --version|-V)
-            printf '%s\n' '3.12.0'
-            exit 0
-            ;;
-          -c)
-            probe=$(printf '%s' "''${2-}" | tr -d ' \t\r\n')
-            case "$probe" in
-              importjinja2)
-                exit 0
-                ;;
-              importdistutils)
-                exit 0
-                ;;
-              importos\;*)
-                # dbus asks for TMPDIR, TEMP, and TMP. Print those
-                # values. Do not run the interpreter.
-                printf '%s\n' "''${TMPDIR-}" "''${TEMP-}" "''${TMP-}"
-                exit 0
-                ;;
-              import*)
-                exit 1
-                ;;
-            esac
-            printf '%s\n' '{"version":"3.12","sysconfig_paths":{"stdlib":"/usr/lib","purelib":"/usr/lib/site-packages","platlib":"/usr/lib/site-packages","include":"/usr/include","scripts":"/usr/bin","data":"/usr"},"variables":{"VERSION":"3.12","SOABI":"cpython-312","EXT_SUFFIX":".so"},"install_paths":{"purelib":"lib/site-packages","platlib":"lib/site-packages","include":"include","scripts":"bin","data":""}}'
-            exit 0
-            ;;
-        esac
-        base=$(basename "$1")
-        case "$base" in
-          python_info.py)
-            # Answer the Meson 1.10 sanity probe. Do not execute the file.
-            printf '%s\n' '{"version":"3.12","platform":"linux","is_pypy":false,"is_venv":false,"is_freethreaded":false,"link_libpython":false,"suffix":".so","limited_api_suffix":".so","paths":{},"sysconfig_paths":{},"variables":{"prefix":"/usr","LDVERSION":"3.12"},"install_paths":{"platlib":"/lib/site-packages","purelib":"/lib/site-packages"}}'
-            exit 0
-            ;;
-          ethtool-link-mode.py|ethtool-link-modes.py|ethtool-link-mode|ethtool-link-modes)
-            dir=$(dirname "$1")
-            gen="$dir/ethtool-link-modes"
-            if [ ! -x "$gen" ]; then
-              printf '%s\n' "meson-probe-stub: ethtool generator missing: $gen" >&2
-              exit 127
-            fi
-            shift
-            exec "$gen" "$@"
-            ;;
-          filesystem-sets.py)
-            dir=$(dirname "$1")
-            gen="$dir/filesystem-sets-sh"
-            if [ ! -x "$gen" ]; then
-              printf '%s\n' "meson-probe-stub: filesystem generator missing: $gen" >&2
-              exit 127
-            fi
-            shift
-            exec "$gen" "$@"
-            ;;
-          dbus_exporter.py)
-            # The export target still runs. The first argument after the
-            # script is the ninja output path. Create it and do not run
-            # the script.
-            if [ "$#" -lt 2 ] || [ -z "$2" ]; then
-              printf '%s\n' "meson-probe-stub: dbus_exporter.py missing output" >&2
-              exit 127
-            fi
-            mkdir -p -- "$2"
-            chmod 755 -- "$2"
-            exit 0
-            ;;
-          meson_post_install.py|copy_data_for_tests.py)
-            # relocation is disabled. The setuid helper is not installed
-            # from this build. The test copy is not part of the library.
-            exit 0
-            ;;
-          make-autosuspend-rules.py)
-            # Mail host does not use Chromium OS autosuspend rules.
-            # Meson -c writes stdout into the hwdb file. Print nothing.
-            exit 0
-            ;;
-        esac
-        if [ -f "$1" ]; then
-          shebang=$(head -n 1 "$1" || true)
-          case "$shebang" in
-            '#!'*/sh|'#!'*/sh\ *|'#!'*/bash|'#!'*/bash\ *)
-              script=$1
-              shift
-              exec "$script" "$@"
-              ;;
-          esac
-        fi
-        printf '%s\n' "meson-probe-stub: unsupported $1" >&2
-        exit 127
-        END
-        chmod 755 "$out/bin/meson-probe-stub"
-        ln -s meson-probe-stub "$out/bin/$probeName"
-        test -x "$out/bin/meson-probe-stub"
-        test -x "$out/bin/$probeName"
-      '';
-
   pinsOverlay =
     final: prev:
     let
@@ -523,19 +408,40 @@ let
       };
 
       # The ukify target still runs the jinja renderer. Drop that target.
-      # Keep the find_installation assignment. The probe stub on PATH
-      # answers it, so the python object stays defined. Do not rewrite
-      # the command line that uses that object.
       # Keep subdir('man') and the xsltproc pages.
+      # The filter below drops native build inputs whose names contain
+      # python. Do not append python3, jinja2, or lxml. Top-level
+      # python3 stays a throw. Bootloader stays disabled, so
+      # pyelftools is not on this list.
+      # upstreamPkgs is unused. Leave the binding. Do not point it
+      # at python3.
+      hostArch = prev.stdenv.hostPlatform.gcc.arch or null;
+      upstreamPkgs = import prev.path {
+        localSystem =
+          { system = prev.stdenv.hostPlatform.system; }
+          // prev.lib.optionalAttrs (hostArch != null && hostArch != "") {
+            gcc.arch = hostArch;
+          };
+      };
       systemdDropJinja =
         pkg:
         pkg.overrideAttrs (old: {
+          # The required python3 plus jinja2 lookup is removed in this
+          # patch. postPatch still points the renderer at minijinja-cli.
+          # Bootloader stays disabled. Do not rebind python3.
+          patches = (old.patches or [ ]) ++ [
+            ./patches/systemd-no-python-jinja.patch
+          ];
+          # Stock auto-patchelf is a python script with a /usr/bin/env
+          # shebang. Do not install a replacement walker. The hook is
+          # dropped below. This flag stops stdenv from running it if a
+          # later input still adds the hook.
+          dontAutoPatchelf = true;
           nativeBuildInputs =
             let
               # Upstream lists the interpreter env and the stock
-              # auto-patchelf hook. The hook's tool is an interpreter
-              # program. Keep the shell hook that calls patchelf.
-              # Drop interpreter-named inputs. glibcLocales stays.
+              # auto-patchelf hook. Drop both. glibcLocales stays.
+              # lib/systemd is a link -rpath, not a post-link walker.
               kept = builtins.filter (
                 dep:
                 let
@@ -547,27 +453,17 @@ let
                   || prev.lib.hasInfix "Python" name
                   || prev.lib.hasInfix "python" pname
                   || prev.lib.hasInfix "Python" pname
+                  || prev.lib.hasInfix "auto-patchelf" name
+                  || prev.lib.hasInfix "auto-patchelf" pname
                 )
               ) (old.nativeBuildInputs or [ ]);
-              swapped = map (
-                dep:
-                let
-                  name = dep.name or "";
-                  pname = dep.pname or "";
-                in
-                if prev.lib.hasInfix "auto-patchelf" name || prev.lib.hasInfix "auto-patchelf" pname then
-                  prev.autoPatchelfHook
-                else
-                  dep
-              ) kept;
             in
             # The nixpkgs minijinja build lists cargo. That cargo's
             # build closure is the interpreter. The published 2.20.0
             # static CLI is the same renderer and does not list cargo.
-            swapped
+            kept
             ++ [
               minijinjaCli
-              (mesonProbeStubFor prev)
               # mount.pc and libseccomp.pc. The setup hook publishes them.
               # This is not a PKG_CONFIG_PATH prepend.
               (prev.lib.getDev prev.util-linuxMinimal)
@@ -705,9 +601,9 @@ let
                           fi
                           cp ${ethtoolLinkModesSh} src/shared/ethtool-link-modes
                           chmod 755 src/shared/ethtool-link-modes
-                          # filesystem-sets.py has no shell shebang, so the probe
-                          # stub would stop. Install the shell generator beside it.
-                          # The shell execs the Rust generator for the captured modes.
+                          # The shell generator sits beside filesystem-sets.py.
+                          # This overlay does not install an interpreter to run
+                          # that script. The shell execs the Rust generator.
                           mkdir -p src/basic
                           rm -f src/basic/filesystem-sets-sh
                           cp ${filesystemSetsSh prev.writeShellScript filesystemSetsGen} src/basic/filesystem-sets-sh
@@ -1233,6 +1129,9 @@ let
                           # plain buildInput never becomes DT_NEEDED. --no-as-needed
                           # keeps -lmount and -lseccomp on the link line. -rpath is
                           # the runtime search path for those sonames.
+                          # libsystemd-shared-260.so is installed in $out/lib/systemd.
+                          # systemd-cgtop needs that directory on RUNPATH. The same
+                          # -rpath flag records it at link time.
                           # cc-wrapper prefixes -Wl, on each NIX_LDFLAGS word that
                           # is not -L/. A -Wl, word becomes -Wl,-Wl, and meson
                           # link tests fail. Write the linker flags bare.
@@ -1246,7 +1145,7 @@ let
                             echo "libseccomp.so.2 is missing" >&2
                             exit 1
                           fi
-                          export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-L$mount_lib -L$seccomp_lib --no-as-needed -lmount -lseccomp --as-needed -rpath $mount_lib -rpath $seccomp_lib"
+                          export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-L$mount_lib -L$seccomp_lib --no-as-needed -lmount -lseccomp --as-needed -rpath $mount_lib -rpath $seccomp_lib -rpath $out/lib/systemd"
           '';
           env = (old.env or { }) // {
             # Do not -D any KEY_ name here. Those are keyboard gperf
@@ -1309,6 +1208,8 @@ let
           # Fixup runs another compiler after the build directory is done.
           # That compiler treats override/unistd.h include_next as an error
           # under -Werror=pedantic. Drop only those three flags here.
+          # lib/systemd is on the link line above. Do not pass it through
+          # appendRunpaths. Mount and seccomp rpaths stay in postFixup.
           preFixup = (old.preFixup or "") + ''
             strip_systemd_inc() {
               printf '%s\n' "$1" | sed \
@@ -1428,6 +1329,41 @@ let
                   exit 1
                 fi
               done
+            fi
+            # Link -rpath records $out/lib/systemd. Meson install_rpath
+            # keeps that directory and drops the mount and seccomp
+            # -rpath words. patchelf writes those three back. The libs
+            # output does not install this binary.
+            if [ -e "$out/bin/systemd-cgtop" ]; then
+              cgtop=$(resolve_elf "$out/bin/systemd-cgtop") || {
+                echo "systemd-cgtop is not an ELF" >&2
+                exit 1
+              }
+              add_rpath "$cgtop" "$out/lib/systemd"
+              add_rpath "$cgtop" "$mount_lib"
+              add_rpath "$cgtop" "$seccomp_lib"
+              cgtop_rpath=$(patchelf --print-rpath "$cgtop")
+              case ":$cgtop_rpath:" in
+                *":$out/lib/systemd:"*) ;;
+                *)
+                  echo "systemd-cgtop RUNPATH is missing lib/systemd" >&2
+                  exit 1
+                  ;;
+              esac
+              case ":$cgtop_rpath:" in
+                *":$mount_lib:"*) ;;
+                *)
+                  echo "systemd-cgtop RUNPATH is missing libmount" >&2
+                  exit 1
+                  ;;
+              esac
+              case ":$cgtop_rpath:" in
+                *":$seccomp_lib:"*) ;;
+                *)
+                  echo "systemd-cgtop RUNPATH is missing libseccomp" >&2
+                  exit 1
+                  ;;
+              esac
             fi
           '';
           # switch-to-configuration build.rs reads
@@ -1896,9 +1832,12 @@ let
         }
       ) { };
 
+      # nixpkgs all-packages.nix binds systemdMinimal to systemd.override
+      # and systemdLibs to systemdMinimal.override. That name is the
+      # final fixed point (with pkgs). makeOverridable re-applies this
+      # overrideAttrs on .override, so appending the patch again applies
+      # the same hunk twice. One append on systemd is the only call.
       systemd = systemdDropJinja prev.systemd;
-      systemdMinimal = systemdDropJinja prev.systemdMinimal;
-      systemdLibs = systemdDropJinja prev.systemdLibs;
       switch-to-configuration-ng = import ./switch-to-configuration-swap-borrow.nix { inherit prev; };
 
       # update-mime-database is linked to libstdc++.so.6 and does not
@@ -2113,12 +2052,14 @@ let
       mailHostRust = import mailHostRustSrc {
         system = prev.stdenv.hostPlatform.system;
       };
-      # Empty store path. CallPackage can hand this to glibc and
-      # libapparmor so those expressions do not force the throwing
-      # interpreter attrs. mkDerivation then deletes it from every
-      # dependency list. It is not an interpreter. Its name stays
-      # empty-directory, and that name is not a package the mail host
-      # keeps.
+      # Empty store path for the shellcheck compiler flag only.
+      # docutils, sphinx, itstool, xonsh, and systemtap do not
+      # receive it. It is not a Python interpreter and it is not a
+      # Python package set. No callPackage formal named python,
+      # python3, python3Minimal, pythonPackages, or python3Packages
+      # receives it. mkDerivation deletes a dependency whose name
+      # is empty-directory. That name is not a package the mail
+      # host keeps.
       slotDrv = prev.emptyDirectory;
       forbiddenMarks = [
         "python"
@@ -2217,66 +2158,11 @@ let
       stdenvNoCCFiltered = prev.stdenvNoCC // {
         mkDerivation = wrapMk prev.stdenvNoCC.mkDerivation;
       };
-      # Do not call stdenv.mkDerivation for a Python application or
-      # library. AsciiDoc's buildPythonApplication did that, and
-      # filterAttrs made the derivation attribute names depend on
-      # finalAttrs, which recurses. The empty directory is not an
-      # interpreter. The scrub drops it from dependency lists.
-      buildPython = _: slot;
-      slot = slotDrv // {
-        isPyPy = false;
-        isPy3k = true;
-        isPy27 = false;
-        pythonVersion = "3";
-        pythonAtLeast = _: true;
-        interpreter = prev.runtimeShell;
-        executable = "sh";
-        sitePackages = "lib";
-        withPackages = _: slot;
-        override = _: slot;
-        overrideAttrs = _: slot;
-        overridePythonAttrs = _: slot;
-        pythonOnBuildForHost = slot;
-        pythonForBuild = slot;
-        pkgs = fakePkgs;
-        meta = {
-          mainProgram = "sh";
-          platforms = lib.platforms.all;
-        };
-      };
-      # Names that mail-host derivations select while the throwing
-      # python3Packages attr stays a throw. Each value is the empty
-      # directory, and the scrub removes it.
-      fakePkgs = {
-        python = slot;
-        setuptools = slot;
-        pip = slot;
-        wheel = slot;
-        jinja2 = slot;
-        lxml = slot;
-        pyelftools = slot;
-        pefile = slot;
-        cryptography = slot;
-        sphinx = slot;
-        sphinx-rtd-theme = slot;
-        pyyaml = slot;
-        packaging = slot;
-        pytest = slot;
-        pytest-mock = slot;
-        pygments = slot;
-        matplotlib = slot;
-        numpy = slot;
-        aafigure = slot;
-        recursive-pth-loader = slot;
-        pythonImportsCheckHook = slot;
-        wrapPython = slot;
-        recursivePthLoader = slot;
-        # fio package.nix reads python3.pkgs.six. This value is the
-        # empty directory, not an interpreter.
-        six = slot;
-        buildPythonApplication = buildPython;
-        buildPythonPackage = buildPython;
-      };
+      # Not a Python interpreter. callPackage does not receive this
+      # value under python, python3, python3Minimal, pythonPackages,
+      # or python3Packages. The scrub still drops a dependency named
+      # empty-directory.
+      slot = slotDrv;
       # writeShellApplication reads shellcheck-minimal.compiler on
       # pkgsBuildHost. The top-level ShellCheck attr still throws.
       # bootstrapAvailable false skips that compiler. This value is
@@ -2286,52 +2172,36 @@ let
           bootstrapAvailable = false;
         };
       };
-      # nss-cacert lists this program. prev.callPackage uses
-      # prev.stdenv. This does not read final.stdenv. The
-      # handwritten C source is not compiled.
-      buildcatrustDrv = prev.callPackage ./packages/buildcatrust.nix { };
+      # docutils, sphinx, itstool, systemtap, systemtap-sdt, and
+      # xonsh are not in this scope. callPackage must not receive
+      # emptyDirectory under those names. glib, libtiff, and shadow
+      # drop the docutils, sphinx, and itstool formals below.
       interpreterShadow = {
-        python = slot;
-        python3 = slot;
-        python3Minimal = slot;
-        pythonPackages = fakePkgs;
-        python3Packages = fakePkgs;
-        # nss-cacert lists this. The all-packages value is
-        # `with python3.pkgs`, so a callPackage lookup must not
-        # be that value. This derivation does not compile C.
-        # The scrub drops empty-directory and interpreter names.
-        # It keeps this pname.
-        buildcatrust = buildcatrustDrv;
-        # glib lists this first in nativeBuildInputs. The
-        # all-packages value is `with python3Packages`.
-        docutils = slot;
-        # libtiff lists this in nativeBuildInputs. The
-        # all-packages value is `with python3Packages`.
-        sphinx = slot;
-        # shadow lists this in nativeBuildInputs. The
-        # itstool package evaluates python3.pkgs.libxml2
-        # inside pythonPath. The scrub drops the empty
-        # directory, so that file is not evaluated. This
-        # does not define libxml2 on the stand-in.
-        itstool = slot;
-        # glib sets systemtap' = buildPackages.systemtap-sdt.
-        # The by-name systemtap-sdt file calls
-        # linuxPackages.systemtap, and that file's let-binding
-        # evaluates `with python3.pkgs; makePythonPath`.
-        # CallPackage formals get the empty directory. The
-        # overlay output binds the same names, because
-        # buildPackages looks those up on the package set.
-        # This is not an interpreter.
-        systemtap-sdt = slot // {
-          meta = {
-            platforms = [ ];
-          };
-        };
-        systemtap = slot;
         shellcheck = shellcheckFake;
         shellcheck-minimal = shellcheckFake;
         ShellCheck = shellcheckFake;
       };
+      # pkgs/by-name/gl/glib/package.nix at nixpkgs f684076 takes
+      # docutils and lists it in nativeBuildInputs. Drop that
+      # formal. The inner expression passes refuse, not the python
+      # application and not emptyDirectory.
+      glibExpr = import (prev.path + "/pkgs/by-name/gl/glib/package.nix");
+      glibNoDocutils = lib.setFunctionArgs (
+        args: glibExpr (args // { docutils = refuse "docutils"; })
+      ) (builtins.removeAttrs (builtins.functionArgs glibExpr) [ "docutils" ]);
+      # pkgs/by-name/li/libtiff/package.nix lists sphinx in
+      # nativeBuildInputs. Same formal drop as glib's docutils.
+      libtiffExpr = import (prev.path + "/pkgs/by-name/li/libtiff/package.nix");
+      libtiffNoSphinx = lib.setFunctionArgs (
+        args: libtiffExpr (args // { sphinx = refuse "sphinx"; })
+      ) (builtins.removeAttrs (builtins.functionArgs libtiffExpr) [ "sphinx" ]);
+      # pkgs/by-name/sh/shadow/package.nix lists itstool in
+      # nativeBuildInputs. The itstool package reads python3.
+      # Same formal drop. Do not add itstool.
+      shadowExpr = import (prev.path + "/pkgs/by-name/sh/shadow/package.nix");
+      shadowNoItstool = lib.setFunctionArgs (
+        args: shadowExpr (args // { itstool = refuse "itstool"; })
+      ) (builtins.removeAttrs (builtins.functionArgs shadowExpr) [ "itstool" ]);
       # Previous-stage compiler. final.stdenv.cc.nativeTools recurses
       # in all-packages.nix. callScope must not read that stdenv.
       # No extra cc binding. stdenvFiltered is the whole value.
@@ -2372,9 +2242,9 @@ let
             url = "https://github.com/rockdaboot/libpsl/releases/download/0.22.0/libpsl-0.22.0.tar.gz";
             hash = "sha256-xFw6oXV2uZhz4FqbCaRAQbBlu/o5Dm1HTQb7+uucdyI=";
           };
-          # Same script in postPatch and preAutoreconf. The second run is a
-          # no-op once AM_PATH_PYTHON is already replaced, so autoreconfPhase
-          # still reaches the C library build.
+          # Same script in postPatch and preAutoreconf. The second run deletes
+          # a search that is already gone, so autoreconfPhase still reaches
+          # the C library build.
           pslNoGtkDoc = (old.postPatch or "") + ''
             awk '
               BEGIN { skip = 0 }
@@ -2402,15 +2272,11 @@ let
                 printf '\nAM_CONDITIONAL([%s], [false])\n' "$cond" >> configure.ac
               fi
             done
-            if grep -F -q 'AM_PATH_PYTHON([2.7])' configure.ac; then
-              sed -i 's/AM_PATH_PYTHON(\[2\.7\])/AC_SUBST([PYTHON], [:])/' configure.ac
-            fi
+            # Delete the interpreter search. Do not assign that variable
+            # to a colon command.
+            sed -i '/AM_PATH_PYTHON/d' configure.ac
             if grep -F 'AM_PATH_PYTHON' configure.ac >/dev/null; then
               echo "AM_PATH_PYTHON token still present in configure.ac" >&2
-              exit 1
-            fi
-            if ! grep -F 'AC_SUBST([PYTHON], [:])' configure.ac >/dev/null; then
-              echo "AC_SUBST PYTHON assignment missing in configure.ac" >&2
               exit 1
             fi
             patch_one() {
@@ -2507,8 +2373,7 @@ let
       # derivation has no override attribute. This binding is
       # overridable. A certificate is dropped only when its
       # mk-ca-bundle heading is an exact blacklist name. The five
-      # outputs still come from that published PEM. This does not
-      # call buildcatrust.
+      # outputs still come from that published PEM.
       # curl.se cacert.pem, Mozilla data as of Thu Nov 5
       # 04:12:01 2026 GMT, 118 certificates, 200116 bytes.
       # nix-prefetch-url: 11bj97421zashvxr28586m26xjq89nahs3xkm1r1w6kn2r10cz22
@@ -2744,33 +2609,13 @@ let
           prev.newScope
         else
           extra: lib.callPackageWith (callScope // extra);
-      # llvm reads pkgsBuildBuild.targetPackages.python3.withPackages
-      # when doCheck is true. That is not a callPackage formal, so
-      # interpreterShadow does not see it. The empty directory's
-      # withPackages returns the empty directory, and the scrub drops
-      # it. Top-level python3 still throws. libxml2 is not defined.
-      targetPackages = prev.targetPackages // {
-        python3 = slot;
-      };
-      # fish cargoDeps calls writers.writePython3Bin for
-      # fetch-cargo-vendor-util. The writer check interpolates
-      # buildPythonPackages.flake8 in
-      # pkgs/build-support/writers/scripts.nix. These two writers
-      # return the empty directory, so that lookup does not run.
-      # flake8 is not added. Fish stays the real package.
-      writers = prev.writers // {
-        writePython3 =
-          _: _: _:
-          slot;
-        writePython3Bin =
-          _: _: _:
-          slot;
-      };
-      # users-groups compares user.shell to pkgs.xonsh. The xonsh
-      # package reads python3.pkgs.xonsh. The empty directory skips
-      # that file. flake8 is not defined on the stand-in. Fish and
-      # zsh stay real packages.
-      xonsh = slot;
+      # nixos/modules/config/users-groups.nix compares
+      # user.shell to pkgs.xonsh for every user (fish, xonsh, zsh).
+      # Deleting this attribute selects nixpkgs xonsh, and that
+      # package takes python3. A throw aborts the comparison.
+      # null is not a shell, not a package, and not a path.
+      # programs.xonsh stays off. Fish and bash stay.
+      xonsh = null;
 
       nixos-firewall-tool =
         (prev.writeShellScriptBin "nixos-firewall-tool" firewallToolScript).overrideAttrs
@@ -2797,35 +2642,37 @@ let
         compiler = refuse "haskell.compiler";
       };
 
-      # glibc 2.42 lists python3Minimal in nativeBuildInputs. libapparmor
-      # is overridden below with withPython false. That is the package
+      # glibc 2.42 lists python3Minimal in nativeBuildInputs. The
+      # top-level name stays a throw. glibc-header-gen-overlay restores
+      # the pre-throw interpreter on the glibc derivation only.
+      # libapparmor is
+      # overridden below with withPython false. That is the package
       # argument. The C library stays. The Python bindings do not.
-      # nss-cacert lists buildcatrust. The all-packages value is
-      # `with python3.pkgs`. interpreterShadow hands nss-cacert this
-      # derivation instead. It does not compile C. glib
-      # lists docutils (`with python3Packages`). libtiff lists
-      # sphinx (`with python3Packages`). shadow lists itstool,
-      # whose pythonPath reads python3.pkgs.libxml2. glib's optional dtrace
-      # input is buildPackages.systemtap-sdt. The by-name file calls
-      # linuxPackages.systemtap, whose let-binding evaluates
-      # `with python3.pkgs; makePythonPath`. interpreterShadow only
-      # fills callPackage formals. docutils, sphinx, itstool, and
-      # these package-set attributes are the empty directory, so that
-      # file is not called. systemtap-sdt has no platforms, so glib
-      # leaves it out. The scrub drops the empty directory and
-      # interpreter names. It keeps buildcatrust. The C libraries
-      # stay. No interpreter is added.
-      systemtap = slot;
-      systemtap-sdt = slot // {
+      # glib's docutils formal, libtiff's sphinx formal, and
+      # shadow's itstool formal are dropped above. The inner
+      # expressions pass refuse, not an interpreter and not
+      # emptyDirectory.
+      # glib sets systemtap' = buildPackages.systemtap-sdt and
+      # withDtrace from lib.meta.availableOn. The by-name
+      # systemtap-sdt file calls linuxPackages.systemtap, and
+      # systemtap-unwrapped lists python3 in nativeBuildInputs
+      # and buildInputs. Deleting these attributes would select
+      # that package. The mail host does not install systemtap:
+      # hosts/mail-vps/configuration.nix environment.systemPackages
+      # does not list it, and no module in this repo adds it.
+      # platforms is empty, so availableOn is false and glib
+      # leaves the package out. This value is not an empty
+      # directory and it does not install a script.
+      systemtap = refuse "systemtap";
+      systemtap-sdt = {
         meta = {
           platforms = [ ];
         };
       };
-      # fish cargoDeps uses writers.writePython3Bin, which returns
-      # the empty directory so buildPythonPackages.flake8 is not
-      # looked up. pkgs.xonsh is that same empty directory, so
-      # python3.pkgs.xonsh is not looked up. Fish is not replaced.
-      # Asking for python3 still throws.
+      # pkgs.xonsh is null, so nixpkgs xonsh is not selected
+      # and python3.pkgs.xonsh is not looked up. Fish is not replaced.
+      # Asking for python3 still throws. writePython3 and
+      # writePython3Bin are not rebound to emptyDirectory.
 
       python = refuse "python";
       python3 = refuse "python3";
@@ -2861,10 +2708,8 @@ let
 
       # Stock dbus enables X11 autolaunch and lists libx11. This host
       # has no X server. The shadowed callPackage still scrubs the
-      # interpreter slot. Muon still runs find_program for the
-      # interpreter name. The probe stub's symlink is that name.
-      # It is not an interpreter package. The dbus checks run
-      # interpreter scripts, so skip them.
+      # interpreter slot. Do not put an interpreter on PATH.
+      # The dbus checks run interpreter scripts, so skip them.
       dbus = (prev.dbus.override { x11Support = false; }).overrideAttrs (old: {
         doCheck = false;
         nativeBuildInputs =
@@ -2884,10 +2729,7 @@ let
             && !(prev.lib.hasInfix "Python" name)
             && !(prev.lib.hasInfix "python" pname)
             && !(prev.lib.hasInfix "Python" pname)
-          ) inputs
-          ++ [
-            (mesonProbeStubFor prev)
-          ];
+          ) inputs;
         # Muon joins an absolute includedir onto the prefix, so dbus-1.pc
         # contains a doubled store path and pkg-config fails the link.
         # A shared library does not need DBUS_STATIC_BUILD. Dependents
@@ -2946,12 +2788,11 @@ let
         '';
       });
 
-      # shadow's man pages run itstool. That attr is an empty
-      # directory, so the command is missing and make exits 127.
-      # The configure default is man pages off. Nixpkgs passes
-      # --enable-man. This host does not need those pages.
-      # Do not add itstool.
-      shadow = prev.shadow.overrideAttrs (old: {
+      # shadow's man pages run itstool. The itstool formal is
+      # dropped, so that package is not an input. The configure
+      # default is man pages off. Nixpkgs passes --enable-man.
+      # This host does not need those pages. Do not add itstool.
+      shadow = (final.callPackage shadowNoItstool { }).overrideAttrs (old: {
         configureFlags =
           let
             tried = builtins.tryEval (old.configureFlags or [ ]);
@@ -3077,10 +2918,19 @@ let
           '';
           # patchelf is what still records the path if meson drops NIX_LDFLAGS.
           # dlopen of pam_unix.so resolves libcrypt.so.2 from this RUNPATH.
+          # unix_chkpwd is executed by the setuid wrapper. The loader uses
+          # that helper's own RUNPATH, not the caller's. Only bin/unix_chkpwd
+          # and sbin/unix_chkpwd, when installed, record libxcrypt and audit.
+          # audit is the overlay package (--without-python3), not prev.audit.
           postFixup = (old.postFixup or "") + ''
             crypt_lib="${prev.lib.getLib prev.libxcrypt}/lib"
+            audit_lib="${prev.lib.getLib final.audit}/lib"
             if [ ! -e "$crypt_lib/libcrypt.so.2" ]; then
               echo "libxcrypt did not provide libcrypt.so.2" >&2
+              exit 1
+            fi
+            if [ ! -e "$audit_lib/libaudit.so.1" ]; then
+              echo "audit did not provide libaudit.so.1" >&2
               exit 1
             fi
             found=0
@@ -3135,15 +2985,114 @@ let
                 exit 1
                 ;;
             esac
+            # Same patchelf style as the pam modules above. Do not walk bin or sbin.
+            for helper in "$out/bin/unix_chkpwd" "$out/sbin/unix_chkpwd"; do
+              if [ ! -e "$helper" ] && [ ! -L "$helper" ]; then
+                continue
+              fi
+              elf=$helper
+              if [ -L "$elf" ]; then
+                elf=$(readlink -f "$elf" || true)
+              fi
+              if [ ! -f "$elf" ]; then
+                echo "unix_chkpwd is not a file: $helper" >&2
+                exit 1
+              fi
+              case $(basename "$elf") in
+                unix_chkpwd) ;;
+                *)
+                  echo "refusing to patchelf a path that is not unix_chkpwd: $helper" >&2
+                  exit 1
+                  ;;
+              esac
+              got=$(patchelf --print-rpath "$elf")
+              case ":$got:" in
+                *":$crypt_lib:"*) ;;
+                *)
+                  if [ -n "$got" ]; then
+                    patchelf --set-rpath "$got:$crypt_lib" "$elf"
+                  else
+                    patchelf --set-rpath "$crypt_lib" "$elf"
+                  fi
+                  ;;
+              esac
+              got=$(patchelf --print-rpath "$elf")
+              case ":$got:" in
+                *":$audit_lib:"*) ;;
+                *)
+                  if [ -n "$got" ]; then
+                    patchelf --set-rpath "$got:$audit_lib" "$elf"
+                  else
+                    patchelf --set-rpath "$audit_lib" "$elf"
+                  fi
+                  ;;
+              esac
+              got=$(patchelf --print-rpath "$elf")
+              if patchelf --print-needed "$elf" | grep -F -q 'libcrypt.so.2'; then
+                case ":$got:" in
+                  *":$crypt_lib:"*) ;;
+                  *)
+                    echo "unix_chkpwd needs libcrypt.so.2 but rpath lacks libxcrypt: $elf" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
+              if patchelf --print-needed "$elf" | grep -F -q 'libaudit.so.1'; then
+                case ":$got:" in
+                  *":$audit_lib:"*) ;;
+                  *)
+                    echo "unix_chkpwd needs libaudit.so.1 but rpath lacks audit: $elf" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
+            done
           '';
         });
 
       # Fish's check runs tests/test_driver.py. The shebang asks for
       # /usr/bin/env, and this build has no interpreter on PATH.
       # The fish binary already compiled. Skip the check.
-      fish = prev.fish.overrideAttrs (_old: {
-        doCheck = false;
-      });
+      # nixpkgs fish defaults usePython to true. postPatch then
+      # reads python3.interpreter, and that reaches gtk-doc, which
+      # takes python3. The users-groups assertion compares the root
+      # shell to pkgs.fish, so the default package is forced.
+      # usePython false skips that string. The unconditional
+      # python3.withPackages input is a throw. tryEval drops it.
+      # This does not bind python3.
+      fish =
+        let
+          dropPythonInput =
+            deps:
+            if !builtins.isList deps then
+              deps
+            else
+              builtins.filter (
+                dep:
+                let
+                  tried = builtins.tryEval dep;
+                in
+                if !tried.success then
+                  false
+                else if !builtins.isAttrs tried.value then
+                  true
+                else
+                  let
+                    name = tried.value.name or "";
+                    pname = tried.value.pname or "";
+                  in
+                  !(
+                    prev.lib.hasInfix "python" name
+                    || prev.lib.hasInfix "Python" name
+                    || prev.lib.hasInfix "python" pname
+                    || prev.lib.hasInfix "Python" pname
+                  )
+              ) deps;
+        in
+        (prev.fish.override { usePython = false; }).overrideAttrs (old: {
+          doCheck = false;
+          nativeBuildInputs = dropPythonInput (old.nativeBuildInputs or [ ]);
+        });
 
       # grub 2.12 is fetched from git tag grub-2.12. That tree has
       # gentpl.py and Makefile.util.def, and it does not have
@@ -3157,7 +3106,7 @@ let
       # does not invoke an interpreter. Two later patches add
       # key_protector to the .def files. Mirror that in the copied
       # makefiles. configure.ac calls AM_PATH_PYTHON and then runs
-      # gentpl to list pci platforms. Replace that macro and write the
+      # gentpl to list pci platforms. Delete that macro and write the
       # pci list from gentpl.GROUPS["pci"]. Do not add an interpreter.
       grub2 =
         let
@@ -3170,15 +3119,11 @@ let
           postPatch = (old.postPatch or "") + ''
                         sed -i '/\.\/autogen\.sh/d' bootstrap.conf
                         chmod u+w configure.ac
-                        sed -i 's/AM_PATH_PYTHON(\[2\.6\])/AC_SUBST([PYTHON], [:])/' configure.ac
+                        sed -i '/AM_PATH_PYTHON/d' configure.ac
                         sed -i '/^PLATFORMS_PCI=/c\
             PLATFORMS_PCI=" i386_pc i386_efi i386_qemu i386_coreboot i386_multiboot i386_ieee1275 x86_64_efi mips_loongson "' configure.ac
                         if grep -F -q 'AM_PATH_PYTHON' configure.ac; then
                           echo "AM_PATH_PYTHON token still present in configure.ac" >&2
-                          exit 1
-                        fi
-                        if ! grep -F -q 'AC_SUBST([PYTHON], [:])' configure.ac; then
-                          echo "AC_SUBST PYTHON assignment missing in configure.ac" >&2
                           exit 1
                         fi
                         if grep -F -q 'import gentpl' configure.ac; then
@@ -3283,7 +3228,7 @@ let
             else
               null;
         in
-        (prev.glib.override { withIntrospection = false; }).overrideAttrs (old: {
+        (final.callPackage glibNoDocutils { withIntrospection = false; }).overrideAttrs (old: {
           # The file-scope interpreter lookup has no meson option. Do not
           # add an interpreter package and do not paste that lookup.
           # Install the already built shared libraries, headers, and
@@ -3296,6 +3241,10 @@ let
           phases = [
             "installPhase"
           ];
+          # nixpkgs preFixup calls python3Packages.packaging. That
+          # attribute throws. This install does not run fixupPhase.
+          # Do not bind python3Packages.
+          preFixup = "";
           # The old native inputs include the file-scope interpreter
           # lookup's tools. Do not append them. This install runs
           # zstd, nix-store, and patchelf. final.nix is the patched
@@ -3655,8 +3604,7 @@ let
         });
 
       # CMakeLists.txt requires Python 3.8 when ENABLE_PYTHON_SCRIPTING
-      # is on. The interpreter slot is an empty directory, so configure
-      # stops. Turn the option off. Do not add an interpreter package.
+      # is on. Turn the option off. Do not add an interpreter package.
       fontforge = prev.fontforge.overrideAttrs (old: {
         cmakeFlags =
           (builtins.filter (flag: flag != "-DENABLE_PYTHON_SCRIPTING=ON") (old.cmakeFlags or [ ]))
@@ -3695,9 +3643,8 @@ let
       # and build/rst2txt.py run only under --enable-docs. Neither flag
       # is passed. run_tests.py is the check harness, not an input the
       # binary needs. It stays out of TESTS. The C++ check programs stay.
-      # preCheck must not rewrite a shebang. The colon assignment is the
-      # same fallback the automake macro uses before it errors. It is
-      # not an interpreter, and it is not a program named on PATH.
+      # preCheck must not rewrite a shebang. Delete the interpreter
+      # search. Do not assign that variable to a colon command.
       re2c = prev.re2c.overrideAttrs (old: {
         nativeBuildInputs = builtins.filter (
           dep:
@@ -3713,12 +3660,11 @@ let
           test -f configure.ac
           test -f Makefile.am
           grep -F -q 'AM_PATH_PYTHON([3.7])' configure.ac
-          sed -i 's/AM_PATH_PYTHON(\[3\.7\])/AC_SUBST([PYTHON], [:])/' configure.ac
+          sed -i '/AM_PATH_PYTHON/d' configure.ac
           if grep -F -q 'AM_PATH_PYTHON' configure.ac; then
             echo "re2c configure.ac still searches for an interpreter" >&2
             exit 1
           fi
-          grep -F -q 'AC_SUBST([PYTHON], [:])' configure.ac
           grep -F -q 'cp $(top_srcdir)/bootstrap/$@ $(@D)' Makefile.am
           grep -F -q 'cp $(top_srcdir)/bootstrap/$@ $@' Makefile.am
           sed -i '/^TESTS = \\$/,/^$/ { /\$(re2c_TESTSUITE)/d; }' Makefile.am
@@ -3812,12 +3758,21 @@ let
           # nixpkgs muon ignores mesonFlags. The setup line is the
           # flag list. libpkgconf is a feature, default auto.
           # auto_features replaces only auto, so disabled keeps exec.
+          # pkgs/by-name/mu/muon/package.nix at nixpkgs f684076
+          # takes python3. That formal is only evaluated when
+          # buildDocs or doCheck is true. Both stay false here.
+          # The call itself does not take python3. The inner
+          # expression still has the formal, so it receives a
+          # throw, not an interpreter and not an empty directory.
+          muonExpr = import (prev.path + "/pkgs/by-name/mu/muon/package.nix");
+          muonNoPython = lib.setFunctionArgs (
+            args: muonExpr (args // { python3 = refuse "python3"; })
+          ) (builtins.removeAttrs (builtins.functionArgs muonExpr) [ "python3" ]);
           muonNoDocs =
-            (prev.callPackage (prev.path + "/pkgs/by-name/mu/muon/package.nix") {
+            (prev.callPackage muonNoPython {
               buildDocs = false;
               embedSamurai = true;
               runTests = false;
-              python3 = slot;
             }).overrideAttrs
               (
                 old:
@@ -3880,25 +3835,6 @@ let
           '';
         };
 
-      # The stock hook's tool is a script whose shebang is /usr/bin/env.
-      # The sandbox has no such interpreter, so fixup exits 126. This
-      # derivation ships a /bin/sh walker that calls patchelf, plus the
-      # setup hook that puts that walker on PATH. Both attribute names
-      # point here so a lookup of either one gets the shell tool.
-      autoPatchelfHook = prev.stdenvNoCC.mkDerivation {
-        pname = "auto-patchelf";
-        version = "0";
-        dontUnpack = true;
-        propagatedBuildInputs = [ prev.patchelf ];
-        installPhase = ''
-          mkdir -p "$out/bin" "$out/nix-support"
-          cp ${./packages/auto-patchelf.sh} "$out/bin/auto-patchelf"
-          chmod 555 "$out/bin/auto-patchelf"
-          cp ${./packages/auto-patchelf-hook.sh} "$out/nix-support/setup-hook"
-        '';
-      };
-      "auto-patchelf" = final.autoPatchelfHook;
-
       # kmod declares a devdoc output when the host matches the build
       # platform. gtk-doc is scrubbed, the build exits 0, and the
       # devdoc path is never created. withDevdoc false drops that
@@ -3907,7 +3843,7 @@ let
 
       # libtiff's doc and man outputs are the same class: the build
       # exits 0 and never creates those store paths. Drop both.
-      libtiff = prev.libtiff.overrideAttrs (old: {
+      libtiff = (final.callPackage libtiffNoSphinx { }).overrideAttrs (old: {
         outputs = builtins.filter (name: name != "doc" && name != "man") (old.outputs or [ "out" ]);
       });
 
@@ -3919,8 +3855,15 @@ let
 
       # rsync's make check runs a script through /usr/bin/env. The
       # installed rsync binary does not need that check.
+      # nixpkgs rsync/package.nix preBuild rewrites test shebangs to
+      # ${python3}/bin/python3. That string is a derivation attribute,
+      # so eval forces python3 even when the check is off, and gtk-doc
+      # then takes python3. nativeCheckInputs lists python3 too.
+      # Drop both. Do not bind python3.
       rsync = prev.rsync.overrideAttrs (_old: {
         doCheck = false;
+        preBuild = "";
+        nativeCheckInputs = [ ];
       });
 
       libgit2 = prev.libgit2.overrideAttrs (old: {
@@ -4244,34 +4187,20 @@ let
         postInstall = "true";
       });
 
-      # doxygen 1.16.1 fails in CMakeLists.txt when the interpreter
-      # probe cannot find Python_EXECUTABLE. Point the probe at the
-      # store stub and mark the interpreter found. The doxygen binary
-      # still installs. Do not add an interpreter package.
+      # doxygen 1.16.1's CMakeLists.txt searches for an interpreter.
+      # Comment that search out. Do not mark it found and do not point
+      # an executable at a placeholder. The doxygen binary still
+      # installs. Do not add an interpreter package.
       # Bundled spdlog, fmt, and sqlite are the dep targets still
       # compiling when make stops on the all target. Use the system
       # libraries so those bundled trees are not built.
-      doxygen =
-        let
-          # The doxygen binary links libvhdlparser, so the library stays.
-          # The javacc adjust step is a C program, not the interpreter.
-          cmakeInterpreterStub =
-            prev.runCommand "cmake-interpreter-stub"
-              {
-                nativeBuildInputs = [ prev.stdenv.cc ];
-              }
-              ''
-                mkdir -p "$out/bin"
-              '';
-        in
-        prev.doxygen.overrideAttrs (old: {
+      doxygen = prev.doxygen.overrideAttrs (old: {
           buildInputs = (old.buildInputs or [ ]) ++ [
             prev.spdlog
             prev.fmt
             prev.sqlite
           ];
           cmakeFlags = (old.cmakeFlags or [ ]) ++ [
-            "-DPython_EXECUTABLE=${cmakeInterpreterStub}/bin/cmake-interpreter-stub"
             "-Duse_sys_spdlog=ON"
             "-Duse_sys_fmt=ON"
             "-Duse_sys_sqlite3=ON"
@@ -4280,11 +4209,6 @@ let
             chmod -R u+w .
             find . -name CMakeLists.txt | while IFS= read -r cm; do
               awk '
-                function sets() {
-                  print "set(Python_FOUND TRUE)"
-                  print "set(Python_Interpreter_FOUND TRUE)"
-                  print "set(Python_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                }
                 BEGIN { depth = 0; in_find = 0 }
                 {
                   if (in_find) {
@@ -4294,7 +4218,6 @@ let
                     depth += nopen - nclose
                     if (depth <= 0) {
                       in_find = 0
-                      sets()
                     }
                     next
                   }
@@ -4303,9 +4226,7 @@ let
                     nopen = gsub(/\(/, "(")
                     nclose = gsub(/\)/, ")")
                     depth = nopen - nclose
-                    if (depth <= 0) {
-                      sets()
-                    } else {
+                    if (depth > 0) {
                       in_find = 1
                     }
                     next
@@ -4330,88 +4251,21 @@ let
       # library derivation stock. Same split for libclang and the
       # wrapped clang driver. Patch libllvm and libclang. Leave the
       # wrapped clang driver alone.
-      # Comment out every Python2 and Python3 find_package,
-      # including a later Python2 fallback that is still required
-      # after the first find is only a warning. Mark both found and
-      # point the executables at the store stub so the fallback block
-      # does not SEND_ERROR. The stub prints a version line. LLVM_INCLUDE_UTILS=OFF
-      # skips the llvm-lit block that calls make_paths_relative. TableGen is still added
+      # Comment out every Python2 and Python3 find_package.
+      # Do not mark those packages found and do not point an
+      # executable at a placeholder. LLVM_INCLUDE_UTILS=OFF
+      # skips the llvm-lit block. TableGen is still added
       # by LLVM CMakeLists.txt. Do not add an interpreter package.
       llvmPackages_21 = prev.llvmPackages_21.overrideScope (
         _finalScope: prevScope:
         let
-          # The stub prints a version line. The clang build also runs
-          # utils/bundle_resources.py through this path. That generator
-          # writes one C raw-string constant per input. This shell does
-          # that write. It is not a C program and not an interpreter package.
-          cmakeInterpreterStub =
-            prev.runCommand "cmake-interpreter-stub"
-              {
-                nativeBuildInputs = [ prev.stdenv.cc ];
-              }
-              ''
-                mkdir -p "$out/bin"
-                cat > "$out/bin/cmake-interpreter-stub" << 'END'
-                #!/bin/sh
-                set -eu
-                if [ "$#" -eq 0 ]; then
-                  printf '%s\n' '3.12.0'
-                  exit 0
-                fi
-                case "$1" in
-                  --version|-V)
-                    printf '%s\n' '3.12.0'
-                    exit 0
-                    ;;
-                esac
-                base=$(basename "$1")
-                case "$base" in
-                  bundle_resources.py)
-                    shift
-                    outfile=$1
-                    shift
-                    : > "$outfile"
-                    for filename in "$@"; do
-                      varname=$(basename "$filename" | tr '.' '_')
-                      printf 'const char %s[] = \n' "$varname" >> "$outfile"
-                      awk '
-                        {
-                          printf "  R\"x(%s)x\" \"\\n\"\n", $0
-                        }
-                        END {
-                          if (NR == 0 || RT == "\n") {
-                            printf "  R\"x()x\" \"\\n\"\n"
-                          }
-                        }
-                      ' "$filename" >> "$outfile"
-                      printf '  ;\n' >> "$outfile"
-                    done
-                    ;;
-                  *)
-                    printf 'cmake-interpreter-stub: unsupported %s\n' "$1" >&2
-                    exit 127
-                    ;;
-                esac
-                END
-                chmod 755 "$out/bin/cmake-interpreter-stub"
-                test -x "$out/bin/cmake-interpreter-stub"
-              '';
           dropPythonFind =
             pkg:
             pkg.overrideAttrs (oldAttrs: {
               cmakeFlags = (oldAttrs.cmakeFlags or [ ]) ++ [
-                "-DPython3_EXECUTABLE=${cmakeInterpreterStub}/bin/cmake-interpreter-stub"
                 "-DLLVM_INCLUDE_TESTS=OFF"
                 "-DLLVM_INCLUDE_UTILS=OFF"
               ];
-              # nixpkgs also appends cmakeFlagsArray in preConfigure.
-              # Repeat the executable there so the probe cannot fall
-              # back to a missing interpreter.
-              preConfigure = (oldAttrs.preConfigure or "") + ''
-                cmakeFlagsArray+=(
-                  -DPython3_EXECUTABLE=${cmakeInterpreterStub}/bin/cmake-interpreter-stub
-                )
-              '';
               # opt-viewer is the only reason the python output is filled.
               # The libraries stay when that directory was not built.
               postInstall =
@@ -4441,19 +4295,17 @@ let
                   fi
                   awk '
                     index($0, "find_package(Python3 ''${LLVM_MINIMUM_PYTHON_VERSION} REQUIRED") {
-                      print "# find_package(Python3 ''${LLVM_MINIMUM_PYTHON_VERSION} REQUIRED"
-                      print "set(Python3_FOUND TRUE)"
-                      print "set(Python3_Interpreter_FOUND TRUE)"
-                      print "set(Python3_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                      print "set(Python3_VERSION \"3.12.0\")"
-                      print "set(Python3_VERSION_STRING \"3.12.0\")"
-                      print "set(Python3_VERSION_MAJOR \"3\")"
-                      print "set(Python3_VERSION_MINOR \"12\")"
+                      print "# " $0
                       skip = 1
                       next
                     }
                     skip && index($0, "COMPONENTS Interpreter)") {
+                      print "# " $0
                       skip = 0
+                      next
+                    }
+                    skip {
+                      print "# " $0
                       next
                     }
                     { print }
@@ -4465,22 +4317,7 @@ let
                 fi
                 find . \( -name CMakeLists.txt -o -name '*.cmake' \) | while IFS= read -r cm; do
                   awk '
-                    function stub() {
-                      print "set(Python3_FOUND TRUE)"
-                      print "set(Python3_Interpreter_FOUND TRUE)"
-                      print "set(Python3_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                      print "set(Python3_VERSION \"3.12.0\")"
-                      print "set(Python3_VERSION_STRING \"3.12.0\")"
-                      print "set(Python3_VERSION_MAJOR \"3\")"
-                      print "set(Python3_VERSION_MINOR \"12\")"
-                      print "set(Python2_FOUND TRUE)"
-                      print "set(Python2_Interpreter_FOUND TRUE)"
-                      print "set(Python2_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                      print "set(Python2_VERSION \"2.7.18\")"
-                      print "set(Python_FOUND TRUE)"
-                      print "set(Python_EXECUTABLE \"${cmakeInterpreterStub}/bin/cmake-interpreter-stub\")"
-                    }
-                    BEGIN { depth = 0; in_find = 0; did = 0 }
+                    BEGIN { depth = 0; in_find = 0 }
                     {
                       if (!in_find && $0 ~ /^[[:space:]]*#/) {
                         print
@@ -4493,7 +4330,6 @@ let
                         depth += nopen - nclose
                         if (depth <= 0) {
                           in_find = 0
-                          if (!did) { stub(); did = 1 }
                         }
                         next
                       }
@@ -4502,9 +4338,7 @@ let
                         nopen = gsub(/\(/, "(")
                         nclose = gsub(/\)/, ")")
                         depth = nopen - nclose
-                        if (depth <= 0) {
-                          if (!did) { stub(); did = 1 }
-                        } else {
+                        if (depth > 0) {
                           in_find = 1
                         }
                         next
@@ -4512,6 +4346,43 @@ let
                       print
                     }
                   ' "$cm" > "$cm.nopypatch" && mv "$cm.nopypatch" "$cm" || exit 1
+                done
+                # compiler-rt standalone configure still enters this
+                # fallback after find_package(Python3) is commented.
+                # Python3_Interpreter_FOUND stays false, an empty
+                # Python2_VERSION is less than 2.7, and cmake stops
+                # with "Python 2.7 or newer is required". Comment that
+                # fallback. Do not mark Python found. Do not point an
+                # executable at a placeholder. Do not add an interpreter.
+                find . -name CMakeLists.txt | while IFS= read -r cm; do
+                  if ! grep -q 'Python 2.7 or newer is required' "$cm"; then
+                    continue
+                  fi
+                  awk '
+                    BEGIN { depth = 0; in_fb = 0 }
+                    {
+                      if (in_fb) {
+                        print "# " $0
+                        if ($0 ~ /^[[:space:]]*if[[:space:]]*\(/) {
+                          depth++
+                        }
+                        if ($0 ~ /^[[:space:]]*endif[[:space:]]*\([[:space:]]*\)/) {
+                          depth--
+                          if (depth <= 0) {
+                            in_fb = 0
+                          }
+                        }
+                        next
+                      }
+                      if ($0 ~ /^[[:space:]]*if[[:space:]]*\([[:space:]]*NOT Python3_Interpreter_FOUND[[:space:]]*\)/) {
+                        print "# " $0
+                        in_fb = 1
+                        depth = 1
+                        next
+                      }
+                      print
+                    }
+                  ' "$cm" > "$cm.nofb" && mv "$cm.nofb" "$cm" || exit 1
                 done
                 if grep -R -n -E '^[[:space:]]*find_package[[:space:]]*\([[:space:]]*Python([23]|Interp|Libs)?([^[:alnum:]_]|$)' \
                   --include=CMakeLists.txt --include='*.cmake' . ; then
@@ -4522,14 +4393,26 @@ let
             });
         in
         {
-          # Utils stay off. utils/llvm-lit/CMakeLists.txt calls
-          # make_paths_relative on Python3_EXECUTABLE, and that path is
-          # the missing stub. LLVM still adds utils/TableGen when utils
-          # are off, so the tblgen generators stay. Do not pass
-          # LLVM_INCLUDE_UTILS=ON.
+          # Utils stay off so the lit path step is not configured.
+          # LLVM still adds utils/TableGen when utils are off, so the
+          # tblgen generators stay. Do not pass LLVM_INCLUDE_UTILS=ON.
           tblgen = dropPythonFind prevScope.tblgen;
           "compiler-rt" = dropPythonFind prevScope."compiler-rt";
+          # The llvm scope closed over stock ninja, which runs
+          # `python configure.py` (pkgs/by-name/ni/ninja/package.nix).
+          # final.ninja is this overlay's CMake build. Swap that
+          # input only. Do not switch cmake. Do not add an interpreter.
           "compiler-rt-libc" = (dropPythonFind prevScope."compiler-rt-libc").overrideAttrs (rtOld: {
+            nativeBuildInputs = map (
+              dep:
+              if
+                builtins.isAttrs dep
+                && ((dep.pname or "") == "ninja" || lib.hasPrefix "ninja-" (dep.name or ""))
+              then
+                final.ninja
+              else
+                dep
+            ) (rtOld.nativeBuildInputs or [ ]);
             postPatch = (rtOld.postPatch or "") + ''
                                 inc=lib/sanitizer_common/sanitizer_common_interceptors.inc
                                 if [ ! -f "$inc" ]; then
@@ -4571,9 +4454,9 @@ let
               END
                                 chmod +x cmake/write-vers.sh cmake/write-syms.sh
                                 # --version-list stays on write-vers.sh. The exported
-                                # symbols rule calls the dynamic-list generator through
-                                # the missing stub. Point that rule at write-syms.sh and
-                                # keep its -o argument. Do not run the generator script.
+                                # symbols rule used to call the dynamic-list generator.
+                                # Point that rule at write-syms.sh and keep its -o
+                                # argument. Do not run the generator script.
                                 find . \( -name SanitizerUtils.cmake -o -name CMakeLists.txt -o -name '*.cmake' \) -type f | while IFS= read -r su; do
                                   if ! grep -F -e 'gen_dynamic_list.py' -e 'SANITIZER_GEN_DYNAMIC_LIST' -e '--version-list' "$su" >/dev/null; then
                                     continue
@@ -4631,9 +4514,8 @@ let
             '';
           });
           libllvm = (dropPythonFind prevScope.libllvm).overrideAttrs (llOld: {
-            # LTO.exports is the version-script rule that runs the stub
-            # with -c. Only that output uses write-lto-exports.sh. Other
-            # interpreter commands stay on the stub.
+            # LTO.exports is the version-script rule. That output uses
+            # write-lto-exports.sh. Gold uses write-gold-exports.sh.
             postPatch = (llOld.postPatch or "") + ''
                               cm=cmake/modules/AddLLVM.cmake
                               script=cmake/write-lto-exports.sh
@@ -4704,9 +4586,10 @@ let
                               chmod +x "$goldscript"
                               # BugpointPasses.exports is this same version-script
                               # command, and it is not the LTO or gold arm. The inner
-                              # else used to reprint the stub. This writer reads the
-                              # export list on stdin. LTO.exports stays on
-                              # write-lto-exports.sh. Windows and Darwin stay on the stub.
+                              # else used to reprint the interpreter command. This writer
+                              # reads the export list on stdin. LTO.exports stays on
+                              # write-lto-exports.sh. Unmatched commands stay as
+                              # they were.
                               verscript="$(dirname "$script")/write-version-exports.sh"
                               cat > "$verscript" << 'END'
               #!/bin/sh

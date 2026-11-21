@@ -91,7 +91,9 @@ fn help_exits_0_and_mentions_dry_run() {
     let s = combined(&out);
     assert!(s.contains("--dry-run"), "{s}");
     assert!(s.contains("--install-secrets"), "{s}");
-    assert!(s.contains("nixos-rebuild build"), "{s}");
+    assert!(s.contains("nix build"), "{s}");
+    assert!(!s.contains("nixos-rebuild"), "{s}");
+    assert!(!s.contains("python"), "{s}");
     assert!(!s.contains("do not rsync"), "{s}");
     assert!(!s.contains("Print planned commands"), "{s}");
 }
@@ -272,15 +274,19 @@ fn dry_run_build_failure_does_not_switch_or_run_smoke() {
     let s = combined(&out);
     let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(!out.status.success(), "{s}");
-    assert!(ssh_log.contains("nixos-rebuild build --flake"), "{ssh_log}");
-    assert!(!ssh_log.contains("nixos-rebuild switch"), "{ssh_log}");
+    assert_one_bash_s(&ssh_log);
+    assert!(!ssh_log.contains("nixos-rebuild"), "{ssh_log}");
+    assert!(!ssh_log.contains("python"), "{ssh_log}");
+    assert!(!ssh_log.contains("switch-to-configuration"), "{ssh_log}");
     assert!(
         !ssh_log.contains("/nix/var/nix/profiles/system"),
         "{ssh_log}"
     );
     assert!(!ssh_log.contains("post-switch-smoke"), "{ssh_log}");
+    assert!(s.contains("nix build failed"), "{s}");
     assert!(s.contains("the running generation was not switched"), "{s}");
-    assert!(!s.contains("nixos-rebuild build finished"), "{s}");
+    assert!(!s.contains("deploy-host: nix build finished"), "{s}");
+    assert!(!s.contains("nixos-rebuild"), "{s}");
     assert!(!s.to_ascii_lowercase().contains("post-switch smoke"), "{s}");
 }
 
@@ -564,8 +570,9 @@ last=""
 for a in "$@"; do
   last=$a
 done
+# Last argument -s is the bash -s argv. The POSIX script is not an argument.
 case "$last" in
-  *nixos-rebuild*)
+  -s)
     exit "${SURMOUNT_TEST_REBUILD_EXIT:-0}"
     ;;
   *post-switch-smoke*|*surmount-deploy-host-post-switch-smoke*)
@@ -603,14 +610,22 @@ fn hermetic_cmd() -> (Command, PathBuf, PathBuf) {
     (c, ssh_log, rsync_log)
 }
 
+/// Remote argv for the build and the switch. The POSIX script is not an
+/// argument, so the ssh log does not carry that script text.
+const BASH_S_ARGV: &str = "/run/current-system/sw/bin/bash -s";
+
+fn assert_one_bash_s(log: &str) {
+    assert!(log.contains(BASH_S_ARGV), "{log}");
+    assert_eq!(lines_containing(log, BASH_S_ARGV), 1, "{log}");
+    assert!(!log.contains("fish"), "{log}");
+    assert!(!log.contains("set deploy_host_gccarch_feature"), "{log}");
+}
+
 fn assert_dry_run_builds(ssh_log: &str, out: &str) {
-    assert!(
-        ssh_log.contains(
-            "nixos-rebuild build --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 32 --keep-going"
-        ),
-        "{ssh_log}"
-    );
-    assert!(!ssh_log.contains("nixos-rebuild switch"), "{ssh_log}");
+    assert_one_bash_s(ssh_log);
+    assert!(!ssh_log.contains("nixos-rebuild"), "{ssh_log}");
+    assert!(!ssh_log.contains("python"), "{ssh_log}");
+    assert!(!ssh_log.contains("switch-to-configuration"), "{ssh_log}");
     assert!(
         !ssh_log.contains("/nix/var/nix/profiles/system"),
         "{ssh_log}"
@@ -620,23 +635,12 @@ fn assert_dry_run_builds(ssh_log: &str, out: &str) {
         !ssh_log.contains("surmount-deploy-host-post-switch-smoke"),
         "{ssh_log}"
     );
-    assert!(ssh_log.contains("gccarch-x86-64-v3"), "{ssh_log}");
-    assert!(ssh_log.contains("/run/surmount-nix.conf"), "{ssh_log}");
-    let build_at = ssh_log
-        .find("nixos-rebuild build")
-        .expect("dry-run remote command");
-    let boot_at = ssh_log.find("/run/surmount-nix.conf").expect("bootstrap");
     assert!(
-        boot_at < build_at,
-        "bootstrap must run before nixos-rebuild build"
-    );
-    assert!(
-        out.contains(
-            "deploy-host: nixos-rebuild build finished; the running generation was not switched"
-        ),
+        out.contains("deploy-host: nix build finished; the running generation was not switched"),
         "{out}"
     );
-    assert!(!out.contains("nixos-rebuild switch"), "{out}");
+    assert!(!out.contains("nixos-rebuild"), "{out}");
+    assert!(!out.contains("switch-to-configuration"), "{out}");
 }
 
 fn deploy_with_fake_ssh(rebuild_exit: &str, smoke_exit: &str) -> (Output, String) {
@@ -666,7 +670,9 @@ fn switch_ssh_drop_does_not_start_a_second_switch() {
     assert!(!out.status.success(), "{s}");
     assert!(s.contains("connection failed"), "{s}");
     assert!(s.contains("not starting a second switch"), "{s}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 0, "{log}");
 }
 
@@ -675,9 +681,12 @@ fn rebuild_exit_runs_smoke_once_and_is_not_a_connection_failure() {
     let (out, log) = deploy_with_fake_ssh("1", "0");
     let s = combined(&out);
     assert!(!out.status.success(), "{s}");
-    assert!(s.contains("nixos-rebuild failed"), "{s}");
+    assert!(s.contains("nix build failed"), "{s}");
+    assert!(!s.contains("nixos-rebuild"), "{s}");
     assert!(!s.contains("connection failed"), "{s}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 1, "{log}");
 }
 
@@ -686,13 +695,10 @@ fn finished_rebuild_runs_smoke_and_can_succeed() {
     let (out, log) = deploy_with_fake_ssh("0", "0");
     let s = combined(&out);
     assert!(out.status.success(), "{s}");
-    assert!(log.contains("nixos-rebuild switch"), "{log}");
-    assert!(log.contains(
-        "nixos-rebuild switch --flake path:/root/surmount-server#mail-vps --option max-jobs 32 --option cores 32"
-    ));
-    assert!(!log.contains("--keep-going"), "{log}");
-    assert!(!log.contains("nixos-rebuild build"), "{log}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert!(!log.contains("nixos-rebuild"), "{log}");
+    assert!(!log.contains("python"), "{log}");
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 1, "{log}");
 }
 
@@ -703,13 +709,16 @@ fn smoke_ssh_drop_does_not_start_a_second_switch() {
     assert!(!out.status.success(), "{s}");
     assert!(s.contains("connection failed"), "{s}");
     assert!(s.contains("not starting a second switch"), "{s}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 3, "{log}");
 }
 
 /// Fake ssh that records whether the booted generation moved.
-/// nixos-rebuild prints `synthetic-rebuild-error: switch exit 1` on stderr
-/// and `synthetic-built-generation:` / `synthetic-booted-generation:` on stdout.
+/// The last argument `-s` is the bash invocation of the switch. That arm
+/// prints `synthetic-rebuild-error: switch exit 1` on stderr and
+/// `synthetic-built-generation:` / `synthetic-booted-generation:` on stdout.
 /// A later `readlink` or `surmount-test-booted-generation` prints the booted number.
 fn fake_ssh_generation(dir: &Path) -> (PathBuf, PathBuf) {
     let log = dir.join("ssh.log");
@@ -724,8 +733,9 @@ last=""
 for a in "$@"; do
   last=$a
 done
+# Last argument -s is the bash -s argv. The POSIX script is not an argument.
 case "$last" in
-  *nixos-rebuild*)
+  -s)
     echo "synthetic-rebuild-error: switch exit 1" >&2
     if [ "${SURMOUNT_TEST_GENERATION_CHANGED:-0}" = "1" ]; then
       printf '%s\n' 67 > "$state/booted"
@@ -795,7 +805,9 @@ fn smoke_exit_0_and_changed_generation_is_recipe_exit_0() {
         out.status.success(),
         "smoke exit 0 and a booted generation that changed to the generation the switch built must be recipe exit 0: {s}"
     );
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert!(lines_containing(&log, "post-switch-smoke") >= 1, "{log}");
 }
 
@@ -817,12 +829,13 @@ fn smoke_exit_0_and_unchanged_generation_stays_exit_1_with_rebuild_error() {
         "smoke exit 0 must stay recipe exit 1 when the booted generation did not change: {s}"
     );
     assert!(
-        s.contains("nixos-rebuild failed"),
-        "nixos-rebuild failure must stay visible: {s}"
+        s.contains("nix build failed"),
+        "nix build failure must stay visible: {s}"
     );
+    assert!(!s.contains("nixos-rebuild"), "{s}");
     assert!(
         s.contains("synthetic-rebuild-error: switch exit 1"),
-        "nixos-rebuild error text must not be swallowed: {s}"
+        "rebuild error text must not be swallowed: {s}"
     );
     assert!(!s.contains("connection failed"), "{s}");
 }

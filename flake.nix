@@ -161,9 +161,10 @@
       surmountPins = surmountOverlayParts.pins;
       surmountTzdata = surmountOverlayParts.tzdata;
       surmountNoHaskell = surmountOverlayParts.noHaskell;
-      # glibc configure drops the interpreter from the critical-program
-      # list. Mail-vps only, after noHaskell, so prev.glibc is the
-      # scrubbed one. Locale data is still produced by localedef.
+      # Mail-vps only, after noHaskell. Top-level python and python3 still
+      # throw. glibc's native build input is the nixpkgs interpreter from
+      # before that throw, so configure can see python3. This does not
+      # assign final.python3. Locale data is still produced by localedef.
       glibcHeaderGenOverlay = import ./nix/glibc-header-gen-overlay.nix;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.

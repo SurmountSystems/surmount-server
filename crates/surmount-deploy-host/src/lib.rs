@@ -6,6 +6,7 @@ mod args;
 mod error;
 mod keys;
 mod nix_conf;
+mod nixos_rebuild_bin;
 mod paths;
 mod recipe_batch_01;
 mod recipe_batch_02;

@@ -33,7 +33,7 @@
   lib,
   stdenv,
   fetchurl,
-  autoPatchelfHook,
+  patchelf,
   makeWrapper,
   openssl,
   zlib,
@@ -68,7 +68,7 @@ stdenv.mkDerivation (finalAttrs: {
   inherit version src;
 
   nativeBuildInputs = [
-    autoPatchelfHook
+    patchelf
     makeWrapper
   ];
 
@@ -87,6 +87,7 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   dontBuild = true;
+  dontPatchELF = true;
 
   installPhase = ''
     runHook preInstall
@@ -97,10 +98,16 @@ stdenv.mkDerivation (finalAttrs: {
     runHook postInstall
   '';
 
-  # Keep OpenSSL discoverable if the binary is dynamically linked against it.
-  autoPatchelfIgnoreMissingDeps = [
-    # Some builds are mostly static; ignore soft missing libs if any.
-  ];
+  postFixup = ''
+    patchelf \
+      --set-interpreter "${stdenv.cc.bintools.dynamicLinker}" \
+      --set-rpath "${lib.makeLibraryPath [
+        openssl
+        zlib
+        stdenv.cc.cc.lib
+      ]}" \
+      "$out/bin/stalwart"
+  '';
 
   passthru = {
     # FOD companions (file:// pins for hermetic hosts).

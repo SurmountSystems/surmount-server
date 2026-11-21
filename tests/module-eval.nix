@@ -3653,7 +3653,87 @@ let
       etMem = etSc.MemoryMax or null;
       tcpForward = ssh.AllowTcpForwarding or null;
       gitPkgs = builtins.filter (p: (p.pname or "") == "git") e.config.environment.systemPackages;
-      gitHasPython = p: builtins.any (d: (d.pname or "") == "python3") (p.buildInputs or [ ]);
+      # Fail if a git edge name or pname contains python, Python,
+      # pandas, or json-schema-for-humans, or a pip component.
+      # libpipeline is not that component. A missing buildInputs list
+      # is not an empty clean list. nixos git defaults pythonSupport
+      # to true; NO_PYTHON=1 is the override that turns it off.
+      # PYTHON_PATH means the interpreter is still wired.
+      gitTextMarkedPython =
+        text:
+        let
+          pieces = builtins.filter builtins.isString (builtins.split "[^A-Za-z0-9]+" text);
+        in
+        builtins.isString text
+        && text != ""
+        && (
+          lib.hasInfix "python" text
+          || lib.hasInfix "Python" text
+          || lib.hasInfix "pandas" text
+          || lib.hasInfix "json-schema-for-humans" text
+          || builtins.elem "pip" pieces
+        );
+      gitDepMarked =
+        dep:
+        if builtins.isString dep then
+          gitTextMarkedPython dep
+        else if builtins.isAttrs dep then
+          gitTextMarkedPython (dep.name or "") || gitTextMarkedPython (dep.pname or "")
+        else
+          true;
+      gitEdgeList =
+        p: name:
+        if !(builtins.hasAttr name p) then
+          null
+        else
+          let
+            value = p.${name};
+          in
+          if builtins.isList value then value else [ value ];
+      gitInputsClean =
+        p:
+        let
+          buildInputs = gitEdgeList p "buildInputs";
+          edgeNames = [
+            "buildInputs"
+            "nativeBuildInputs"
+            "propagatedBuildInputs"
+            "propagatedNativeBuildInputs"
+          ];
+          edges = lib.concatMap (
+            name:
+            let
+              value = gitEdgeList p name;
+            in
+            if value == null then [ ] else value
+          ) edgeNames;
+        in
+        buildInputs != null && builtins.all (dep: !gitDepMarked dep) edges;
+      gitFlagList =
+        raw:
+        if builtins.isList raw then
+          raw
+        else if builtins.isString raw then
+          [ raw ]
+        else
+          null;
+      gitFlagMarked =
+        flag:
+        if !builtins.isString flag then
+          true
+        else
+          lib.hasInfix "PYTHON_PATH" flag
+          || lib.hasInfix "python" flag
+          || lib.hasInfix "Python" flag;
+      gitPythonSupportOff =
+        p:
+        let
+          flags = gitFlagList (p.makeFlags or null);
+        in
+        flags != null
+        && flags != [ ]
+        && builtins.any (flag: builtins.isString flag && lib.hasInfix "NO_PYTHON=1" flag) flags
+        && builtins.all (flag: !gitFlagMarked flag) flags;
       scramFlags = [
         "NoNewPrivileges"
         "PrivateTmp"
@@ -3766,7 +3846,8 @@ let
     assert tcpForward != "no";
     assert tcpForward != false;
     assert gitPkgs != [ ];
-    assert builtins.all (p: !(gitHasPython p)) gitPkgs;
+    assert builtins.all gitInputsClean gitPkgs;
+    assert builtins.all gitPythonSupportOff gitPkgs;
     # Gates this sample does not turn on.
     assert e.config.surmount.vaultwarden.enable == false;
     assert e.config.surmount.lake.enable == false;
