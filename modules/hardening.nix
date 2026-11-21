@@ -114,8 +114,15 @@ in
     # SSH is stuck. Default off; host-local enables on this QEMU VPS.
     (mkIf (cfg.enable && cfg.hardening.enable && cfg.hardening.qemuGuestAgent.enable) {
       services.qemuGuest.enable = true;
-      # Not nixpkgs qemu_kvm.ga. That package walks into pythonPackages.
-      services.qemuGuest.package = pkgs.callPackage ../nix/packages/qemu-guest-agent.nix { };
+      # Vendored ELF at nix/packages/qemu-ga-10.2.4. Do not import a second
+      # nixpkgs. That import built python3. Top-level python3 stays a
+      # throw. Do not install nix/packages/qemu-guest-agent.nix.
+      # The upstream unit runs ${package}/bin/qemu-ga.
+      services.qemuGuest.package = pkgs.runCommand "qemu-ga-10.2.4" { } ''
+        mkdir -p $out/bin
+        cp ${../nix/packages/qemu-ga-10.2.4} $out/bin/qemu-ga
+        chmod +x $out/bin/qemu-ga
+      '';
       # Stock nixpkgs only starts the unit via udev SYSTEMD_WANTS on the
       # virtio port. After a switch that udev event has already fired, so
       # the unit stays dead. Want multi-user so SHC inject works on boot

@@ -1264,6 +1264,13 @@ let
               echo "libseccomp.so.2 is missing" >&2
               exit 1
             fi
+            # systemd-oomd NEEDs libatomic.so.1. Meson install_rpath does
+            # not record the gcc lib directory, so the loader exits 127.
+            atomic_lib="${prev.stdenv.cc.cc.lib}/lib"
+            if [ ! -e "$atomic_lib/libatomic.so.1" ]; then
+              echo "libatomic.so.1 is missing" >&2
+              exit 1
+            fi
             resolve_elf() {
               elf=$1
               if [ -z "$elf" ] || [ ! -e "$elf" ]; then
@@ -1379,6 +1386,9 @@ let
               if patchelf --print-needed "$resolved" | grep -F -x -q libseccomp.so.2; then
                 add_rpath "$resolved" "$seccomp_lib"
               fi
+              if patchelf --print-needed "$resolved" | grep -F -x -q libatomic.so.1; then
+                add_rpath "$resolved" "$atomic_lib"
+              fi
             done
             if [ -e "$out/bin/udevadm" ]; then
               udev=$(resolve_elf "$out/bin/udevadm") || {
@@ -1393,6 +1403,22 @@ let
                   exit 1
                   ;;
               esac
+            fi
+            if [ -e "$out/lib/systemd/systemd-oomd" ]; then
+              oomd=$(resolve_elf "$out/lib/systemd/systemd-oomd") || {
+                echo "systemd-oomd is not an ELF" >&2
+                exit 1
+              }
+              if patchelf --print-needed "$oomd" | grep -F -x -q libatomic.so.1; then
+                oomd_rpath=$(patchelf --print-rpath "$oomd")
+                case ":$oomd_rpath:" in
+                  *":$atomic_lib:"*) ;;
+                  *)
+                    echo "systemd-oomd RUNPATH is missing libatomic" >&2
+                    exit 1
+                    ;;
+                esac
+              fi
             fi
           '';
           # switch-to-configuration build.rs reads
@@ -2708,11 +2734,10 @@ let
       python3Minimal = refuse "python3";
       python3Packages = refuse "pythonPackages";
       pythonPackages = refuse "pythonPackages";
-      # Not the nixpkgs qemu package. That package.nix takes
-      # python3Packages. This derivation does not.
-      "qemu-guest-agent" = final.callPackage ./packages/qemu-guest-agent.nix {
-        src = prev.path;
-      };
+      # qemu-ga is not defined here. modules/hardening.nix sets
+      # services.qemuGuest.package to the stored ga output.
+      # Do not import a second nixpkgs. Do not call
+      # nix/packages/qemu-guest-agent.nix. That file is a stub.
       pandas = refuse "pandas";
       pip = refuse "pip";
       dbus-python = refuse "dbus-python";

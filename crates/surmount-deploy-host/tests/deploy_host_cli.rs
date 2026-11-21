@@ -702,6 +702,39 @@ fn finished_rebuild_runs_smoke_and_can_succeed() {
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 1, "{log}");
 }
 
+/// Root on surmount-1 logs in with fish. Fish cannot parse
+/// `if ...; then ...; fi`. The remote smoke command must be an explicit
+/// `bash -c` so the login shell is not the parser. A bare if is the
+/// failure. `bash -s` stays the switch script, not this command.
+#[test]
+fn post_switch_smoke_remote_command_is_explicit_bash_not_a_bare_if() {
+    let (out, log) = deploy_with_fake_ssh("0", "0");
+    let s = combined(&out);
+    assert!(out.status.success(), "{s}");
+    let smoke_lines: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("surmount-deploy-host-post-switch-smoke"))
+        .collect();
+    assert_eq!(
+        smoke_lines.len(),
+        1,
+        "expected one remote smoke command: {log}"
+    );
+    let line = smoke_lines[0];
+    let if_at = line
+        .find("if command -v")
+        .expect("smoke command contains if");
+    let before = &line[..if_at];
+    assert!(
+        before.contains("/run/current-system/sw/bin/bash -c"),
+        "bare if/fi is parsed by the login shell; invoke bash -c before the if: {line}"
+    );
+    assert!(
+        !line.contains("/run/current-system/sw/bin/bash -s"),
+        "do not send the smoke command as bash -s: {line}"
+    );
+}
+
 #[test]
 fn smoke_ssh_drop_does_not_start_a_second_switch() {
     let (out, log) = deploy_with_fake_ssh("0", "255");

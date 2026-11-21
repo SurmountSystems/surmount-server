@@ -297,10 +297,7 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
 
     let rebuild_remote_cmd = switch_remote_command(&rebuild_flake_ref);
     let smoke_name = smoke_remote_name();
-    let smoke_remote_cmd = format!(
-        "if command -v {smoke} >/dev/null 2>&1; then {smoke}; else echo 'deploy-host: remote smoke missing (surmount-deploy-host-post-switch-smoke not on PATH after switch)' >&2; exit 1; fi",
-        smoke = smoke_name
-    );
+    let smoke_remote_cmd = smoke_remote_command(&smoke_name);
 
     // One switch attempt. A drop after this starts may have changed the host.
     // Capture stdout so the built-generation line can be read, and copy
@@ -366,6 +363,16 @@ fn smoke_remote_name() -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "surmount-deploy-host-post-switch-smoke".to_string())
+}
+
+/// sshd runs root's login shell on this argv. On surmount-1 that shell
+/// is fish, and fish cannot parse `if ...; then ...; fi`. Call bash
+/// explicitly. This is not `bash -s`. The switch script owns stdin.
+fn smoke_remote_command(smoke: &str) -> String {
+    format!(
+        "{bash} -c \"if command -v {smoke} >/dev/null 2>&1; then {smoke}; else echo 'deploy-host: remote smoke missing (surmount-deploy-host-post-switch-smoke not on PATH after switch)' >&2; exit 1; fi\"",
+        bash = REMOTE_BASH,
+    )
 }
 
 fn resolve_secrets_install() -> Result<PathBuf, ToolError> {
