@@ -80,7 +80,21 @@ case "$cmd" in
     unit=${2:-}
     case "$unit" in
       sshd) cat "$DIR/state.sshd" 2>/dev/null || echo inactive ;;
-      stalwart-mail) cat "$DIR/state.stalwart" 2>/dev/null || echo inactive ;;
+      stalwart-mail)
+        state=$(cat "$DIR/state.stalwart" 2>/dev/null || echo inactive)
+        if [ -f "$DIR/stalwart_flip_after" ]; then
+          n=$(cat "$DIR/stalwart_polls" 2>/dev/null || echo 0)
+          n=$((n + 1))
+          printf '%s\n' "$n" >"$DIR/stalwart_polls"
+          need=$(cat "$DIR/stalwart_flip_after")
+          if [ "$n" -ge "$need" ]; then
+            state=$(cat "$DIR/stalwart_flip_to")
+            printf '%s\n' "$state" >"$DIR/state.stalwart"
+          fi
+        fi
+        printf '%s\n' "$state"
+        exit 0
+        ;;
       surmount-management-ui) cat "$DIR/state.ui" 2>/dev/null || echo inactive ;;
       *) echo inactive ;;
     esac
@@ -653,4 +667,52 @@ fn skip_pem_and_listen() {
     assert!(out.status.success(), "{s}");
     assert!(s.contains("PASS: tls pem check skipped"), "{s}");
     assert!(s.contains("PASS: listen check skipped"), "{s}");
+}
+
+/// The checker must not treat the first `activating` read as fail=1.
+/// The fake stays `activating` on poll 1 and becomes `active` on poll 2.
+#[test]
+fn activating_is_not_an_immediate_failure_when_the_unit_becomes_active() {
+    let f = Fakes::new();
+    f.reset_day1();
+    fs::write(f.bin.join("state.stalwart"), "activating\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_after"), "2\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_to"), "active\n").unwrap();
+    let out = f.run(&[
+        ("SURMOUNT_SMOKE_UNIT_POLL_MS", "20"),
+        ("SURMOUNT_SMOKE_UNIT_WAIT_MS", "5000"),
+    ]);
+    let s = combined(&out);
+    assert!(
+        out.status.success(),
+        "activating must be polled until active, not fail=1 on the first read: {s}"
+    );
+    assert!(s.contains("PASS: unit stalwart-mail is active"), "{s}");
+    assert!(!s.contains("FAIL: unit stalwart-mail is not active"), "{s}");
+    let polls = fs::read_to_string(f.bin.join("stalwart_polls")).unwrap_or_default();
+    assert!(
+        polls.trim().parse::<u32>().unwrap_or(0) >= 2,
+        "the checker must read is-active more than once while activating: {polls}"
+    );
+}
+
+/// A unit that leaves `activating` for `failed` is still a failure.
+#[test]
+fn activating_that_becomes_failed_is_still_a_failure() {
+    let f = Fakes::new();
+    f.reset_day1();
+    fs::write(f.bin.join("state.stalwart"), "activating\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_after"), "2\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_to"), "failed\n").unwrap();
+    let out = f.run(&[
+        ("SURMOUNT_SMOKE_UNIT_POLL_MS", "20"),
+        ("SURMOUNT_SMOKE_UNIT_WAIT_MS", "5000"),
+    ]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "{s}");
+    assert!(
+        s.contains("FAIL: unit stalwart-mail is not active (is-active=failed)"),
+        "a unit that leaves activating for failed must stay a failure: {s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
 }

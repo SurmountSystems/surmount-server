@@ -15,6 +15,7 @@ mod recipe_batch_04;
 mod recipe_batch_05;
 mod run;
 mod smoke;
+mod smoke_unit_wait;
 mod update_maintenance;
 mod update_pin_refresh;
 mod vendor_recipe;

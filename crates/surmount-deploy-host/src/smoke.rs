@@ -14,6 +14,8 @@ Post-switch smoke (intended to run on the NixOS host after nixos-rebuild).
 Checks:
   - current system generation (report /run/current-system)
   - systemctl is-active: sshd, stalwart-mail, surmount-management-ui
+    (`activating` is polled until active, failed, or inactive; bound
+    SURMOUNT_SMOKE_UNIT_WAIT_MS, default 30000)
   - if UI inactive: systemctl start surmount-management-ui
   - curl loopback /health (day-1 default http://127.0.0.1:8090/health;
     port may follow SURMOUNT_LISTEN when it is a loopback/bind-all host:port.
@@ -195,16 +197,8 @@ fn check_generation(readlink: &str, c: &mut Counters) {
     c.fail_line("generation: cannot resolve /run/current-system or profiles/system");
 }
 
-fn is_active(systemctl: &str, unit: &str) -> String {
-    let out = Command::new(systemctl).args(["is-active", unit]).output();
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(_) => String::new(),
-    }
-}
-
 fn check_unit_active(systemctl: &str, unit: &str, c: &mut Counters) {
-    let st = is_active(systemctl, unit);
+    let st = crate::smoke_unit_wait::wait_until_settled(systemctl, unit);
     if st == "active" {
         c.pass(&format!("unit {unit} is active"));
     } else {
@@ -218,7 +212,7 @@ fn check_unit_active(systemctl: &str, unit: &str, c: &mut Counters) {
 }
 
 fn check_ui(systemctl: &str, c: &mut Counters) {
-    let st = is_active(systemctl, "surmount-management-ui");
+    let st = crate::smoke_unit_wait::is_active(systemctl, "surmount-management-ui");
     if st == "active" {
         c.pass("unit surmount-management-ui is active");
         return;
@@ -236,7 +230,7 @@ fn check_ui(systemctl: &str, c: &mut Counters) {
         .status();
     match start {
         Ok(s) if s.success() => {
-            let st2 = is_active(systemctl, "surmount-management-ui");
+            let st2 = crate::smoke_unit_wait::is_active(systemctl, "surmount-management-ui");
             if st2 == "active" {
                 c.pass("unit surmount-management-ui started and is active");
             } else {

@@ -24,13 +24,20 @@ pub fn build_line(flake_q: &str) -> String {
     )
 }
 
-/// Build the toplevel into `./result`, then exec that result's activator.
-/// The exec is in a subshell so the caller can record its exit status.
-/// Not executed by this function.
+/// Build the toplevel into `./result`, point the boot profile at that
+/// store path, then exec that result's activator.
+///
+/// `switch-to-configuration` updates `/run/current-system` and the
+/// bootloader. It does not change `/nix/var/nix/profiles/system`. Without
+/// the `nix-env --set`, a reboot keeps the previous generation. The
+/// profile is set before the activator so the bootloader install reads
+/// the generation that is about to be activated. The exec is in a
+/// subshell so the caller can record its exit status. Not executed by
+/// this function.
 pub fn switch_line(flake_q: &str) -> String {
     let installable = toplevel_installable(flake_q);
     format!(
-        "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --print-out-paths --option max-jobs 32 --option cores 32 {installable} --out-link result && (exec result/bin/switch-to-configuration switch)"
+        "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --print-out-paths --option max-jobs 32 --option cores 32 {installable} --out-link result && nix-env -p /nix/var/nix/profiles/system --set \"$(readlink -f result)\" && (exec result/bin/switch-to-configuration switch)"
     )
 }
 
@@ -67,6 +74,22 @@ mod tests {
         assert!(!build.contains("switch-to-configuration"), "{build}");
         assert!(!build.contains("--out-link"), "{build}");
         assert!(switch.contains("--out-link result"), "{switch}");
+        assert!(
+            switch.contains(
+                "nix-env -p /nix/var/nix/profiles/system --set \"$(readlink -f result)\""
+            ),
+            "{switch}"
+        );
+        let profile_at = switch
+            .find("nix-env -p /nix/var/nix/profiles/system --set")
+            .expect("profile set");
+        let activate_at = switch
+            .find("exec result/bin/switch-to-configuration switch")
+            .expect("activator");
+        assert!(
+            profile_at < activate_at,
+            "boot profile must be set before the activator: {switch}"
+        );
         assert!(
             switch.contains("exec result/bin/switch-to-configuration switch"),
             "{switch}"

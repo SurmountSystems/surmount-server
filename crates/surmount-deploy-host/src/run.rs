@@ -1173,7 +1173,7 @@ mod tests {
         let switched = switch_remote_command("path:/tmp/repo#mail-vps");
         assert!(switched.contains("nix build"));
         assert!(switched.contains(
-            "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --print-out-paths --option max-jobs 32 --option cores 32 path:/tmp/repo#nixosConfigurations.mail-vps.config.system.build.toplevel --out-link result && (exec result/bin/switch-to-configuration switch)"
+            "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --print-out-paths --option max-jobs 32 --option cores 32 path:/tmp/repo#nixosConfigurations.mail-vps.config.system.build.toplevel --out-link result && nix-env -p /nix/var/nix/profiles/system --set \"$(readlink -f result)\" && (exec result/bin/switch-to-configuration switch)"
         ));
         assert!(!switched.contains("nixos-rebuild"), "{switched}");
         assert!(!switched.contains("--keep-going"), "{switched}");

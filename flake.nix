@@ -48,14 +48,14 @@
     # pkgs/development/compilers/rust/1_99.nix at rustcVersion = "1.99.1".
     # 1_100.nix is HTTP 404 on master, staging, and nixos-unstable.
     # The stable 1.100.0 file is commit
-    # 30a691ce22c321e72f2e4fd205b6c55cd6e66502 (message
+    # 342414c3be9098a87dd50b560e96842a1c79cb9f (message
     # "rust: 1.99.1 -> 1.100.0", commit date 2026-11-10), open as
     # NixOS/nixpkgs pull 586088 against staging, not merged. That file
     # sets rustcVersion = "1.100.0" and bootstrapVersion = "1.100.0".
     # Prior lock 9ecc0a672e9ef2ca4eec8e87dbee653607a7d332 was rustc 1.99.1.
     # Crane has no nixpkgs input: mkLib keeps host pkgs and
     # overrideToolchain supplies this rustc.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/30a691ce22c321e72f2e4fd205b6c55cd6e66502";
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/342414c3be9098a87dd50b560e96842a1c79cb9f";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
