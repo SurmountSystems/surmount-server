@@ -333,22 +333,22 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
         )));
     }
     if rebuild_rc != 0 {
-        // Smoke 0 is not success by itself. Exit 0 only when the later
-        // readlink generation is the generation the switch reported it built.
-        // Unknown, unchanged, or a generation that did not move stays exit 1.
+        // Smoke 0 is not a successful deploy. A non-zero switch, including
+        // switch-to-configuration exit 4 when a unit failed, fails this
+        // process even if the booted generation matches and smoke exits 0.
+        let mut detail =
+            format!("nix build failed (exit {rebuild_rc}); post-switch smoke exit={smoke_rc}");
         if smoke_rc == 0 {
             if let Some(built_n) = built_generation {
                 if read_profile_generation(&opts.target) == Some(built_n) {
-                    eprintln!(
-                        "deploy-host: generation {built_n} is the generation the switch built; nix build exit={rebuild_rc}; post-switch smoke exit={smoke_rc}"
-                    );
-                    return Ok(());
+                    detail.push_str(&format!(
+                        "; generation {built_n} is the generation the switch built"
+                    ));
                 }
             }
         }
-        return Err(ToolError::fail(format!(
-            "nix build failed (exit {rebuild_rc}); post-switch smoke exit={smoke_rc} (activation may still have applied; inspect host)"
-        )));
+        detail.push_str(" (activation may still have applied; inspect host)");
+        return Err(ToolError::fail(detail));
     }
     if smoke_rc != 0 {
         return Err(ToolError::fail(format!(

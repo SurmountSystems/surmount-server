@@ -413,13 +413,16 @@ time. Check guest rustc before killing it.
 
 After rebuild, the driver always runs
 `surmount-deploy-host-post-switch-smoke` on the guest, even if rebuild
-exit is non-zero.
+exit is non-zero. The deploy-host process exits 0 only when the switch
+step exits 0 and that smoke exits 0. A switch exit of 4, including
+`stalwart-mail.service` failed during switch-to-configuration, fails
+the process even when the later smoke exits 0.
 
 Smoke must pass all of:
 
 - current NixOS generation store path
 - `sshd` active
-- `stalwart-mail` active
+- `stalwart-mail` active for the sample window. `failed` and `inactive` fail on the first read. A unit that stays `activating` is polled. A unit that becomes `active` passes only if it stays `active` for `SURMOUNT_SMOKE_UNIT_WAIT_MS` (default 30000) with the same main PID and the same NRestarts. Main-process exit status 1, or a higher NRestarts, fails the smoke. One `active` sample is not a pass.
 - `surmount-management-ui` active (smoke may start it if inactive)
 - loopback `https://127.0.0.1:443/health`
 - TLS cert and key paths exist; key mode 600

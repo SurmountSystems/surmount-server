@@ -15,7 +15,11 @@ Checks:
   - current system generation (report /run/current-system)
   - systemctl is-active: sshd, stalwart-mail, surmount-management-ui
     (`activating` is polled until active, failed, or inactive; bound
-    SURMOUNT_SMOKE_UNIT_WAIT_MS, default 30000)
+    SURMOUNT_SMOKE_UNIT_WAIT_MS, default 30000). `failed` and `inactive`
+    fail on the first read. A unit that becomes active passes only when
+    it stays active for that same bound, with the same main PID and the
+    same NRestarts. Main-process exit status 1, or a higher NRestarts,
+    fails the smoke. One active sample is not a pass.
   - if UI inactive: systemctl start surmount-management-ui
   - curl loopback /health (day-1 default http://127.0.0.1:8090/health;
     port may follow SURMOUNT_LISTEN when it is a loopback/bind-all host:port.
@@ -198,16 +202,21 @@ fn check_generation(readlink: &str, c: &mut Counters) {
 }
 
 fn check_unit_active(systemctl: &str, unit: &str, c: &mut Counters) {
-    let st = crate::smoke_unit_wait::wait_until_settled(systemctl, unit);
-    if st == "active" {
-        c.pass(&format!("unit {unit} is active"));
-    } else {
-        let shown = if st.is_empty() {
-            "unknown"
-        } else {
-            st.as_str()
-        };
-        c.fail_line(&format!("unit {unit} is not active (is-active={shown})"));
+    match crate::smoke_unit_wait::wait_until_settled(systemctl, unit) {
+        crate::smoke_unit_wait::UnitVerdict::Active => {
+            c.pass(&format!("unit {unit} is active"));
+        }
+        crate::smoke_unit_wait::UnitVerdict::NotActive { state } => {
+            let shown = if state.is_empty() {
+                "unknown"
+            } else {
+                state.as_str()
+            };
+            c.fail_line(&format!("unit {unit} is not active (is-active={shown})"));
+        }
+        crate::smoke_unit_wait::UnitVerdict::Unstable { reason } => {
+            c.fail_line(&format!("unit {unit} did not stay active ({reason})"));
+        }
     }
 }
 

@@ -799,7 +799,7 @@ esac
     (script, log)
 }
 
-fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
+fn deploy_with_generation_exit(changed: &str, rebuild_exit: &str) -> (Output, String, PathBuf) {
     let dir = temp_dir("fake-ssh-gen");
     let state = dir.join("state");
     fs::create_dir_all(&state).unwrap();
@@ -811,7 +811,7 @@ fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
         .env("SURMOUNT_TEST_SSH_LOG", &log)
         .env("SURMOUNT_TEST_GENERATION_STATE", &state)
         .env("SURMOUNT_TEST_GENERATION_CHANGED", changed)
-        .env("SURMOUNT_TEST_REBUILD_EXIT", "1")
+        .env("SURMOUNT_TEST_REBUILD_EXIT", rebuild_exit)
         .env("SURMOUNT_TEST_SMOKE_EXIT", "0")
         .args([
             "--target",
@@ -825,8 +825,12 @@ fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
     (out, logged, state)
 }
 
+fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
+    deploy_with_generation_exit(changed, "1")
+}
+
 #[test]
-fn smoke_exit_0_and_changed_generation_is_recipe_exit_0() {
+fn smoke_exit_0_and_changed_generation_stays_process_failure_when_switch_nonzero() {
     let (out, log, state) = deploy_with_generation("1");
     let s = combined(&out);
     let booted = fs::read_to_string(state.join("booted")).unwrap_or_default();
@@ -835,8 +839,16 @@ fn smoke_exit_0_and_changed_generation_is_recipe_exit_0() {
         "fixture must move the booted generation to 67: {booted}"
     );
     assert!(
-        out.status.success(),
-        "smoke exit 0 and a booted generation that changed to the generation the switch built must be recipe exit 0: {s}"
+        !out.status.success(),
+        "a non-zero switch must fail the process even when smoke exits 0 and the generation matches: {s}"
+    );
+    assert!(
+        s.contains("nix build failed"),
+        "nix build failure must stay visible: {s}"
+    );
+    assert!(
+        s.contains("deploy-host: post-switch smoke exit=0"),
+        "smoke still runs after a non-zero switch: {s}"
     );
     assert_one_bash_s(&log);
     assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
@@ -871,4 +883,37 @@ fn smoke_exit_0_and_unchanged_generation_stays_exit_1_with_rebuild_error() {
         "rebuild error text must not be swallowed: {s}"
     );
     assert!(!s.contains("connection failed"), "{s}");
+}
+
+/// Switch exit 4 is what nixos-rebuild returns when switch-to-configuration
+/// reports a failed unit. Smoke 0 and a matching generation must not make
+/// that process look successful.
+#[test]
+fn crash_loop_switch_exit_4_smoke_0_is_not_process_success() {
+    let (out, log, state) = deploy_with_generation_exit("1", "4");
+    let s = combined(&out);
+    let booted = fs::read_to_string(state.join("booted")).unwrap_or_default();
+    assert!(
+        booted.contains("67"),
+        "fixture must move the booted generation to 67: {booted}"
+    );
+    assert!(
+        s.contains("deploy-host: nix build exit=4"),
+        "the switch exit must stay visible: {s}"
+    );
+    assert!(
+        s.contains("deploy-host: post-switch smoke exit=0"),
+        "smoke still runs after a non-zero switch: {s}"
+    );
+    assert!(
+        !out.status.success(),
+        "switch exit 4 must fail the process even when post-switch smoke exits 0 and the generation matches: {s}"
+    );
+    assert!(
+        s.contains("nix build failed"),
+        "a non-zero switch must be reported as a failed deploy: {s}"
+    );
+    assert_one_bash_s(&log);
+    assert!(!log.contains("python"), "{log}");
+    assert!(lines_containing(&log, "post-switch-smoke") >= 1, "{log}");
 }
