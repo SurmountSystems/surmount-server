@@ -6,11 +6,14 @@
 # Call from flake: import ./tests/arti-onion-package.nix {
 #   inherit pkgs lib rustPlatform artiUnstable;
 # }
+# rustPlatform is required. A missing argument must not select
+# mail-host pkgs.rustPlatform (nixos-26.05 rustc 1.95.0).
+# The flake passes mkArtiRustPlatform (nixpkgs-rust rustc 1.100.0).
 
 {
   pkgs,
   lib,
-  rustPlatform ? pkgs.rustPlatform,
+  rustPlatform ? throw "tests/arti-onion-package.nix: rustPlatform is required. Pass nixpkgs-rust mkArtiRustPlatform (rustc 1.100.0). Do not default to pkgs.rustPlatform (mail-host rustc 1.95.0).",
   artiUnstable,
 }:
 let

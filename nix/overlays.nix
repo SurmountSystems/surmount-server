@@ -388,7 +388,7 @@ let
     final: prev:
     let
       # One std-only Rust file. final.rustc is this package set's rustc.
-      # On the mail host the later overlay pins that to rustc 1.99.1,
+      # On the mail host the later overlay pins that to rustc 1.100.0,
       # not nixos-26.05 rustc 1.95.0. The dry-run builds this derivation.
       filesystemSetsGen = prev.stdenv.mkDerivation {
         name = "filesystem-sets-gen";
@@ -2095,14 +2095,17 @@ let
     final: prev:
     let
       lib = prev.lib;
-      # Same nixpkgs-rust pin as flake.nix (rev 9ecc0a67, rustc 1.99.1).
-      # The mail host must not compile nixos-26.05 rustc 1.95.0.
+      # Same nixpkgs-rust pin as flake.nix
+      # (rev 981724d1, rustcVersion = "1.100.0"). Not a second input
+      # and not a different compiler. The mail-host channel stays
+      # nixos-26.05. The mail host must not compile that channel's
+      # rustc 1.95.0.
       mailHostRustSrc = builtins.fetchTree {
         type = "github";
         owner = "NixOS";
         repo = "nixpkgs";
-        rev = "9ecc0a672e9ef2ca4eec8e87dbee653607a7d332";
-        narHash = "sha256-ayn2dNaEAGbxEUYNc1CUVYgqIePEcxwvj1XpVCOksYg=";
+        rev = "981724d1e07192596b94a2dcd4bd3c30139cc508";
+        narHash = "sha256-gjAmGk/n8OS7bAvGqUfTC7YTN8HgkfQGzgpjAR77k84=";
       };
       mailHostRust = import mailHostRustSrc {
         system = prev.stdenv.hostPlatform.system;

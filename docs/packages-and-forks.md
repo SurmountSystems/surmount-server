@@ -39,7 +39,7 @@ package bumps in this repo.
 
 | Path | Role |
 |------|------|
-| `nix/packages/stalwart-mail.nix` | Stalwart server pin (release binary FOD today) |
+| `nix/packages/stalwart-mail.nix` | Stalwart server pin (1.1.0 source tarball, local numeric merge patch) |
 | `nix/packages/stalwart-cli.nix` | CLI pin (admin only; no Maildir import on 1.0.x) |
 | `nix/packages/vandelay.nix` | Official 0.16 Maildir++ / JMAP importer-exporter |
 | `nix/packages/stalwart-webui.nix` | WebUI assets FOD |
@@ -173,27 +173,35 @@ policy: [DNS.md](DNS.md), [SECURITY.md](SECURITY.md).
 
 ## 3. Packaging modes for Stalwart
 
-### 3.1 Current: release binary FOD
+### 3.1 Current: 1.1.0 source tarball
 
-- Download upstream (or fork) published `stalwart-*-unknown-linux-gnu.tar.gz`
-  with a fixed hash.
-- Hermetic: hash pins the bytes.
-- **Gap:** the binary embeds its own RocksDB and other native code. We do
-  not dynamically link `pkgs.rocksdb` in this mode. Auditing means trusting
-  the upstream release build or moving to source build.
+- `nix/packages/stalwart-mail.nix` builds upstream tag v1.1.0 from the GitHub
+  source tarball. The release-binary fixed-output mode is gone, because a
+  Rust patch cannot apply to that binary.
+- `nix/patches/stalwart-1.1.0-numeric-value-merge.patch` restores
+  `numeric_value_merge` from v0.16.27 and calls
+  `set_merge_operator_associative` from `cf_options` for column families
+  n, y, and u before open.
+- RocksDB stays crate-bundled. The lock uses stalwartlabs/rust-rocksdb
+  `stalwart/0.25` (`f6169ca36d74c15637f8c6396c34e82aa73d0d47`), which
+  compiles stalwartlabs/rocksdb `d2ea7067099d57c5c85bd076f2cc1ca8fb4c5d04`
+  (RocksDB 11.8.1). This expression does not link `pkgs.rocksdb`. The
+  nixpkgs pin is 10.10.1, and the 1.1.0 package has no switch onto that
+  library.
 
-### 3.2 Goal when source build works: system RocksDB
+### 3.2 Goal when the RocksDB pin matches: system RocksDB
 
-When cargo vendor / rustPlatform works reliably under Nix:
+When the crate and `pkgs.rocksdb` are the same RocksDB:
 
 1. Build Stalwart from a **known source rev** (upstream tag or Surmount fork).
 2. Link **`pkgs.rocksdb`** (or fixpkgs rocksdb) with a known version/ABI
-   rather than relying only on crates.io `librocksdb-sys` bundled sources.
+   rather than relying only on the crate-bundled sources.
 3. One RocksDB to patch and audit on the host story; better determinism for
    native code we care about.
 
-Do not delete the working binary FOD path until source build is proven in CI
-and on the target host. Mark gaps honestly.
+Do not point this 1.1.0 build at nixpkgs RocksDB 10.10.1. That is a
+different library than the 11.8.1 submodule the crate compiles. Mark that
+gap honestly.
 
 ### 3.3 Spam-filter and WebUI FODs
 
@@ -250,13 +258,18 @@ ref/stalwart/   # submodule or manual clone; operator maintains
 - **Operator** updates the submodule. Agents do not `git submodule update`
   push cycles unless explicitly instructed.
 
-#### Binary FOD until source build
+#### Source tarball for the live server package
+
+The live server package is the upstream 1.1.0 source tarball plus
+`nix/patches/stalwart-1.1.0-numeric-value-merge.patch`. That patch
+restores `numeric_value_merge` for families n, y, and u. A fork flake
+input is not required for this patch.
 
 1. Fork tracks/mirrors upstream tags (or Surmount-tagged releases).
-2. `nix/packages/stalwart-mail.nix` keeps binary FOD URLs pointed at the
-   **fork's** release assets **or** upstream assets until fork releases differ.
-3. When Surmount patches matter, publish fork release assets or switch to
-   source build from the fork rev via the flake input.
+2. `nix/packages/stalwart-mail.nix` builds that source tarball. It does
+   not download the release binary.
+3. When a later Surmount fork rev matters, switch the source input to
+   that rev via the flake input.
 
 ### Agent rules (hard)
 

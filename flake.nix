@@ -41,21 +41,22 @@
     # See nix/packages/lean4.nix (official release v4.35.0).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-    # rustc/cargo for crane packages and the Arti source build. Not host
-    # nixos-26.05. Not nixos-unstable. Not the 1.100 beta.
-    # Read 2026-11-16: master HEAD
-    # f6d0c65fd4bc20d15fb5c51cbe8d60fa662ab4b7 still has
-    # pkgs/development/compilers/rust/1_99.nix at rustcVersion = "1.99.1".
-    # 1_100.nix is HTTP 404 on master, staging, and nixos-unstable.
-    # The stable 1.100.0 file is commit
-    # 342414c3be9098a87dd50b560e96842a1c79cb9f (message
-    # "rust: 1.99.1 -> 1.100.0", commit date 2026-11-10), open as
-    # NixOS/nixpkgs pull 586088 against staging, not merged. That file
-    # sets rustcVersion = "1.100.0" and bootstrapVersion = "1.100.0".
-    # Prior lock 9ecc0a672e9ef2ca4eec8e87dbee653607a7d332 was rustc 1.99.1.
-    # Crane has no nixpkgs input: mkLib keeps host pkgs and
+    # rustc/cargo for crane packages, Arti, Stalwart, wasm-bindgen, and
+    # the mail-host rustc overlay. Not the mail-host channel
+    # nixos-26.05. Not nixos-unstable. Not a compiler newer than 1.100.0.
+    # Measured 2026-11-21: nixpkgs master HEAD
+    # 607eef272a161b47359fc99840abc3fdc5b2f7f9 still has
+    # pkgs/development/compilers/rust/1_99.nix and HTTP 404 for 1_100.nix
+    # and 1_101.nix.
+    # The current rust 1.100 pin is 981724d1e07192596b94a2dcd4bd3c30139cc508
+    # (nixpkgs pull 586088 head, 2026-11-21). 1_100.nix there sets
+    # rustcVersion = "1.100.0" and bootstrapVersion = "1.100.0".
+    # all-packages.nix sets rust = rust_1_100. Prior lock
+    # 342414c3be9098a87dd50b560e96842a1c79cb9f was rustc 1.99.1.
+    # Do not add a second nixpkgs input. The mail-host channel stays
+    # nixos-26.05. Crane has no nixpkgs input: mkLib keeps host pkgs and
     # overrideToolchain supplies this rustc.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/342414c3be9098a87dd50b560e96842a1c79cb9f";
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/981724d1e07192596b94a2dcd4bd3c30139cc508";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
@@ -388,12 +389,25 @@
           e2ePkgs = pkgs.callPackage ./nix/packages/surmount-e2e.nix {
             inherit craneLib pkgsRust;
           };
+          # Not a rec set. Sibling attrs cannot see sploraRust100.
+          sploraRust100 = import ./nix/splora-rust-1.100.nix {
+            inherit lib sploraInput pkgsRust system;
+          };
         in
         {
           management-ui = pkgs.callPackage ./nix/packages/management-ui.nix {
             inherit craneLib pkgsRust;
           };
-          stalwart-mail = pkgs.callPackage ./nix/packages/stalwart-mail.nix { };
+          # nixpkgs-rust rustc, not mail-host pkgs.rustPlatform (rustc 1.95.0).
+          # mkArtiRustPlatform is makeRustPlatform { rustc, cargo } from
+          # pkgsRust (import nixpkgs-rust). The scope does not expose .rustc,
+          # so rustc and cargo are passed too. Locked rustc.version is 1.100.0.
+          # mail-parser 1.0.1 requires rustc 1.98.
+          stalwart-mail = pkgs.callPackage ./nix/packages/stalwart-mail.nix {
+            rustPlatform = mkArtiRustPlatform system;
+            rustc = pkgsRust.rustc;
+            cargo = pkgsRust.cargo;
+          };
           stalwart = self.packages.${system}.stalwart-mail;
           stalwart-cli = pkgs.callPackage ./nix/packages/stalwart-cli.nix { };
           vandelay = pkgs.callPackage ./nix/packages/vandelay.nix { };
@@ -484,16 +498,25 @@
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
-          splora =
-            sploraInput.packages.${system}.splora
-              or (throw "splora flake input has no packages.${system}.splora (fail-closed)");
-          splora-liquid =
-            sploraInput.packages.${system}.splora-liquid
-              or (throw "splora flake input has no packages.${system}.splora-liquid (fail-closed)");
+          # mkPkgs inside the splora flake hardcodes rust-bin 1.99.1 and
+          # takes no toolchain argument. Locked rust-overlay has no
+          # stable 1.100.0 (latest manifest is 1.99.1).
+          # nix/splora-rust-1.100.nix re-calls that flake and puts
+          # nixpkgs-rust rustc 1.100.0 and cargo 1.100.0 on the attribute
+          # Splora reads. Not rust-bin.stable."1.100.0".
+          # sploraRust100 is bound in the let above. This attrset is not rec.
+          splora = sploraRust100.splora;
+          splora-liquid = sploraRust100.splora-liquid;
           # Trunk client from frontend/web. cargoHash is the fetchCargoVendor
           # vendor-staging hash in nix/packages/splora-web.nix. This Nix src
           # omits the laptop Menhera config. The build phase is offline.
-          splora-web = pkgs.callPackage ./nix/packages/splora-web.nix { inherit craneLib sploraInput; };
+          # rustPlatform is nixpkgs-rust rustc 1.100.0 (mkArtiRustPlatform).
+          # Do not leave callPackage to inject mail-host rustPlatform
+          # (nixos-26.05 rustc 1.95.0) into wasm-bindgen or the web vendor.
+          splora-web = pkgs.callPackage ./nix/packages/splora-web.nix {
+            inherit craneLib sploraInput;
+            rustPlatform = mkArtiRustPlatform system;
+          };
           # Rust nixfmt-rs (Mic92). Not Haskell pkgs.nixfmt and not
           # nixfmt-rfc-style (that alias is the channel Haskell package).
           # Upstream attribute is packages.${system}.default. Binary name

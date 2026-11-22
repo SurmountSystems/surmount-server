@@ -19,6 +19,8 @@
   lib,
   pkgs,
   craneLib,
+  # nixpkgs-rust rustc/cargo (flake mkArtiRustPlatform). Not mail-host
+  # pkgs.rustPlatform (nixos-26.05 rustc 1.95.0).
   rustPlatform,
   sploraInput,
   # nixpkgs lld (same store path as llvmPackages.lld). wasm32 rustc
@@ -28,7 +30,16 @@
 
 let
   # wasm-bindgen-cli 0.2.128 from ./wasm-bindgen-cli.nix only.
-  wasmBindgenCli = pkgs.callPackage ./wasm-bindgen-cli.nix { };
+  # buildWasmBindgenCli from the mail-host channel closes over that
+  # channel's rustPlatform. Re-call it with this rustPlatform so the
+  # compile uses nixpkgs-rust rustc 1.100.0, and C libraries stay on
+  # the mail-host pkgs. cargoDeps below uses the same rustPlatform.
+  wasmBindgenCli = pkgs.callPackage ./wasm-bindgen-cli.nix {
+    inherit rustPlatform;
+    buildWasmBindgenCli = pkgs.callPackage (pkgs.path + "/pkgs/build-support/wasm-bindgen-cli") {
+      inherit rustPlatform;
+    };
+  };
 
   src = lib.cleanSourceWith {
     src = sploraInput;

@@ -1,0 +1,64 @@
+--- a/crates/store/src/backend/rocksdb/main.rs
++++ b/crates/store/src/backend/rocksdb/main.rs
+@@ -11,8 +11,8 @@
+ };
+ use ::registry::schema::structs;
+ use rocksdb::{
+-    BlockBasedOptions, Cache, ColumnFamilyDescriptor, DBCompressionType, MultiThreaded,
+-    OptimisticTransactionDB, Options,
++    BlockBasedOptions, Cache, ColumnFamilyDescriptor, DBCompressionType, MergeOperands,
++    MultiThreaded, OptimisticTransactionDB, Options,
+ };
+ use std::path::PathBuf;
+ 
+@@ -117,7 +117,7 @@
+ 
+         for subspace in Subspace::ALL.iter().copied() {
+             let profile = subspace.profile();
+-            let mut cf_opts = cf_options(profile, &cache, write_buffer_size);
++            let mut cf_opts = cf_options(subspace.name(), profile, &cache, write_buffer_size);
+ 
+             if let Some(min_blob_size) = match profile {
+                 CfProfile::Blob => Some(config.blob_size),
+@@ -208,7 +208,27 @@
+     }
+ }
+ 
+-fn cf_options(profile: CfProfile, cache: &Cache, write_buffer_size: usize) -> Options {
++pub fn numeric_value_merge(
++    _key: &[u8],
++    value: Option<&[u8]>,
++    operands: &MergeOperands,
++) -> Option<Vec<u8>> {
++    let mut value = if let Some(value) = value {
++        i64::from_le_bytes(value.try_into().ok()?)
++    } else {
++        0
++    };
++
++    for op in operands.iter() {
++        value += i64::from_le_bytes(op.try_into().ok()?);
++    }
++
++    let mut bytes = Vec::with_capacity(std::mem::size_of::<i64>());
++    bytes.extend_from_slice(&value.to_le_bytes());
++    Some(bytes)
++}
++
++fn cf_options(name: &str, profile: CfProfile, cache: &Cache, write_buffer_size: usize) -> Options {
+     let mut block_opts = BlockBasedOptions::default();
+     block_opts.set_block_cache(cache);
+     block_opts.set_cache_index_and_filter_blocks(true);
+@@ -269,6 +289,12 @@
+         }
+     }
+ 
++    // 0.16 families n, y, and u stored numeric merges. 1.1.0 reuses those
++    // names. Set the operator before open so those families can open.
++    if matches!(name, "n" | "y" | "u") {
++        opts.set_merge_operator_associative("merge", numeric_value_merge);
++    }
++
+     opts.set_block_based_table_factory(&block_opts);
+ 
+     opts

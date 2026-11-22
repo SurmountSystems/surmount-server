@@ -20,8 +20,8 @@
 # Vendor / crates.io:
 #   fetch-cargo-vendor against crates.io returned HTTP 403 from this
 #   environment (same class of failure that forced Stalwart to release-binary
-#   FODs). Read 2026-11-16: nixpkgs-rust commit
-#   fd400cc205c104a499657a82680b6a3eaa8b7d8e has pkgs.arti version 2.8.0.
+#   FODs). nix eval on nixpkgs-rust 981724d1e07192596b94a2dcd4bd3c30139cc508
+#   printed pkgs.arti.version 2.8.0.
 #   Do not set cargoDeps to that tree. cargoHash for arti-v2.8.0 is
 #   sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=. The missing-hash
 #   throw is gone. Do not pretend that vendor tree matches this source.
