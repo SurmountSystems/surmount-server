@@ -222,7 +222,7 @@ Source of truth for FODs: `nix/packages/*.nix`. Audit:
 
 | Pin | Tree (as of audit) | Notes |
 |-----|--------------------|-------|
-| Stalwart server | **1.1.0** binary FOD | GitHub releases/latest, checked on surmount-1 on 2026-11-16, is `v1.1.0` (published 2026-11-09T13:23:08Z, not a prerelease). Gnu tarball names are unchanged. Each tarball contains one binary named stalwart. SRI hashes are in `nix/packages/stalwart-mail.nix`, from `nix store prefetch-file` on the /mnt/hdd store. Not nixpkgs stalwart |
+| Stalwart server | **0.16.26** release binary FOD | Restored 2026-11-22. The live store at `/var/lib/stalwart-mail` was created before 1.0. Stalwart 1.1.0 exits with `The data store was created by a Stalwart version prior to 1.0 and cannot be opened by this version.` Do not bump this pin to 1.x, and do not rewrite that store, until the operator accepts a migration. The 0.16.26 tarball hashes are the 2026-10-17 pin in `nix/packages/stalwart-mail.nix`. Not nixpkgs stalwart |
 | stalwart-cli | **1.0.14** | Latest tag on 2026-11-03 (`v1.0.14`, published 2026-10-25T18:15:42Z). Still no Maildir import (that is Vandelay) |
 | vandelay | **1.0.14** | Latest tag on 2026-11-03 (`v1.0.14`, published 2026-11-01T16:43:01Z). Official Maildir++ / JMAP import |
 | Stalwart WebUI | **2.0.6** | GitHub releases/latest, checked on surmount-1 on 2026-11-16, is `v2.0.6` (published 2026-11-13T11:38:18Z, not a prerelease). Asset name is still `webui.zip`. The SRI hash is in `nix/packages/stalwart-webui.nix`, from `nix store prefetch-file` on the /mnt/hdd store. |
@@ -239,8 +239,7 @@ Source of truth for FODs: `nix/packages/*.nix`. Audit:
 | SurmountSystems/pqconnect | Fork / packaging mirror | Path input after human commit |
 | Binary FOD RocksDB | Embedded in Stalwart release binary | System `pkgs.rocksdb` is **design goal** on source build |
 
-Compatibility with old Stalwart majors is **not** a goal. Prefer current majors.
-nixpkgs lag is not a reason to stay old on engines we own.
+The live Stalwart store on surmount-1 is pre-1.0, so the server pin stays **0.16.26** until the operator accepts a store migration. Do not treat a newer GitHub release as a reason to point this unit at 1.x. nixpkgs lag is not a reason to stay old on engines we own, except this store.
 
 ---
 

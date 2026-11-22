@@ -398,16 +398,10 @@
           management-ui = pkgs.callPackage ./nix/packages/management-ui.nix {
             inherit craneLib pkgsRust;
           };
-          # nixpkgs-rust rustc, not mail-host pkgs.rustPlatform (rustc 1.95.0).
-          # mkArtiRustPlatform is makeRustPlatform { rustc, cargo } from
-          # pkgsRust (import nixpkgs-rust). The scope does not expose .rustc,
-          # so rustc and cargo are passed too. Locked rustc.version is 1.100.0.
-          # mail-parser 1.0.1 requires rustc 1.98.
-          stalwart-mail = pkgs.callPackage ./nix/packages/stalwart-mail.nix {
-            rustPlatform = mkArtiRustPlatform system;
-            rustc = pkgsRust.rustc;
-            cargo = pkgsRust.cargo;
-          };
+          # Release binary 0.16.26. Not a cargo source build. The live
+          # store under /var/lib/stalwart-mail is pre-1.0. Stalwart 1.x
+          # refuses that store. Do not pass rustPlatform here.
+          stalwart-mail = pkgs.callPackage ./nix/packages/stalwart-mail.nix { };
           stalwart = self.packages.${system}.stalwart-mail;
           stalwart-cli = pkgs.callPackage ./nix/packages/stalwart-cli.nix { };
           vandelay = pkgs.callPackage ./nix/packages/vandelay.nix { };
@@ -1248,7 +1242,7 @@
               echo "  nix run .#surmount-inxi-host -- --help"
               echo "  nix run .#surmount-leftover-homes -- --tree"
               echo "  nix build .#management-ui"
-              echo "  nix build .#stalwart-mail   # long cargo build of engine 0.16+"
+              echo "  nix build .#stalwart-mail   # release binary 0.16.26"
             '';
           };
         }
