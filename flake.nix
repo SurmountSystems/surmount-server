@@ -156,8 +156,8 @@
 
       # nix/overlays.nix exports .pins and .tzdata. Not a second overlay
       # home. surmountOverlay remains the Surmount package set.
-      # .pins is the nixos-26.05 nix-cli source build (not nix-everything,
-      # not the 2.36.0 binary tarball).
+      # .pins is the upstream Nix 2.36.0 binary tarball (not nix-cli,
+      # not nix-everything).
       # .tzdata sets tzdata 2026e doCheck = false (now.ck). The mail-host
       # nixosSystem below imports .tzdata. mkPkgs does not, so
       # checks.x86_64-linux.ci does not rebuild CPython for that skip.
@@ -170,15 +170,14 @@
       surmountPins = surmountOverlayParts.pins;
       surmountTzdata = surmountOverlayParts.tzdata;
       surmountNoHaskell = surmountOverlayParts.noHaskell;
-      # Before pins. The component source has no meson option that
-      # skips clang-tidy. The patch stops that directory from running.
-      # pins still sets pkgs.nix to nixComponents_git.nix-cli.
-      surmountNixClangTidy = import ./nix/nix-skip-clang-tidy-overlay.nix;
       # Mail-vps only, after noHaskell. Top-level python and python3 still
-      # throw. glibc's native build input is the nixpkgs interpreter from
-      # before that throw, so configure can see python3. This does not
-      # assign final.python3. Locale data is still produced by localedef.
+      # throw. Locale data is still produced by localedef. This does not
+      # assign final.python3.
       glibcHeaderGenOverlay = import ./nix/glibc-header-gen-overlay.nix;
+      # After the header overlay. Replaces pkgs.glibc with the released
+      # 2.44 already packaged by Splora's locked nixpkgs. The mail-host
+      # channel stays nixos-26.05. Splora's own rev is not moved.
+      glibc244Overlay = import ./nix/glibc-2.44-overlay.nix sploraInput.inputs.nixpkgs;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.
       mkArtiRustPlatform =
@@ -239,9 +238,9 @@
         import nixpkgs {
           inherit system;
           overlays = [
-            surmountNixClangTidy
             surmountPins
             (surmountOverlay system)
+            glibc244Overlay
           ];
         };
 
@@ -377,12 +376,12 @@
               { ... }:
               {
                 nixpkgs.overlays = [
-                  surmountNixClangTidy
                   surmountPins
                   surmountTzdata
                   (surmountOverlay "x86_64-linux")
                   surmountNoHaskell
                   glibcHeaderGenOverlay
+                  glibc244Overlay
                 ];
               }
             )
@@ -985,6 +984,7 @@
                 inherit pkgs lib;
                 inherit sops-nix;
                 sploraNixosModule = sploraInput.nixosModules.splora;
+                inherit glibc244Overlay;
               };
             in
             pkgs.writeText "module-eval-contract" (builtins.toJSON r.ok);

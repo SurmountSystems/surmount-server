@@ -1,11 +1,11 @@
-# Prints the mail-host Nix pin from nix/overlays.nix.
-# The pin is the nixos-26.05 nix-cli source build. It is not the
-# upstream binary tarball and not nix-everything.
+# Prints the mail-host Nix pin from nix/packages/nix-upstream-binary.nix.
+# The pin is the upstream 2.36.0 binary tarball. It is not nix-cli
+# and not nix-everything.
 # Strict eval only. Does not build the mail host and does not read flake.nix.
 #
 #   nice -n 19 nix-instantiate --eval --strict tests/nix-pin.nix
 let
-  text = builtins.readFile ../nix/overlays.nix;
+  text = builtins.readFile ../nix/packages/nix-upstream-binary.nix;
   lines = builtins.filter builtins.isString (builtins.split "\n" text);
 
   matches = needle: builtins.filter (line: builtins.match needle line != null) lines;
@@ -18,15 +18,25 @@ let
     else
       builtins.head xs;
 
-  pin = one "nix-cli source pin" (
-    matches "[[:space:]]*nix = prev\\.nixVersions\\.nixComponents_git\\.nix-cli;[[:space:]]*"
+  version = one "version" (matches "[[:space:]]*version = \"2\\.36\\.0\";[[:space:]]*");
+  url = one "url" (
+    matches "[[:space:]]*url = \"https://releases\\.nixos\\.org/nix/nix-2\\.36\\.0/nix-2\\.36\\.0-x86_64-linux\\.tar\\.xz\";[[:space:]]*"
   );
-  tarball = matches ".*releases\\.nixos\\.org/nix/nix-.*";
-  everything = matches "[[:space:]]*nix = .*nix-everything.*";
+  hash = one "hash" (
+    matches "[[:space:]]*hash = \"sha256-xNGu0Ij2Kqcpgjz/oyaeiA3mzmEC/suJCfKCHu2y8us=\";[[:space:]]*"
+  );
+  overlays = builtins.readFile ../nix/overlays.nix;
+  overlayLines = builtins.filter builtins.isString (builtins.split "\n" overlays);
+  sourcePin = builtins.filter (
+    line: builtins.match ".*nixComponents_git\\.nix-cli.*" line != null
+  ) overlayLines;
+  everything = builtins.filter (
+    line: builtins.match "[[:space:]]*nix = .*nix-everything.*" line != null
+  ) overlayLines;
 in
-assert tarball == [ ];
+assert sourcePin == [ ];
 assert everything == [ ];
 {
-  pin = pin;
-  binaryTarball = false;
+  inherit version url hash;
+  binaryTarball = true;
 }

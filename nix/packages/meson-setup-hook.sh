@@ -57,9 +57,11 @@ mesonCheckPhase() {
     local flagsArray=()
     concatTo flagsArray mesonCheckFlags mesonCheckFlagsArray
 
-    if [ -z "${dontAddTimeoutMultiplier:-}" ]; then
-        flagsArray+=("--timeout-multiplier=0")
-    fi
+    # Muon 0.7.0, when argv0 is meson, turns the nixpkgs test timeout
+    # flag into -tN and places that token before the test subcommand.
+    # The main parser then reports: error unknown option: t
+    # Do not pass that flag. A multiplier of 0 is a zero-length timeout
+    # in muon, not an infinite one. The project test setup keeps its own.
 
     local buildCores=1
     if [ "${enableParallelBuilding-1}" ]; then

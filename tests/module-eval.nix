@@ -14,6 +14,10 @@
   # Imported splora NixOS module (flake input). Needed so extraGroups and
   # unitsMemoryMax contracts can turn services.splora.enable without IFD.
   sploraNixosModule ? null,
+  # Same released glibc 2.44 overlay as nixosConfigurations.mail-vps.
+  # The flake check passes it. Absent means this eval keeps the
+  # channel glibc, which is not the mail-vps package set.
+  glibc244Overlay ? null,
 }:
 let
   # Same overlay flake.nix applies to nixosConfigurations.mail-vps.
@@ -25,10 +29,10 @@ let
   # Same glibc header generator as nixosConfigurations.mail-vps.
   # Also covers glibcLocales configure. The locale archive stays localedef.
   glibcHeaderGenOverlay = import ../nix/glibc-header-gen-overlay.nix;
-  # Mail-host Nix pin (nix-cli, not nix-everything). The base list
-  # applies it so systemdLibs does not look up an interpreter for
-  # jinja. t73's mkAfter is a different nixosSystem and is not an
-  # input of that derivation.
+  # Mail-host Nix pin (upstream 2.36.0 binary, not nix-everything).
+  # The base list applies it so systemdLibs does not look up an
+  # interpreter for jinja. t73's mkAfter is a different nixosSystem
+  # and is not an input of that derivation.
   pinsOverlay = (import ../nix/overlays.nix).pins;
   # Same tzdata preCheck as nixosConfigurations.mail-vps.
   # evalSurmount's base overlay list applies it. The closure walk
@@ -146,7 +150,8 @@ let
               glibcHeaderGenOverlay
               tzdataOverlay
               pinsOverlay
-            ];
+            ]
+            ++ lib.optional (glibc244Overlay != null) glibc244Overlay;
             nixpkgs.config.allowUnfree = false;
             system.stateVersion = "26.05";
             networking.hostName = "surmount-eval";

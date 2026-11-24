@@ -1,5 +1,10 @@
-# Mail-host glibc. Top-level python, python3, python3Minimal, and
-# pythonPackages still throw. This file does not assign those names.
+# Locale archive and the glibc configure interpreter. Top-level
+# python, python3, python3Minimal, and pythonPackages still throw.
+# This file does not assign those names.
+# nix/glibc-2.44-overlay.nix runs after this overlay and replaces
+# the glibc attribute with released glibc 2.44. This file still
+# strips Python from glibcLocales. The 2.44 package expression
+# still lists python3Minimal for scripts/gen-as-const.py.
 # glibc 2.42 configure requires python3 on PATH. Stripping that input
 # rebuilds glibc and configure stops with "python3... no". The library
 # derivation therefore keeps the nixpkgs interpreter from before the

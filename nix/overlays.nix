@@ -13,9 +13,11 @@
 # does not vendor Arti. Not a feature-only override of channel 1.4.2.
 #
 # This file exports three overlays:
-#   pins      Upstream Nix nix-cli from the nixos-26.05 source recipe.
-#             Not the 2.36.0 binary tarball. Safe on checks (mkPkgs)
-#             and on the mail host.
+#   pins      Upstream Nix 2.36.0 binary tarball
+#             (nix/packages/nix-upstream-binary.nix). Not nix-cli.
+#             Not nix-everything. Safe on checks (mkPkgs) and on the
+#             mail host. The loader is pkgs.glibc. The mail-vps overlay
+#             list replaces that glibc with 2.44.
 #   tzdata    tzdata 2026e now.ck uses the NEWS release time.
 #             Appends that preCheck. Does not replace an earlier one.
 #             Mail-host nixosSystem, and the module-eval closure walk.
@@ -46,12 +48,11 @@
 #             is not run. No interpreter is added.
 #
 # Nix: nixos-26.05 pkgs.nix was nixVersions.stable (the 2.34.9 source
-# recipe). This overlay replaces pkgs.nix with nixComponents_git.nix-cli,
-# the channel's 2.36 source build, linked to this nixpkgs glibc.
-# The 2.36.0 binary tarball's libcurl needs GLIBC_2.43 and its
-# libsqlite needs GLIBC_2.44. This glibc is 2.42, so that tarball's
-# nix-store cannot run. nix-everything is not used. The nixpkgs
-# channel stays nixos-26.05. NixOS 26.11 is not released.
+# recipe). This overlay replaces pkgs.nix with the upstream 2.36.0
+# binary tarball. nix-cli is not selected. The tarball's libcurl needs
+# GLIBC_2.43 and its libsqlite needs GLIBC_2.44. nix/glibc-2.44-overlay.nix
+# selects that glibc on the mail host. nix-everything is not used. The
+# nixpkgs channel stays nixos-26.05. NixOS 26.11 is not released.
 #
 # The mail host and the remote builder use pkgs.nix/bin/nix-daemon.
 # nix-daemon stays a symlink to nix. The package does not build the
@@ -1394,6 +1395,11 @@ let
                 add_rpath "$resolved" "$atomic_lib"
               fi
             done
+            # udevadm needs libsystemd-shared-260.so from $out/lib/systemd.
+            # installCheck execs the installed binary and exits 127 when
+            # that directory is not on RUNPATH.
+            . ${./packages/systemd-shared-rpath.sh}
+            add_systemd_shared_runpath "$out/lib/systemd"
             if [ -e "$out/bin/udevadm" ]; then
               udev=$(resolve_elf "$out/bin/udevadm") || {
                 echo "udevadm is not an ELF" >&2
@@ -1404,6 +1410,13 @@ let
                 *":$mount_lib:"*) ;;
                 *)
                   echo "udevadm RUNPATH is missing libmount" >&2
+                  exit 1
+                  ;;
+              esac
+              case ":$udev_rpath:" in
+                *":$out/lib/systemd:"*) ;;
+                *)
+                  echo "udevadm RUNPATH is missing lib/systemd" >&2
                   exit 1
                   ;;
               esac
@@ -1636,11 +1649,15 @@ let
       };
     in
     {
-      # nixos-26.05 source build, linked to this nixpkgs glibc.
-      # Not the 2.36.0 binary tarball. Not nix-everything.
+      # Upstream 2.36.0 binary tarball. Not nix-cli. Not nix-everything.
       # nix-daemon stays a symlink to nix. The mail host and the
-      # remote builder use pkgs.nix/bin/nix-daemon.
-      nix = prev.nixVersions.nixComponents_git.nix-cli;
+      # remote builder use pkgs.nix/bin/nix-daemon. The loader is
+      # final.glibc, which the mail-vps list sets to 2.44.
+      nix = import ./nix-boehmgc-install.nix final (
+        final.callPackage ./packages/nix-upstream-binary.nix {
+          glibc = final.glibc;
+        }
+      );
 
       # nixpkgs all-packages.nix binds systemdMinimal to systemd.override
       # and systemdLibs to systemdMinimal.override. That name is the
@@ -1740,7 +1757,8 @@ let
           done
         '';
       });
-    };
+    }
+    // (import ./discarded-qualifiers-overlay.nix final prev);
 
   # nixos-26.05 firewall-nftables.nix puts pkgs.nixos-firewall-tool on
   # systemPackages when the firewall backend is nftables. Do not call the
@@ -2996,6 +3014,11 @@ let
           };
         in
         prev.grub2.overrideAttrs (old: {
+          # util/resolve.c is compiled with the makefile's -Werror.
+          # cc-wrapper appends NIX_CFLAGS_COMPILE after that flag.
+          NIX_CFLAGS_COMPILE =
+            (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or "")
+            + " -Wno-error=discarded-qualifiers";
           postPatch = (old.postPatch or "") + ''
                         sed -i '/\.\/autogen\.sh/d' bootstrap.conf
                         chmod u+w configure.ac
@@ -3127,8 +3150,8 @@ let
           preFixup = "";
           # The old native inputs include the file-scope interpreter
           # lookup's tools. Do not append them. This install runs
-          # zstd, nix-store, and patchelf. final.nix is the source-built
-          # nix-cli, linked to this glibc.
+          # zstd, nix-store, and patchelf. final.nix is the upstream
+          # 2.36.0 binary, linked to this glibc.
           nativeBuildInputs = [
             prev.zstd
             final.nix
@@ -3631,8 +3654,8 @@ let
       # Muon 0.5.0 reports that token as an unknown option.
       # enableParallelChecking only changes N. It does not remove
       # the token. The install phase drops -jN and --max-lines from
-      # that line. --print-errorlogs, --timeout-multiplier, and
-      # ninja -j stay.
+      # that line. --print-errorlogs and ninja -j stay. The test
+      # timeout flag does not stay: muon places -t before test.
       meson =
         let
           # nixos-26.05 muon is 0.5.0 (compat 1.7.99). nix libutil
@@ -3668,8 +3691,11 @@ let
               -e 's|meson test -j"$testCores" --no-rebuild --print-errorlogs --max-lines=1000000 |meson test --no-rebuild --print-errorlogs |' \
               "$out/nix-support/setup-hook"
             grep -F -q 'meson test --no-rebuild --print-errorlogs' "$out/nix-support/setup-hook"
-            grep -F -q 'timeout-multiplier' "$out/nix-support/setup-hook"
             grep -F -q 'ninja -j"$buildCores"' "$out/nix-support/setup-hook"
+            if grep -F -q 'timeout-multiplier' "$out/nix-support/setup-hook"; then
+              echo "muon meson check still passes the timeout flag" >&2
+              exit 1
+            fi
             if grep -F -q 'meson test -j' "$out/nix-support/setup-hook"; then
               echo "muon meson check still passes a single-token -j" >&2
               exit 1
@@ -3781,6 +3807,11 @@ let
       # Replace the script with /bin/sh that writes the header the
       # bpftool build compiles. Do not add an interpreter package.
       bpftools = prev.bpftools.overrideAttrs (old: {
+        # libbpf.c is compiled with -Werror=discarded-qualifiers.
+        # cc-wrapper appends NIX_CFLAGS_COMPILE after that flag.
+        NIX_CFLAGS_COMPILE =
+          (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or "")
+          + " -Wno-error=discarded-qualifiers";
         nativeBuildInputs = builtins.filter (
           dep:
           let
@@ -3847,6 +3878,11 @@ let
       linuxPackages = prev.linuxPackages.extend (
         _lpFinal: lpPrev: {
           bpftools = lpPrev.bpftools.overrideAttrs (old: {
+            # Same flag as the top-level bpftools derivation.
+            # cc-wrapper appends NIX_CFLAGS_COMPILE after -Werror.
+            NIX_CFLAGS_COMPILE =
+              (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or "")
+              + " -Wno-error=discarded-qualifiers";
             nativeBuildInputs = builtins.filter (
               dep:
               let
