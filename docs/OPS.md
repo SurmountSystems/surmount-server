@@ -9,10 +9,13 @@ packages; do not enable them from host-local). Prior 2026-10-10 (primary SPF is
 `v=spf1 a:mail.surmount.systems include:_spf.google.com -all`.
 DMARC stays `p=quarantine`. Detail:
 [DNS.md](DNS.md) section *Google send (operator direction 2026-10-10)*).
-Prior 2026-10-05 (`just publish` is the static-site command
-and `just deploy` is the host switch. `just deploy-dry-run` is the
-agent dry-run. `just deploy-host` stays the explicit equivalent with
-no default target. See [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md)). Prior
+`just publish` is the static-site command. `just deploy` execs
+deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps) and is
+one real switch. `just deploy-dry-run` is the agent dry-run.
+`just deploy-host` without `--dry-run` runs surmount-deploy-host and
+activates the host. Those are different programs. Both are real
+switches. Agents must not run either. `just deploy-host` has no
+default target. See [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md). Prior
 2026-09-20 (full test-and-deploy procedure:
 [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md). Agent runs named eval,
 `just check-remote`, and `just deploy-host -- --dry-run`. Operator
@@ -2038,7 +2041,7 @@ exceptions*.
 | `nix run .#e2e` / `just e2e` | Local comprehensive end-to-end (Rust flake app; hermetic cargo matrix; optional Tor). SoT |
 | `nix run .#e2e-host` / `just e2e-host` | Host end-to-end (Rust flake app; `SURMOUNT_E2E_HOST=1` or exit 2; also requires `SURMOUNT_E2E_BASE_URL`; `LAB_IP` unless `SKIP_BAN=1`). **Never** a flake check |
 | `just publish` | Publish static sites (apex/www from locked `github:SurmountSystems/site` via `nix build .#surmount-public-site`, plus extra vhosts). Not a NixOS generation. |
-| `just deploy` | Operator's real mail-host switch. Defaults: `--target root@surmount-1` and `--host-local /home/hunter/.local/share/surmount/host-local`. Extra arguments append. Agents must not run this. Explicit equivalent: `just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
+| `just deploy` | Execs deploy-rs (`nix run .#deploy -- "$@"`, which runs `deploy --skip-checks '.#mail-vps'`). Extra arguments append to deploy-rs. It does not add `--target` or `--host-local`. This is one real switch. Agents must not run it. `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. That is a different program and also a real switch. Agents must not run either. |
 | `just deploy-dry-run` | Rsyncs, bootstraps gccarch-x86-64-v3, and runs `nixos-rebuild build` on the mail host. Does not switch the running generation and does not install secrets. Agents may run this. Extra arguments append. Explicit equivalent: `just deploy-host -- --dry-run --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local`. |
 | `nix run .#surmount-deploy-host` / `just deploy-host` | Flexible deploy driver with no default target: public rsync + host-local checks + `#mail-vps` rebuild (not CI). That is the NixOS generation. [deploy-host-local.md](deploy-host-local.md) |
 | `nix run .#surmount-deploy-host-post-switch-smoke` | Post-switch smoke (generation, units, loopback health, listen proof). |

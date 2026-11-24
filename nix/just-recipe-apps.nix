@@ -2,6 +2,8 @@
 # is the recipe. surmount-deploy-host reads argv0 and runs that recipe.
 # Names that already point at another package stay in flake.nix so this
 # file does not replace them.
+# deploy is not in this list. nix run .#deploy is nix/deploy-app.nix
+# (the deploy-rs switch). deploy-dry-run and deploy-host stay here.
 { self, system }:
 let
   bin = "${self.packages.${system}.surmount-deploy-host}/bin/surmount-deploy-host";
@@ -22,7 +24,6 @@ let
     "clippy"
     "dev"
     "publish"
-    "deploy"
     "deploy-dry-run"
     "deploy-host"
     "btop"

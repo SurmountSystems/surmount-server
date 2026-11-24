@@ -1347,7 +1347,7 @@ fn run_host_status(args: &[String]) -> Result<(), ToolError> {
             exit_code: 2,
         });
     }
-    let remote = "u=$(id -u nixbuilder 2>/dev/null || echo \"\"); echo gen=$(readlink /run/current-system | sed \"s|.*/||\"); echo qemu=$(systemctl is-active qemu-guest-agent 2>/dev/null || echo n/a); echo et=$(systemctl is-active eternal-terminal 2>/dev/null || echo n/a); for s in sshd stalwart-mail surmount-management-ui; do printf \"%s=%s \" \"$s\" \"$(systemctl is-active $s)\"; done; echo; if [ -n \"$u\" ]; then echo \"nixbuilder_uid=$u\"; systemctl show \"user-${u}.slice\" -p MemoryMax,MemoryCurrent,Description --no-pager; fi; echo lake=$(pgrep -c -x lake 2>/dev/null || echo 0)";
+    let remote = crate::recipe_batch_03::host_status_remote_script();
     let mut cmd = vec![
         "-o".to_string(),
         "BatchMode=yes".to_string(),

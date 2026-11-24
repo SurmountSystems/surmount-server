@@ -3,7 +3,10 @@
 //! `failed` and `inactive` return immediately. A unit that stays `activating`
 //! is polled until the wait bound. `active` passes only when a later sample
 //! in that same bound is still `active`, with the same main PID, the same
-//! NRestarts, and a main-process exit status other than 1.
+//! NRestarts, a main-process exit status of 0 or empty, and Result=success.
+//! A non-zero ExecMainStatus, a Result= other than success, a missing Result=,
+//! a failed or unparsed systemctl show, or an NRestarts value that does not
+//! parse is not stable.
 
 use std::process::Command;
 use std::thread;
@@ -28,13 +31,15 @@ pub fn is_active(systemctl: &str, unit: &str) -> String {
 }
 
 struct UnitProps {
-    main_pid: String,
-    n_restarts: String,
-    exec_status: String,
+    main_pid: u64,
+    n_restarts: u64,
+    /// `None` is an empty ExecMainStatus. A missing field stays an error.
+    exec_status: Option<i64>,
+    result: String,
 }
 
-fn show_props(systemctl: &str, unit: &str) -> UnitProps {
-    let out = Command::new(systemctl)
+fn show_props(systemctl: &str, unit: &str) -> Result<UnitProps, String> {
+    let out = match Command::new(systemctl)
         .args([
             "show",
             "-p",
@@ -45,29 +50,67 @@ fn show_props(systemctl: &str, unit: &str) -> UnitProps {
             "NRestarts",
             "-p",
             "ExecMainStatus",
+            "-p",
+            "Result",
             unit,
         ])
-        .output();
-    let mut props = UnitProps {
-        main_pid: String::new(),
-        n_restarts: String::new(),
-        exec_status: String::new(),
+        .output()
+    {
+        Ok(out) => out,
+        Err(_) => return Err("systemctl show failed".to_string()),
     };
-    let Ok(out) = out else {
-        return props;
-    };
+    if !out.status.success() {
+        return Err("systemctl show failed".to_string());
+    }
     let text = String::from_utf8_lossy(&out.stdout);
+    let mut main_pid: Option<u64> = None;
+    let mut n_restarts: Option<u64> = None;
+    let mut exec_status: Option<Option<i64>> = None;
+    let mut result: Option<String> = None;
     for line in text.lines() {
         let line = line.trim();
         if let Some(v) = line.strip_prefix("MainPID=") {
-            props.main_pid = v.trim().to_string();
+            match v.trim().parse::<u64>() {
+                Ok(n) => main_pid = Some(n),
+                Err(_) => return Err("systemctl show unparsed".to_string()),
+            }
         } else if let Some(v) = line.strip_prefix("NRestarts=") {
-            props.n_restarts = v.trim().to_string();
+            match v.trim().parse::<u64>() {
+                Ok(n) => n_restarts = Some(n),
+                Err(_) => return Err("NRestarts did not parse".to_string()),
+            }
         } else if let Some(v) = line.strip_prefix("ExecMainStatus=") {
-            props.exec_status = v.trim().to_string();
+            let v = v.trim();
+            if v.is_empty() {
+                exec_status = Some(None);
+            } else {
+                match v.parse::<i64>() {
+                    Ok(n) => exec_status = Some(Some(n)),
+                    Err(_) => return Err("systemctl show unparsed".to_string()),
+                }
+            }
+        } else if let Some(v) = line.strip_prefix("Result=") {
+            result = Some(v.trim().to_string());
         }
     }
-    props
+    let Some(main_pid) = main_pid else {
+        return Err("systemctl show unparsed".to_string());
+    };
+    let Some(n_restarts) = n_restarts else {
+        return Err("NRestarts did not parse".to_string());
+    };
+    let Some(exec_status) = exec_status else {
+        return Err("systemctl show unparsed".to_string());
+    };
+    let Some(result) = result else {
+        return Err("Result missing".to_string());
+    };
+    Ok(UnitProps {
+        main_pid,
+        n_restarts,
+        exec_status,
+        result,
+    })
 }
 
 fn env_u64(key: &str, default: u64) -> u64 {
@@ -81,29 +124,39 @@ fn transitional(state: &str) -> bool {
     matches!(state, "activating" | "deactivating" | "reloading")
 }
 
-fn restarts_increased(before: &str, after: &str) -> bool {
-    match (before.parse::<u64>(), after.parse::<u64>()) {
-        (Ok(a), Ok(b)) => b > a,
-        _ => false,
+fn pid_changed(before: u64, after: u64) -> bool {
+    if before > 0 && after == 0 {
+        return true;
+    }
+    before > 0 && after > 0 && before != after
+}
+
+fn exec_failure(status: Option<i64>) -> Option<String> {
+    match status {
+        Some(code) if code != 0 => Some(format!("exit {code}")),
+        _ => None,
     }
 }
 
-fn pid_changed(before: &str, after: &str) -> bool {
-    match (before.parse::<u64>(), after.parse::<u64>()) {
-        (Ok(a), Ok(0)) if a > 0 => true,
-        (Ok(a), Ok(b)) if a > 0 && b > 0 => a != b,
-        _ => false,
+fn result_failure(result: &str) -> Option<String> {
+    if result == "success" {
+        None
+    } else {
+        Some(format!("Result {result}"))
     }
 }
 
 fn sample_problem(baseline: &UnitProps, sample: &UnitProps) -> Option<String> {
-    if sample.exec_status == "1" {
-        return Some("exit 1".to_string());
+    if let Some(reason) = exec_failure(sample.exec_status) {
+        return Some(reason);
     }
-    if restarts_increased(&baseline.n_restarts, &sample.n_restarts) {
+    if let Some(reason) = result_failure(&sample.result) {
+        return Some(reason);
+    }
+    if sample.n_restarts > baseline.n_restarts {
         return Some("NRestarts increased".to_string());
     }
-    if pid_changed(&baseline.main_pid, &sample.main_pid) {
+    if pid_changed(baseline.main_pid, sample.main_pid) {
         return Some("main PID changed".to_string());
     }
     None
@@ -111,7 +164,9 @@ fn sample_problem(baseline: &UnitProps, sample: &UnitProps) -> Option<String> {
 
 /// `Active` means the unit stayed active for the sample window.
 /// `NotActive` is `failed`, `inactive`, or a wait that ended still starting.
-/// `Unstable` is an active unit that exited 1, gained NRestarts, or changed PID.
+/// `Unstable` is an active unit that did not stay stable: non-zero exit,
+/// Result= other than success, a missing Result=, unparsed show, NRestarts
+/// that do not parse or increased, or a new main PID.
 pub fn wait_until_settled(systemctl: &str, unit: &str) -> UnitVerdict {
     let wait = Duration::from_millis(env_u64("SURMOUNT_SMOKE_UNIT_WAIT_MS", DEFAULT_WAIT_MS));
     let poll_ms = env_u64("SURMOUNT_SMOKE_UNIT_POLL_MS", DEFAULT_POLL_MS).max(1);
@@ -134,11 +189,15 @@ pub fn wait_until_settled(systemctl: &str, unit: &str) -> UnitVerdict {
         thread::sleep(poll.min(rest));
     }
 
-    let baseline = show_props(systemctl, unit);
-    if baseline.exec_status == "1" {
-        return UnitVerdict::Unstable {
-            reason: "exit 1".to_string(),
-        };
+    let baseline = match show_props(systemctl, unit) {
+        Ok(props) => props,
+        Err(reason) => return UnitVerdict::Unstable { reason },
+    };
+    if let Some(reason) = exec_failure(baseline.exec_status) {
+        return UnitVerdict::Unstable { reason };
+    }
+    if let Some(reason) = result_failure(&baseline.result) {
+        return UnitVerdict::Unstable { reason };
     }
 
     let stable_start = Instant::now();
@@ -160,7 +219,10 @@ pub fn wait_until_settled(systemctl: &str, unit: &str) -> UnitVerdict {
                 reason: format!("left active (is-active={shown})"),
             };
         }
-        let sample = show_props(systemctl, unit);
+        let sample = match show_props(systemctl, unit) {
+            Ok(props) => props,
+            Err(reason) => return UnitVerdict::Unstable { reason },
+        };
         if let Some(reason) = sample_problem(&baseline, &sample) {
             return UnitVerdict::Unstable { reason };
         }

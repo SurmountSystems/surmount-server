@@ -152,9 +152,9 @@ in
     # SHC 261/262: prefer killing the builder over mail when the guest
     # is tight. MemoryMax alone does not protect mail if the builder
     # cap is most of guest RAM.
-    # pkgs.nix is the upstream binary and does not install
-    # nix-daemon.service. NixOS still generates this unit from the
-    # serviceConfig set here, so ExecStart has to be on this same unit.
+    # pkgs.nix is the source-built nix-cli. NixOS still generates this
+    # unit from the serviceConfig set here, so ExecStart has to be on
+    # this same unit.
     # @ sets argv0 to nix-daemon. The binary is the multicall symlink.
     systemd.services.nix-daemon = {
       requires = [ "nix-daemon.socket" ];

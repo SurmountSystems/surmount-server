@@ -4,10 +4,11 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::args::{STATUS_UNITS, default_tail_args};
+use crate::args::{default_tail_args, STATUS_UNITS};
 use crate::redact::redact_text;
 
-/// CLI / probe failure. `exit_code` is the process status (1 unless journalctl).
+/// CLI / probe failure. `exit_code` is 1, or the systemctl status when
+/// `--failed` itself exits non-zero.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostLogsError {
     pub message: String,
@@ -81,7 +82,7 @@ impl LiveProbe {
 
 impl Probe for LiveProbe {
     fn disk_usage(&self) -> Result<String, HostLogsError> {
-        capture(&self.journalctl, STATUS_PLAN.disk_usage)
+        Ok(capture(&self.journalctl, STATUS_PLAN.disk_usage)?.stdout)
     }
 
     fn journald_conf(&self) -> Result<String, HostLogsError> {
@@ -92,21 +93,47 @@ impl Probe for LiveProbe {
     }
 
     fn failed_units(&self) -> Result<String, HostLogsError> {
-        capture(&self.systemctl, STATUS_PLAN.failed_units)
+        let cap = capture(&self.systemctl, STATUS_PLAN.failed_units)?;
+        if cap.exit_code != 0 {
+            let mut message = format!("systemctl --failed exited {}", cap.exit_code);
+            if cap.stdout.trim().is_empty() {
+                message.push_str(" with empty output");
+            } else {
+                message.push('\n');
+                message.push_str(cap.stdout.trim_end());
+            }
+            return Err(HostLogsError {
+                message,
+                exit_code: cap.exit_code,
+            });
+        }
+        if lists_failed_units(&cap.stdout) {
+            return Err(HostLogsError::fail(format!(
+                "failed units:\n{}",
+                cap.stdout.trim_end()
+            )));
+        }
+        Ok(cap.stdout)
     }
 
     fn is_active(&self, unit: &str) -> String {
-        first_line(&capture(&self.systemctl, &["is-active", unit]).unwrap_or_default())
+        match capture(&self.systemctl, &["is-active", unit]) {
+            Ok(cap) => first_line(&cap.stdout),
+            Err(_) => String::new(),
+        }
     }
 
     fn is_enabled(&self, unit: &str) -> String {
-        first_line(&capture(&self.systemctl, &["is-enabled", unit]).unwrap_or_default())
+        match capture(&self.systemctl, &["is-enabled", unit]) {
+            Ok(cap) => first_line(&cap.stdout),
+            Err(_) => String::new(),
+        }
     }
 
     fn recent_tails(&self) -> Result<String, HostLogsError> {
         let args = default_tail_args();
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        capture(&self.journalctl, &refs)
+        Ok(capture(&self.journalctl, &refs)?.stdout)
     }
 }
 
@@ -114,12 +141,35 @@ fn first_line(s: &str) -> String {
     s.lines().next().unwrap_or("").trim().to_string()
 }
 
-fn capture(bin: &Path, args: &[&str]) -> Result<String, HostLogsError> {
+struct Captured {
+    stdout: String,
+    exit_code: i32,
+}
+
+fn capture(bin: &Path, args: &[&str]) -> Result<Captured, HostLogsError> {
     let out = Command::new(bin)
         .args(args)
         .output()
         .map_err(|e| HostLogsError::fail(format!("{}: {e}", bin.display())))?;
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let Some(exit_code) = out.status.code() else {
+        return Err(HostLogsError::fail(format!(
+            "{} terminated by signal",
+            bin.display()
+        )));
+    };
+    Ok(Captured {
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        exit_code,
+    })
+}
+
+/// Empty output and the zero-count legend are not failed units.
+/// Any other line means systemctl listed a failed unit.
+fn lists_failed_units(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty() && !line.starts_with("0 loaded units")
+    })
 }
 
 /// Resolve `name` on PATH, or an absolute/relative override. No sudo.
@@ -184,7 +234,11 @@ pub fn journald_knob_lines(conf: &str) -> Vec<String> {
 }
 
 fn unknown_if_empty(s: &str) -> &str {
-    if s.is_empty() { "unknown" } else { s }
+    if s.is_empty() {
+        "unknown"
+    } else {
+        s
+    }
 }
 
 /// Format one `active=` / `enabled=` row.
@@ -357,5 +411,73 @@ mod tests {
             "{}",
             err.message
         );
+    }
+
+    fn write_exec(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        let mut perm = std::fs::metadata(&path).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&path, perm).unwrap();
+        path
+    }
+
+    fn probe_with_systemctl(body: &str) -> LiveProbe {
+        let dir = std::env::temp_dir().join(format!(
+            "surmount-host-logs-capture-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let systemctl = write_exec(&dir, "systemctl", body);
+        LiveProbe {
+            journalctl: systemctl.clone(),
+            systemctl,
+            journald_conf: dir.join("journald.conf"),
+        }
+    }
+
+    #[test]
+    fn failed_systemctl_empty_stdout_is_not_zero_failed_units() {
+        let probe = probe_with_systemctl("#!/bin/sh\nexit 7\n");
+        let err = probe.failed_units().unwrap_err();
+        assert_eq!(err.exit_code, 7, "{}", err.message);
+        assert!(
+            err.message.contains("empty output"),
+            "empty failed systemctl must not look like zero failed units: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn listed_failed_units_are_not_ok() {
+        let probe = probe_with_systemctl(
+            "#!/bin/sh\nprintf '%s\\n' 'stalwart-mail.service loaded failed failed'\nexit 0\n",
+        );
+        let err = probe.failed_units().unwrap_err();
+        assert_ne!(err.exit_code, 0, "{}", err.message);
+        assert!(
+            err.message.contains("stalwart-mail.service"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn zero_loaded_units_line_is_ok() {
+        let probe =
+            probe_with_systemctl("#!/bin/sh\nprintf '%s\\n' '0 loaded units listed.'\nexit 0\n");
+        let text = probe.failed_units().expect("zero failed units is success");
+        assert!(text.contains("0 loaded units listed."), "{text}");
+    }
+
+    #[test]
+    fn is_active_keeps_stdout_when_systemctl_exits_nonzero() {
+        let probe = probe_with_systemctl("#!/bin/sh\nprintf '%s\\n' inactive\nexit 3\n");
+        assert_eq!(probe.is_active("sshd"), "inactive");
     }
 }

@@ -7,11 +7,11 @@ mod args;
 mod redact;
 mod status;
 
-pub use args::{Mode, USAGE, default_follow_args, default_tail_args, parse_args, status_units};
-pub use redact::{RedactingStream, redact_secret_line, redact_text};
+pub use args::{default_follow_args, default_tail_args, parse_args, status_units, Mode, USAGE};
+pub use redact::{redact_secret_line, redact_text, RedactingStream};
 pub use status::{
-    HostLogsError, LiveProbe, Probe, STATUS_PLAN, StatusPlan, collect_status, render_status,
-    resolve_program,
+    collect_status, render_status, resolve_program, HostLogsError, LiveProbe, Probe, StatusPlan,
+    STATUS_PLAN,
 };
 
 use std::io::{self, BufRead, BufReader, Write};

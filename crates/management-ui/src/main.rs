@@ -38,6 +38,7 @@ mod onion_discovery;
 mod pages;
 mod proxy_vaultwarden;
 mod redirect;
+mod splora_pin;
 mod status;
 mod tls;
 

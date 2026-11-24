@@ -78,7 +78,9 @@ let
 
   # These flake apps already exec their own binaries. Replacing them with
   # surmount-deploy-host would call nix run of the same name again.
+  # deploy execs deploy-rs for node mail-vps (nix/deploy-app.nix).
   directApps = [
+    "deploy"
     "e2e"
     "e2e-host"
     "add-stalwart-token"

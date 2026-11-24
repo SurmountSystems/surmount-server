@@ -1,17 +1,17 @@
-# Splora's mkPkgs takes only pkgs. It hardcodes
-# pkgs.rust-bin.stable."1.99.1".default and does not take toolchain,
+# Splora's mkPkgs takes only pkgs. Rev 79e0cae hardcodes
+# pkgs.rust-bin.stable."1.100.0".default and does not take toolchain,
 # rustc, or cargo. The sibling flake is not edited.
-# Locked rust-overlay (0d0575988e4bb9ebc4cf1afb1cec1ceac0b5914e) has
-# manifests/stable through 1.99.1.nix and no 1.100.0 file. Do not invent
-# rust-bin.stable."1.100.0". Do not select a compiler newer than 1.100.0.
-# Re-call the flake outputs with an overlay that puts the nixpkgs-rust
-# 1.100.0 crane join (nix/rust-toolchain.nix: rustc and cargo, same
-# compilers as mkArtiRustPlatform) on the attribute Splora reads.
+# The rust-overlay locked by that rev has no stable 1.100.0 manifest.
+# Do not look that missing manifest up. Do not select a compiler newer
+# than 1.100.0. Re-call the flake outputs with an overlay that puts the
+# nixpkgs-rust 1.100.0 crane join (nix/rust-toolchain.nix: rustc and
+# cargo, same compilers as mkArtiRustPlatform) on the attribute Splora
+# reads.
 { lib, sploraInput, system, pkgsRust }:
 let
   toolchain = import ./rust-toolchain.nix { pkgs = pkgsRust; };
   toolchainOverlay = _final: prev: {
-    rust-bin.stable."1.99.1".default = toolchain;
+    rust-bin.stable."1.100.0".default = toolchain;
     rustc = pkgsRust.rustc;
     cargo = pkgsRust.cargo;
     rustPlatform = prev.makeRustPlatform {

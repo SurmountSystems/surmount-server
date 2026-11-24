@@ -39,6 +39,8 @@ pub struct SystemsStatusPayload {
     pub host: String,
     pub primary_domain: String,
     pub uptime: String,
+    /// Observed `SURMOUNT_SPLORA_REV`, or `absent` when the unit did not set it.
+    pub splora_rev: String,
     pub systems: Vec<SystemsComponent>,
 }
 
@@ -436,6 +438,12 @@ pub fn systems_status_inventory(config: &AppConfig) -> Vec<SystemsInventoryItem>
             href: splora_liquid,
         },
         SystemsInventoryItem {
+            id: "splora-pin",
+            role: "Splora git pin",
+            unit: None,
+            href: None,
+        },
+        SystemsInventoryItem {
             id: "scram",
             role: "builder memory guard",
             unit: Some("surmount-scram.service"),
@@ -458,12 +466,15 @@ pub fn systems_status_from_probes(
 ) -> SystemsStatusPayload {
     let host = status_hostname(&config.primary_domain);
     let https = config.listen_mode.is_https();
+    let splora_rev = crate::splora_pin::observed_rev();
+    let splora_pin_state = crate::splora_pin::classify(&splora_rev).to_string();
     let systems = systems_status_inventory(config)
         .into_iter()
         .map(|item| {
             let state = match item.id {
                 "tls" => classify_tls_state(https),
                 "mta_sts" => classify_mta_sts_state(config.mta_sts_mode),
+                "splora-pin" => splora_pin_state.clone(),
                 _ => {
                     let probe = item
                         .unit
@@ -488,6 +499,7 @@ pub fn systems_status_from_probes(
         host,
         primary_domain: config.primary_domain.clone(),
         uptime: uptime.to_string(),
+        splora_rev,
         systems,
     }
 }
@@ -603,6 +615,9 @@ pub fn render_systems_status_html(payload: &SystemsStatusPayload) -> String {
     );
     let version = html_escape(payload.version);
     let uptime = html_escape(&payload.uptime);
+    let splora_rev = html_escape(&payload.splora_rev);
+    let splora_state = html_escape(crate::splora_pin::classify(&payload.splora_rev));
+    let splora_line = html_escape(&crate::splora_pin::status_line(&payload.splora_rev));
     let mut rows = String::new();
     for c in &payload.systems {
         let name = html_escape(&c.name);
@@ -668,6 +683,7 @@ footer {{ padding: 1rem; color: var(--muted); font-size: 0.75rem; }}
 <p class="host">{host_link}</p>
 <p>Primary domain {primary_link}. Public systems dashboard on the Axum HTTPS edge. Not the operator console.</p>
 <p class="uptime">Host uptime {uptime}.</p>
+<p class="splora-pin" data-splora-rev="{splora_rev}" data-splora-pin="{splora_state}">{splora_line}</p>
 <table>
 <thead><tr><th>system</th><th>role</th><th>status</th></tr></thead>
 <tbody>
@@ -704,6 +720,8 @@ mod tests {
         assert_eq!(payload.surface, "systems_status");
         assert_eq!(payload.service, "surmount");
         assert!(!payload.version.is_empty());
+        assert_eq!(payload.splora_rev, "absent");
+        assert_eq!(crate::splora_pin::classify(&payload.splora_rev), "absent");
         assert_eq!(payload.host, "status.example.test");
         assert_eq!(payload.primary_domain, "example.test");
         assert!(
@@ -718,6 +736,10 @@ mod tests {
             );
         }
         let html = render_systems_status_html(&payload);
+        assert!(
+            html.contains(crate::splora_pin::EXPECTED_SPLORA_REV),
+            "status HTML must observe the Splora pin"
+        );
         assert!(html.contains("data-surface=\"systems-status\""));
         assert!(html.contains("Systems status"));
         assert!(html.contains("status.example.test"));
@@ -939,6 +961,7 @@ mod tests {
             "splora-testnet4",
             "splora-mutinynet",
             "splora-liquid",
+            "splora-pin",
             "sshd",
         ] {
             assert!(

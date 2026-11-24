@@ -15,6 +15,8 @@
     # stalwart.nix; owns services.stalwart). Before mail.nix.
     ./stalwart-service.nix
     ./mail.nix
+    # Cutover gate. Default off. Does not set the Stalwart data directory.
+    ./stalwart-store-migrate.nix
     ./web.nix
     ./management-ui.nix
     # One remote JSON-RPC Splora indexer (wraps imported services.splora).

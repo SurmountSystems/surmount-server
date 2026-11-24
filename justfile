@@ -1,7 +1,8 @@
 # Surmount Server developer tasks.
 # A recipe body is one `nix run .#<name> -- "$@"` line, or a dependency
-# list with no shell. The matching flake app execs surmount-deploy-host
-# with that recipe name (argv0). just deploy is the operator switch.
+# list with no shell. Most matching flake apps exec surmount-deploy-host
+# with that recipe name (argv0). just deploy is the operator switch and
+# its flake app execs deploy-rs for node mail-vps.
 # Agents run just deploy-dry-run. They must not run just deploy.
 # Guest (remote builder) down: BUILD_LOCAL=true just <recipe>
 # sets NIX_CONFIG builders empty so this laptop compiles. Not a SKU.
@@ -64,10 +65,13 @@ e2e-host:
 publish *args:
     nix run .#publish -- "$@"
 
-# Operator switch. Agents must not run this. Agents run deploy-dry-run.
+# Operator switch. Agents must not run this. The flake app execs
+# deploy-rs for node mail-vps. It is not surmount-deploy-host.
+# Agents run deploy-dry-run.
 deploy *args:
     nix run .#deploy -- "$@"
 
+# Does not activate and does not SSH a rollback. Not deploy-rs.
 deploy-dry-run *args:
     nix run .#deploy-dry-run -- "$@"
 

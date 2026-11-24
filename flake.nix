@@ -106,7 +106,13 @@
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
     # JSON-RPC and a cookie; a local bitcoind datadir is not required.
-    splora.url = "github:SurmountSystems/splora/28eb3ea077eee02bd8a9c0cba63ee9a611b10e54";
+    # Status observes this rev via nix/splora-pin-status.nix (do not float).
+    splora.url = "github:SurmountSystems/splora/79e0cae72e6e3d709465929c04866575f0acdd6e";
+
+    # deploy-rs 1.0.0, peeled commit 26e0f241 (2026-10-19).
+    # Do not set inputs.nixpkgs.follows. This input keeps its own nixpkgs.
+    # Do not import deploy-rs.lib.${system}.deployChecks (Python check-jsonschema).
+    deploy-rs.url = "github:serokell/deploy-rs/26e0f241b1b7c6b1717fc7babc4852192886bbc0";
   };
 
   outputs =
@@ -120,6 +126,7 @@
       surmount-site,
       advisory-db,
       splora,
+      deploy-rs,
       ...
     }:
     let
@@ -149,7 +156,8 @@
 
       # nix/overlays.nix exports .pins and .tzdata. Not a second overlay
       # home. surmountOverlay remains the Surmount package set.
-      # .pins is the Nix 2.35.4 cli (not nix-everything).
+      # .pins is the nixos-26.05 nix-cli source build (not nix-everything,
+      # not the 2.36.0 binary tarball).
       # .tzdata sets tzdata 2026e doCheck = false (now.ck). The mail-host
       # nixosSystem below imports .tzdata. mkPkgs does not, so
       # checks.x86_64-linux.ci does not rebuild CPython for that skip.
@@ -162,6 +170,10 @@
       surmountPins = surmountOverlayParts.pins;
       surmountTzdata = surmountOverlayParts.tzdata;
       surmountNoHaskell = surmountOverlayParts.noHaskell;
+      # Before pins. The component source has no meson option that
+      # skips clang-tidy. The patch stops that directory from running.
+      # pins still sets pkgs.nix to nixComponents_git.nix-cli.
+      surmountNixClangTidy = import ./nix/nix-skip-clang-tidy-overlay.nix;
       # Mail-vps only, after noHaskell. Top-level python and python3 still
       # throw. glibc's native build input is the nixpkgs interpreter from
       # before that throw, so configure can see python3. This does not
@@ -227,6 +239,7 @@
         import nixpkgs {
           inherit system;
           overlays = [
+            surmountNixClangTidy
             surmountPins
             (surmountOverlay system)
           ];
@@ -364,6 +377,7 @@
               { ... }:
               {
                 nixpkgs.overlays = [
+                  surmountNixClangTidy
                   surmountPins
                   surmountTzdata
                   (surmountOverlay "x86_64-linux")
@@ -378,6 +392,10 @@
 
         surmount-mail = self.nixosConfigurations.mail-vps;
       };
+
+      # Node schema for deploy-rs. The switch program is apps.<system>.deploy
+      # (nix/deploy-app.nix). Dry-run stays the surmount-deploy-host app.
+      deploy = import ./nix/deploy-node.nix { inherit self deploy-rs; };
 
       packages = forAllSystems (
         system:
@@ -492,12 +510,12 @@
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
-          # mkPkgs inside the splora flake hardcodes rust-bin 1.99.1 and
-          # takes no toolchain argument. Locked rust-overlay has no
-          # stable 1.100.0 (latest manifest is 1.99.1).
+          # mkPkgs inside splora rev 79e0cae hardcodes rust-bin 1.100.0
+          # and takes no toolchain argument. That input's rust-overlay
+          # has no stable 1.100.0 manifest.
           # nix/splora-rust-1.100.nix re-calls that flake and puts
-          # nixpkgs-rust rustc 1.100.0 and cargo 1.100.0 on the attribute
-          # Splora reads. Not rust-bin.stable."1.100.0".
+          # nixpkgs-rust rustc 1.100.0 and cargo 1.100.0 on
+          # rust-bin.stable."1.100.0".default, the attribute Splora reads.
           # sploraRust100 is bound in the let above. This attrset is not rec.
           splora = sploraRust100.splora;
           splora-liquid = sploraRust100.splora-liquid;
@@ -729,6 +747,12 @@
           };
         }
         // import ./nix/just-recipe-apps.nix { inherit self system; }
+        // {
+          deploy = import ./nix/deploy-app.nix {
+            inherit system deploy-rs;
+            pkgs = mkPkgsBare system;
+          };
+        }
       );
 
       checks = forAllSystems (
@@ -965,6 +989,17 @@
             in
             pkgs.writeText "module-eval-contract" (builtins.toJSON r.ok);
 
+          # Eval-only rollback flags. Not in ci: forcing path instantiates
+          # the mail-vps toplevel. Not deployChecks.
+          deploy-rs-rollback-contract =
+            let
+              r = import ./tests/deploy-rs-rollback.nix {
+                inherit lib;
+                deploy = self.deploy;
+              };
+            in
+            pkgs.writeText "deploy-rs-rollback-contract" (builtins.toJSON r.ok);
+
           # Eval-only: flake-input packages pass through (no crane build).
           splora-package-contract =
             let
@@ -1152,6 +1187,7 @@
             e2e-pure-test
             e2e-clippy
             module-eval-contract
+            deploy-rs-rollback-contract
             deploy-secrets-contract
             just-recipe-bodies-contract
             arti-module-contract

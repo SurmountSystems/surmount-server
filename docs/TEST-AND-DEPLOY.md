@@ -12,8 +12,9 @@ and keeps Eternal Terminal open so activation cannot strand the box.
 **Last updated:** 2026-10-23 (this flake does not take grok-oss or tau
 inputs). Prior 2026-10-12. Update, audit, test, and switch is the
 command block below. `just publish` publishes static sites.
-`just deploy` is the host switch. `just deploy-dry-run` is the agent
-dry-run. `just deploy-host` stays the explicit equivalent.
+`just deploy` is `nix run .#deploy` and that app execs deploy-rs for
+node mail-vps. `just deploy-dry-run` stays the nixos-rebuild dry-run
+and is not deploy-rs. `just deploy-host` stays surmount-deploy-host.
 
 Companions: [OPS.md](OPS.md), [deploy-host-local.md](deploy-host-local.md),
 [SECRETS.md](SECRETS.md), [hygiene.md](hygiene.md), [../AGENTS.md](../AGENTS.md).
@@ -123,7 +124,7 @@ reason. Eval, remote CI, and dry-run are not secrets custody.
 
 | Who | Does | Does not |
 |-----|------|----------|
-| Agent | **All of sections 2, 3, and 4**, including every named `nix eval` and `just check-remote` and `just deploy-dry-run`. Report pass or fail with the store path or the named error. GitHub issues on plan Approve and on bug reports (screenshots attached). GitHub pull request after the operator has signed and pushed a git-flow feature branch. Laptop Let's Encrypt `--issue` when this laptop already has the Namecheap env files (do not print the env). | Laptop `cargo`, `rustc`, `BUILD_LOCAL=true`. Real `just deploy` switch unless the operator overrides (`just deploy-host` without `--dry-run` is the same switch). `git commit`, GPG sign, `git push`. Reboot. Invent secrets, cookie bytes, or JSON-RPC addresses. Asking the operator to run eval or `check-remote` so the operator can see the error. |
+| Agent | **All of sections 2, 3, and 4**, including every named `nix eval` and `just check-remote` and `just deploy-dry-run`. Report pass or fail with the store path or the named error. GitHub issues on plan Approve and on bug reports (screenshots attached). GitHub pull request after the operator has signed and pushed a git-flow feature branch. Laptop Let's Encrypt `--issue` when this laptop already has the Namecheap env files (do not print the env). | Laptop `cargo`, `rustc`, `BUILD_LOCAL=true`. Real `just deploy`, and real `just deploy-host` without `--dry-run`, unless the operator overrides. `just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Those are different programs. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. `git commit`, GPG sign, `git push`. Reboot. Invent secrets, cookie bytes, or JSON-RPC addresses. Asking the operator to run eval or `check-remote` so the operator can see the error. |
 | Operator | Eternal Terminal window before a switch. Real `just deploy` (no `--dry-run`) after the agent reports dry-run green. GPG-signed commit and `git push` on a git-flow `feature/` or `bugfix/` branch. Place cookie files and other Domain B secrets the agent cannot create. | Run section 2, 3, or 4 in order to discover CI or eval failures. Leave the only SSH session as the one that started `nixos-rebuild switch`. |
 
 Laptop = this session host. It is not the remote builder.
@@ -391,7 +392,7 @@ green, including the exact dry-run command and exit 0.
 just deploy
 ```
 
-Explicit equivalent (`just deploy-host` has no default target):
+`just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). The next command is a different program. `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. `just deploy-host` has no default target:
 
 ```bash
 just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
@@ -421,9 +422,7 @@ the process even when the later smoke exits 0.
 Smoke must pass all of:
 
 - current NixOS generation store path
-- `sshd` active
-- `stalwart-mail` active for the sample window. `failed` and `inactive` fail on the first read. A unit that stays `activating` is polled. A unit that becomes `active` passes only if it stays `active` for `SURMOUNT_SMOKE_UNIT_WAIT_MS` (default 30000) with the same main PID and the same NRestarts. Main-process exit status 1, or a higher NRestarts, fails the smoke. One `active` sample is not a pass.
-- `surmount-management-ui` active (smoke may start it if inactive)
+- `sshd`, `stalwart-mail`, and `surmount-management-ui` each stay active for the sample window. `failed` and `inactive` fail on the first read. A unit that stays `activating` is polled. A unit that becomes `active` passes only if it stays `active` for `SURMOUNT_SMOKE_UNIT_WAIT_MS` (default 30000) with the same main PID and the same NRestarts. Any non-zero main-process exit status, a failed or unparsed `systemctl show`, an `NRestarts` value that does not parse, or a higher `NRestarts`, fails the smoke. One `active` sample is not a pass. Smoke may start `surmount-management-ui` if it is inactive, then that unit must stay active for the same window.
 - loopback `https://127.0.0.1:443/health`
 - TLS cert and key paths exist; key mode 600
 - listen proof for :443 and :80 (`ss`)
@@ -558,8 +557,7 @@ egress. Do not mint a second certificate.
 - Laptop `cargo test`, `cargo clippy`, `cargo build` for this repo's
   quality bar.
 - Two live `just check-remote` processes.
-- Real `just deploy` by an agent unless the operator overrides.
-  `just deploy-host` without `--dry-run` is the same switch.
+- Agents must not run real `just deploy` unless the operator overrides. `just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Those are different programs. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run.
 - Secrets, PEMs, cookie bytes, tokens, provisioned IPs in git, issues,
   or chat.
 - Reboot.
@@ -624,7 +622,7 @@ just deploy
 just status
 ```
 
-Explicit equivalent of that switch:
+`just deploy` above execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). The command below is a different program. `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. `just deploy-host` has no default target:
 
 ```bash
 just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local

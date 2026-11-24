@@ -37,10 +37,22 @@ let
     assert liquid.pname == "splora-liquid";
     "t2-overlay-attr-names-ok";
 
+  # Locked input rev must be the status pin. Throws on any other rev.
+  t3 =
+    let
+      pin = import ../nix/splora-pin-status.nix {
+        inherit lib;
+        sploraRev = sploraFlake.rev or (sploraFlake.sourceInfo.rev or "");
+      };
+    in
+    assert pin.environment == "SURMOUNT_SPLORA_REV=${pin.rev}";
+    "t3-splora-pin-status-ok";
+
   results = [
     t0
     t1
     t2
+    t3
   ];
 in
 {

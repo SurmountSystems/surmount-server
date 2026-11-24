@@ -24,6 +24,16 @@
 let
   cfg = config.surmount;
   flakeSelf = specialArgs.self or null;
+  # Locked Splora rev. Null when module eval has no flake self, so the
+  # contract suite does not fetch the input. Mail-vps passes self.
+  sploraPinStatus =
+    if flakeSelf == null then
+      null
+    else
+      import ../nix/splora-pin-status.nix {
+        inherit lib;
+        sploraRev = flakeSelf.inputs.splora.rev or "";
+      };
   inherit (lib) mkIf optional;
   hostPaths = import ./lib/host-paths.nix { inherit lib; };
   localCleartext = import ./lib/local-cleartext.nix { inherit lib; };
@@ -266,6 +276,9 @@ let
     # and strips them. Single-quoted KEY=VALUE keeps JSON in process env.
     "'SURMOUNT_SPLORA_INSTANCES=${sploraInstancesJson}'"
   ]
+  # Same pin the systems dashboard and host-status observe. Present even
+  # when the Splora proxy is off, because the revision is a source fact.
+  ++ lib.optional (sploraPinStatus != null) sploraPinStatus.environment
   ++ lib.optional (ui.listenMode == "https" && !ui.http3Enable) "SURMOUNT_HTTP3=0"
   ++ [
     "SURMOUNT_AUTH_MODE=${ui.authMode}"
@@ -618,7 +631,7 @@ let
       fi
       ${pkgs.coreutils}/bin/mkdir -p "$dst"
       ${pkgs.coreutils}/bin/chmod 0750 "$dst"
-      ${pkgs.coreutils}/bin/chown stalwart-mail:stalwart-mail "$dst" || true
+      ${pkgs.coreutils}/bin/chown stalwart-mail:stalwart-mail "$dst"
       ${pkgs.coreutils}/bin/install -o stalwart-mail -g stalwart-mail -m 0640 "$srcCert" "$dst/cert.pem"
       ${pkgs.coreutils}/bin/install -o stalwart-mail -g stalwart-mail -m 0600 "$srcKey" "$dst/key.pem"
       ${pkgs.systemd}/bin/systemctl restart stalwart-mail.service

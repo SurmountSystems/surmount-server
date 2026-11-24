@@ -13,7 +13,9 @@
 # does not vendor Arti. Not a feature-only override of channel 1.4.2.
 #
 # This file exports three overlays:
-#   pins      Upstream Nix 2.35.5 binary. Safe on checks (mkPkgs) and on the mail host.
+#   pins      Upstream Nix nix-cli from the nixos-26.05 source recipe.
+#             Not the 2.36.0 binary tarball. Safe on checks (mkPkgs)
+#             and on the mail host.
 #   tzdata    tzdata 2026e now.ck uses the NEWS release time.
 #             Appends that preCheck. Does not replace an earlier one.
 #             Mail-host nixosSystem, and the module-eval closure walk.
@@ -44,9 +46,11 @@
 #             is not run. No interpreter is added.
 #
 # Nix: nixos-26.05 pkgs.nix was nixVersions.stable (the 2.34.9 source
-# recipe). This overlay replaces pkgs.nix with the upstream 2.35.5
-# x86_64-linux binary tarball. patchelf points that ELF at this
-# nixpkgs glibc. nix-util is not built from source. The nixpkgs
+# recipe). This overlay replaces pkgs.nix with nixComponents_git.nix-cli,
+# the channel's 2.36 source build, linked to this nixpkgs glibc.
+# The 2.36.0 binary tarball's libcurl needs GLIBC_2.43 and its
+# libsqlite needs GLIBC_2.44. This glibc is 2.42, so that tarball's
+# nix-store cannot run. nix-everything is not used. The nixpkgs
 # channel stays nixos-26.05. NixOS 26.11 is not released.
 #
 # The mail host and the remote builder use pkgs.nix/bin/nix-daemon.
@@ -1632,260 +1636,11 @@ let
       };
     in
     {
-      # Upstream 2.35.5 binary. Not the nix-util source build.
-      # Channel nixVersions stays the nixpkgs set. The mail host uses
-      # pkgs.nix, which is this package.
-      # The expression is in this tracked file. Flake eval does not read
-      # an untracked path.
-      nix = final.callPackage (
-        {
-          stdenv,
-          fetchurl,
-          patchelf,
-        }:
-        let
-          version = "2.35.5";
-        in
-        stdenv.mkDerivation {
-          pname = "nix";
-          inherit version;
-
-          src = fetchurl {
-            url = "https://releases.nixos.org/nix/nix-${version}/nix-${version}-x86_64-linux.tar.xz";
-            hash = "sha256-w0nwVZt4SaLLOyC4WE5TKz/PUCUJLLYYDrC5kkDXuWw=";
-          };
-
-          sourceRoot = "nix-${version}-x86_64-linux";
-
-          nativeBuildInputs = [ patchelf ];
-
-          dontConfigure = true;
-          dontBuild = true;
-          dontStrip = true;
-          dontPatchELF = true;
-
-          installPhase = ''
-            runHook preInstall
-            set -eu
-            set -o pipefail
-
-            if [ ! -d store ]; then
-              echo "archive store directory missing" >&2
-              exit 1
-            fi
-
-            nix_bin=
-            for cand in store/*-nix-${version}/bin/nix; do
-              if [ -f "$cand" ] && [ ! -L "$cand" ]; then
-                nix_bin=$cand
-                break
-              fi
-            done
-            if [ -z "$nix_bin" ]; then
-              echo "nix multicall binary was not in the archive" >&2
-              exit 1
-            fi
-
-            nix_dir=$(dirname "$(dirname "$nix_bin")")
-            mkdir -p "$out/bin" "$out/lib" "$out/libexec/nix"
-            install -m 0755 "$nix_bin" "$out/bin/nix"
-            for cmd in "$nix_dir"/bin/*; do
-              name=''${cmd##*/}
-              if [ "$name" = nix ]; then
-                continue
-              fi
-              if [ -L "$cmd" ] && [ "$(readlink "$cmd")" = nix ]; then
-                ln -s nix "$out/bin/$name"
-              fi
-            done
-            for name in nix-daemon nix-store; do
-              if [ "$(readlink "$out/bin/$name")" != nix ]; then
-                echo "$name is not a symlink to nix" >&2
-                exit 1
-              fi
-            done
-            ln -s ../../bin/nix "$out/libexec/nix/build-remote"
-
-            glibc_lib="${stdenv.cc.libc}/lib"
-            interp="${stdenv.cc.libc}/lib/ld-linux-x86-64.so.2"
-            rpath="$glibc_lib:$out/lib"
-            if [ ! -e "$interp" ]; then
-              echo "glibc loader missing: $interp" >&2
-              exit 1
-            fi
-
-            work=$NIX_BUILD_TOP/nix-elf-work
-            needed_file=$NIX_BUILD_TOP/nix-elf-needed
-            : > "$work"
-            printf '%s\n' "$out/bin/nix" >> "$work"
-
-            copy_absolute() {
-              needed=$1
-              elf=$2
-              rel=''${needed#/nix/store/}
-              src="store/$rel"
-              base=''${needed##*/}
-              case "$src" in
-                */share/*|*/python/*)
-                  echo "refusing scripting path $needed" >&2
-                  return 1
-                  ;;
-              esac
-              case "$base" in
-                *.py|libpython*)
-                  echo "refusing $base" >&2
-                  return 1
-                  ;;
-              esac
-              if [ ! -e "$src" ]; then
-                echo "absolute library $needed is not in the archive" >&2
-                return 1
-              fi
-              if [ ! -e "$out/lib/$base" ]; then
-                if ! patchelf --print-needed "$src" >/dev/null 2>&1; then
-                  echo "absolute library $needed is not an ELF" >&2
-                  return 1
-                fi
-                cp -L "$src" "$out/lib/$base"
-                chmod 0755 "$out/lib/$base"
-                printf '%s\n' "$out/lib/$base" >> "$work"
-              fi
-              patchelf --replace-needed "$needed" "$base" "$elf"
-            }
-
-            copy_needed() {
-              soname=$1
-              elf=$2
-              case "$soname" in
-                /*)
-                  copy_absolute "$soname" "$elf"
-                  return
-                  ;;
-              esac
-              if [ -e "$out/lib/$soname" ]; then
-                return 0
-              fi
-              if [ -e "$glibc_lib/$soname" ]; then
-                return 0
-              fi
-              case "$soname" in
-                ld-linux*|libpython*)
-                  return 0
-                  ;;
-              esac
-              found=
-              while IFS= read -r cand; do
-                case "$cand" in
-                  */share/*|*/python/*)
-                    continue
-                    ;;
-                esac
-                base=''${cand##*/}
-                case "$base" in
-                  *.py|libpython*)
-                    continue
-                    ;;
-                esac
-                if patchelf --print-needed "$cand" >/dev/null 2>&1; then
-                  found=$cand
-                  break
-                fi
-              done < <(find store -name "$soname" \( -type f -o -type l \))
-              if [ -z "$found" ]; then
-                echo "shared library $soname is not in the archive" >&2
-                return 1
-              fi
-              cp -L "$found" "$out/lib/$soname"
-              chmod 0755 "$out/lib/$soname"
-              printf '%s\n' "$out/lib/$soname" >> "$work"
-            }
-
-            count=0
-            while IFS= read -r elf; do
-              [ -n "$elf" ] || continue
-              count=$((count + 1))
-              if [ "$count" -gt 400 ]; then
-                echo "elf walk did not finish" >&2
-                exit 1
-              fi
-              patchelf --print-needed "$elf" > "$needed_file"
-              while IFS= read -r soname; do
-                [ -n "$soname" ] || continue
-                copy_needed "$soname" "$elf" || exit 1
-              done < "$needed_file"
-              chmod u+w "$elf"
-              if cur=$(patchelf --print-interpreter "$elf" 2>/dev/null); then
-                if [ -n "$cur" ]; then
-                  patchelf --set-interpreter "$interp" "$elf"
-                fi
-              fi
-              patchelf --set-rpath "$rpath" "$elf"
-              chmod 0555 "$elf"
-            done < "$work"
-
-            got=$(patchelf --print-interpreter "$out/bin/nix")
-            foreign=/nix/store/dphsh3jff8w6n9p3xbfmkia5krqwv52f-glibc-2.42-103/lib/ld-linux-x86-64.so.2
-            if [ "$got" = "$foreign" ] || [ "$got" != "$interp" ]; then
-              echo "interpreter is $got" >&2
-              exit 1
-            fi
-            got_rpath=$(patchelf --print-rpath "$out/bin/nix")
-            case "$got_rpath" in
-              *"$glibc_lib"*) ;;
-              *)
-                echo "rpath missing glibc lib" >&2
-                exit 1
-                ;;
-            esac
-            case "$got_rpath" in
-              *"$out/lib"*) ;;
-              *)
-                echo "rpath missing output lib" >&2
-                exit 1
-                ;;
-            esac
-            if patchelf --print-needed "$out/lib/libnixstore.so.2.35.5" | grep -F '/nix/store/' >/dev/null; then
-              echo "libnixstore still has an absolute library path" >&2
-              exit 1
-            fi
-            test -e "$out/lib/libnixutil.so.2.35.5"
-            test -e "$out/lib/libsqlite3.so"
-            test -L "$out/bin/nix-daemon"
-            test -L "$out/bin/nix-store"
-            n=$(find "$out/lib" -type f | wc -l)
-            if [ "$n" -lt 40 ]; then
-              echo "shared library copy is too small ($n)" >&2
-              exit 1
-            fi
-            if find "$out" -path '*/python/*' | grep -q .; then
-              echo "scripting directory was copied" >&2
-              exit 1
-            fi
-            if find "$out" -name 'libpython*' | grep -q .; then
-              echo "libpython was copied" >&2
-              exit 1
-            fi
-            if [ ! -d "$nix_dir/lib/tmpfiles.d" ]; then
-              echo "nix archive has no lib/tmpfiles.d" >&2
-              exit 1
-            fi
-            mkdir -p "$out/lib/tmpfiles.d"
-            cp -a "$nix_dir/lib/tmpfiles.d/." "$out/lib/tmpfiles.d/"
-            if [ ! -f "$out/lib/tmpfiles.d/nix-daemon.conf" ]; then
-              echo "nix-daemon.conf was not installed" >&2
-              exit 1
-            fi
-
-            runHook postInstall
-          '';
-
-          meta = {
-            description = "Upstream Nix binary, patched to this nixpkgs glibc";
-            mainProgram = "nix";
-            platforms = [ "x86_64-linux" ];
-          };
-        }
-      ) { };
+      # nixos-26.05 source build, linked to this nixpkgs glibc.
+      # Not the 2.36.0 binary tarball. Not nix-everything.
+      # nix-daemon stays a symlink to nix. The mail host and the
+      # remote builder use pkgs.nix/bin/nix-daemon.
+      nix = prev.nixVersions.nixComponents_git.nix-cli;
 
       # nixpkgs all-packages.nix binds systemdMinimal to systemd.override
       # and systemdLibs to systemdMinimal.override. That name is the
@@ -3372,8 +3127,8 @@ let
           preFixup = "";
           # The old native inputs include the file-scope interpreter
           # lookup's tools. Do not append them. This install runs
-          # zstd, nix-store, and patchelf. final.nix is the patched
-          # binary, and it refuses a python path.
+          # zstd, nix-store, and patchelf. final.nix is the source-built
+          # nix-cli, linked to this glibc.
           nativeBuildInputs = [
             prev.zstd
             final.nix
@@ -3880,45 +3635,11 @@ let
       # ninja -j stay.
       meson =
         let
-          # nixpkgs muon ignores mesonFlags. The setup line is the
-          # flag list. libpkgconf is a feature, default auto.
-          # auto_features replaces only auto, so disabled keeps exec.
-          # pkgs/by-name/mu/muon/package.nix at nixpkgs f684076
-          # takes python3. That formal is only evaluated when
-          # buildDocs or doCheck is true. Both stay false here.
-          # The call itself does not take python3. The inner
-          # expression still has the formal, so it receives a
-          # throw, not an interpreter and not an empty directory.
-          muonExpr = import (prev.path + "/pkgs/by-name/mu/muon/package.nix");
-          muonNoPython = lib.setFunctionArgs (
-            args: muonExpr (args // { python3 = refuse "python3"; })
-          ) (builtins.removeAttrs (builtins.functionArgs muonExpr) [ "python3" ]);
-          muonNoDocs =
-            (prev.callPackage muonNoPython {
-              buildDocs = false;
-              embedSamurai = true;
-              runTests = false;
-            }).overrideAttrs
-              (
-                old:
-                let
-                  mesonFlags =
-                    if builtins.elem "-Dlibpkgconf=disabled" (old.mesonFlags or [ ]) then
-                      old.mesonFlags
-                    else
-                      (old.mesonFlags or [ ]) ++ [ "-Dlibpkgconf=disabled" ];
-                in
-                {
-                  inherit mesonFlags;
-                  buildPhase =
-                    prev.lib.replaceStrings
-                      [ "./stage-1/muon-bootstrap setup " ]
-                      [
-                        "./stage-1/muon-bootstrap setup ${prev.lib.concatStringsSep " " mesonFlags} "
-                      ]
-                      old.buildPhase;
-                }
-              );
+          # nixos-26.05 muon is 0.5.0 (compat 1.7.99). nix libutil
+          # requires >= 1.8. nix/packages/muon.nix is upstream 0.7.0,
+          # which reports 1.11.99. libpkgconf stays disabled there.
+          # Docs and tests stay off. No interpreter formal.
+          muonNoDocs = prev.callPackage ./packages/muon.nix { };
         in
         prev.stdenvNoCC.mkDerivation {
           pname = "meson";

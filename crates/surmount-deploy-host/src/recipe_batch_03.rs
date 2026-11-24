@@ -24,7 +24,45 @@ const BATCH: &[&str] = &[
     "test-sshd-hostkeys-eval",
 ];
 
-const HOST_STATUS_REMOTE: &str = "u=$(id -u nixbuilder 2>/dev/null || echo \"\"); echo gen=$(readlink /run/current-system | sed \"s|.*/||\"); echo qemu=$(systemctl is-active qemu-guest-agent 2>/dev/null || echo n/a); echo et=$(systemctl is-active eternal-terminal 2>/dev/null || echo n/a); for s in sshd stalwart-mail surmount-management-ui; do printf \"%s=%s \" \"$s\" \"$(systemctl is-active $s)\"; done; echo; if [[ -n \"$u\" ]]; then echo \"nixbuilder_uid=$u\"; systemctl show \"user-${u}.slice\" -p MemoryMax,MemoryCurrent,Description --no-pager; fi; echo lake=$(pgrep -c -x lake 2>/dev/null || echo 0)";
+/// Remote `just host-status` body. sshd, stalwart-mail, and
+/// surmount-management-ui must be active or this script exits non-zero.
+/// qemu-guest-agent and eternal-terminal stay n/a when the unit is absent.
+/// A failed required unit is printed as its real state, not n/a.
+pub(crate) const HOST_STATUS_REMOTE: &str = r#"u=$(id -u nixbuilder 2>/dev/null || echo "")
+echo gen=$(readlink /run/current-system | sed "s|.*/||")
+echo qemu=$(systemctl is-active qemu-guest-agent 2>/dev/null || echo n/a)
+echo et=$(systemctl is-active eternal-terminal 2>/dev/null || echo n/a)
+rc=0
+for s in sshd stalwart-mail surmount-management-ui; do
+  st=$(systemctl is-active "$s" 2>/dev/null || true)
+  printf '%s=%s ' "$s" "$st"
+  if [ "$st" != active ]; then
+    rc=1
+  fi
+done
+echo
+if [ -n "$u" ]; then
+  echo "nixbuilder_uid=$u"
+  systemctl show "user-${u}.slice" -p MemoryMax,MemoryCurrent,Description --no-pager || true
+fi
+echo lake=$(pgrep -c -x lake 2>/dev/null || echo 0)
+expected=79e0cae72e6e3d709465929c04866575f0acdd6e
+splora_rev=$(systemctl show surmount-management-ui -p Environment --value --no-pager 2>/dev/null | tr ' ' '\n' | sed -n 's/^SURMOUNT_SPLORA_REV=//p' | head -n 1)
+if [ -z "$splora_rev" ]; then
+  splora_rev=absent
+fi
+echo "splora_rev=$splora_rev"
+if [ "$splora_rev" = "$expected" ]; then
+  echo splora_pin=pinned
+else
+  echo splora_pin=mismatch
+fi
+exit "$rc"
+"#;
+
+pub(crate) fn host_status_remote_script() -> &'static str {
+    HOST_STATUS_REMOTE
+}
 
 pub fn dispatch(args: &[String]) -> Option<Result<(), ToolError>> {
     let (name, rest) = recipe_batch_01::split_invocation(args)?;
@@ -112,7 +150,7 @@ fn run_host_status(args: &[String]) -> Result<(), ToolError> {
             exit_code: 2,
         });
     }
-    ssh(&target, &[HOST_STATUS_REMOTE.to_string()])
+    ssh(&target, &[host_status_remote_script().to_string()])
 }
 
 fn run_scram(args: &[String]) -> Result<(), ToolError> {
@@ -201,4 +239,170 @@ fn run_status(bin: &str, args: &[String], _env: &[(&str, &str)]) -> Result<(), T
         message: format!("command exited {code}"),
         exit_code: code,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::host_status_remote_script;
+
+    const SYSTEMCTL: &str = r#"#!/bin/sh
+set -eu
+cmd=${1:-}
+unit=${2:-}
+case "$cmd" in
+  is-active)
+    case "$unit" in
+      qemu-guest-agent|eternal-terminal)
+        exit 4
+        ;;
+    esac
+    fail=${HOST_STATUS_FAIL:-}
+    case " $fail " in
+      *" $unit "*)
+        printf '%s\n' failed
+        exit 3
+        ;;
+    esac
+    printf '%s\n' active
+    exit 0
+    ;;
+  show)
+    printf '%s\n' "SURMOUNT_SPLORA_REV=${HOST_STATUS_SPLORA_REV:-79e0cae72e6e3d709465929c04866575f0acdd6e}"
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+"#;
+
+    fn temp_dir() -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "surmount-host-status-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn write_systemctl(dir: &Path) {
+        let path = dir.join("systemctl");
+        fs::write(&path, SYSTEMCTL).unwrap();
+        let mut perm = fs::metadata(&path).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&path, perm).unwrap();
+    }
+
+    fn run(fail: &str) -> std::process::Output {
+        run_rev(fail, None)
+    }
+
+    fn run_rev(fail: &str, rev: Option<&str>) -> std::process::Output {
+        let dir = temp_dir();
+        write_systemctl(&dir);
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut cmd = Command::new("bash");
+        cmd.arg("-c")
+            .arg(host_status_remote_script())
+            .env("PATH", path)
+            .env("HOST_STATUS_FAIL", fail);
+        if let Some(rev) = rev {
+            cmd.env("HOST_STATUS_SPLORA_REV", rev);
+        }
+        cmd.output().expect("run host-status script")
+    }
+
+    fn text(out: &std::process::Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    }
+
+    #[test]
+    fn host_status_exits_zero_when_required_units_are_active_and_optional_units_are_absent() {
+        let out = run("");
+        let body = text(&out);
+        assert!(
+            out.status.success(),
+            "active required units must exit 0: {body}"
+        );
+        assert!(body.contains("sshd=active"), "{body}");
+        assert!(body.contains("stalwart-mail=active"), "{body}");
+        assert!(body.contains("surmount-management-ui=active"), "{body}");
+        assert!(body.contains("qemu=n/a"), "{body}");
+        assert!(body.contains("et=n/a"), "{body}");
+    }
+
+    #[test]
+    fn host_status_exits_nonzero_when_sshd_is_failed() {
+        let out = run("sshd");
+        let body = text(&out);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "failed sshd must exit 1, not 0: {body}"
+        );
+        assert!(body.contains("sshd=failed"), "{body}");
+        assert!(!body.contains("sshd=n/a"), "{body}");
+        assert!(body.contains("stalwart-mail=active"), "{body}");
+    }
+
+    #[test]
+    fn host_status_exits_nonzero_when_stalwart_mail_is_failed() {
+        let out = run("stalwart-mail");
+        let body = text(&out);
+        assert_eq!(out.status.code(), Some(1), "{body}");
+        assert!(body.contains("stalwart-mail=failed"), "{body}");
+        assert!(!body.contains("stalwart-mail=n/a"), "{body}");
+    }
+
+    #[test]
+    fn host_status_observes_the_splora_pin() {
+        let script = host_status_remote_script();
+        assert!(
+            script.contains("79e0cae72e6e3d709465929c04866575f0acdd6e"),
+            "{script}"
+        );
+        let out = run("");
+        let body = text(&out);
+        assert!(out.status.success(), "{body}");
+        assert!(
+            body.contains("splora_rev=79e0cae72e6e3d709465929c04866575f0acdd6e"),
+            "{body}"
+        );
+        assert!(body.contains("splora_pin=pinned"), "{body}");
+        let bad = run_rev("", Some("0000000000000000000000000000000000000000"));
+        let bad_body = text(&bad);
+        assert!(bad.status.success(), "{bad_body}");
+        assert!(bad_body.contains("splora_pin=mismatch"), "{bad_body}");
+        assert!(
+            bad_body.contains("splora_rev=0000000000000000000000000000000000000000"),
+            "{bad_body}"
+        );
+    }
+
+    #[test]
+    fn host_status_exits_nonzero_when_management_ui_is_failed() {
+        let out = run("surmount-management-ui");
+        let body = text(&out);
+        assert_eq!(out.status.code(), Some(1), "{body}");
+        assert!(body.contains("surmount-management-ui=failed"), "{body}");
+        assert!(!body.contains("surmount-management-ui=n/a"), "{body}");
+    }
 }

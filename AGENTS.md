@@ -86,10 +86,14 @@ Product detail lives under `docs/`. This file is standing law only.
   secrets custody, standing forbid of the real `just deploy`
   switch (2026-08-25; narrowed 2026-09-02,
   short names 2026-10-05: `just deploy-dry-run` is required agent work;
-  agents may run one `just check-remote` at a time; agents must not run
-  `just deploy`; `just deploy-host` without `--dry-run` is that same
-  switch and stays the explicit equivalent with no default
-  target), hypervisor,
+  agents may run one `just check-remote` at a time. Agents must not run
+  real `just deploy` unless the operator overrides. `just deploy` execs
+  deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps).
+  `just deploy-host` without `--dry-run` runs surmount-deploy-host and
+  activates the host. Those are different programs. Both are real
+  switches. Agents must not run either. `just deploy-dry-run` and
+  `just deploy-host -- --dry-run` stay the dry-run. `just deploy-host`
+  has no default target), hypervisor,
   Namecheap **hosted DNSSEC Status** click, or the operator using a TUI they asked to sit in.
   Turning a switch on in the private overlay on horizon
   (`~/.local/share/surmount/host-local/default.nix`) is agent work when
@@ -407,6 +411,20 @@ section 5.
   operator explicitly instructs that work.
 - Do not clone the fork if network/git policy blocks it; document the pattern.
 
+## Readable commands only (operator 2026-11-23)
+
+Do not encode a command, script, or argument to hide it from the
+operator. Base64, hex, and any other packing that makes a Grok OSS
+subagent log, a process list, or a terminal line unreadable are
+forbidden. The operator reads those logs. They show the command in
+readable text.
+
+A remote shell that mangles quotes is not a reason to encode. If the
+command cannot be sent as readable text, do not send it. Write the
+script to a file the operator can open, or do not run it.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
 ## How agents work here
 
 - Multi-file research, diagnosis, or non-trivial implementation: use
@@ -581,21 +599,29 @@ must have already run both of these and must report the results:
 The explicit equivalent is `just deploy-host -- --dry-run` with the
 target and host-local flags. `just deploy-host` has no default target.
 
-This **narrows** 2026-08-25: dry-run is required agent work. The **real
-switch** (`just deploy`) stays operator-owned unless they override.
-Agents must not run `just deploy`. `just deploy-host` with those target
-flags and no `--dry-run` is that same switch. Laptop cargo and
-`BUILD_LOCAL` stay forbidden. Agents may run one `just check-remote`
-at a time. Prove-the-gate leftover law stays: do not list a leftover
-unless the agent cannot do it.
+This **narrows** 2026-08-25: dry-run is required agent work. Agents
+must not run real `just deploy` unless the operator overrides.
+`just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`,
+node mail-vps). `just deploy-host` with those target flags and no
+`--dry-run` runs surmount-deploy-host and activates the host. Those
+are different programs. Both are real switches. Agents must not run
+either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay
+the dry-run. Laptop cargo and `BUILD_LOCAL` stay forbidden. Agents may
+run one `just check-remote` at a time. Prove-the-gate leftover law
+stays: do not list a leftover unless the agent cannot do it.
 
 ## Do not stop before a passing dry-run (operator 2026-11-09)
 
 Never stop until just deploy-dry-run exits 0. The operator will not run
 just deploy until that dry-run passes. Stopping to ask the operator to
 deploy, or ending the task before a green dry-run, wastes the
-operator's time. The agent runs the dry-run. The agent must not run
-just deploy. just deploy-host without --dry-run is that same switch.
+operator's time. The agent runs the dry-run. Agents must not run real
+`just deploy` unless the operator overrides. `just deploy` execs
+deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps).
+`just deploy-host` without `--dry-run` runs surmount-deploy-host and
+activates the host. Those are different programs. Both are real
+switches. Agents must not run either. `just deploy-dry-run` and
+`just deploy-host -- --dry-run` stay the dry-run.
 
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 
@@ -677,10 +703,14 @@ nothing, or to wait, when leftover is `just check-remote`, then
 `just deploy-dry-run`, then the real `just deploy` switch. A reboot does
 not cancel that slice. Agents never reboot. Keep the Eternal Terminal
 window. Agents may run one `just check-remote` at a time, then named
-eval and `just deploy-dry-run`, and report those results. The real
-switch `just deploy` stays operator-owned unless they override. Agents
-must not run `just deploy`. `just deploy-host` without `--dry-run` is
-that same switch and stays the explicit form with no default target.
+eval and `just deploy-dry-run`, and report those results. Agents must
+not run real `just deploy` unless the operator overrides. `just deploy`
+execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps).
+`just deploy-host` without `--dry-run` runs surmount-deploy-host and
+activates the host. Those are different programs. Both are real
+switches. Agents must not run either. `just deploy-dry-run` and
+`just deploy-host -- --dry-run` stay the dry-run. `just deploy-host`
+has no default target.
 
 Comprehensive residual means finish the **named leftover slices**. Do **not**
 invent unlocked tracks. Do not start an MX flip, a DMARC `p=reject`

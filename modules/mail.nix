@@ -264,7 +264,7 @@ in
           if [ -f "$srcCert" ] && [ -f "$srcKey" ]; then
             mkdir -p "$dst"
             chmod 0750 "$dst"
-            chown stalwart-mail:stalwart-mail "$dst" || true
+            chown stalwart-mail:stalwart-mail "$dst"
             install -o stalwart-mail -g stalwart-mail -m 0640 "$srcCert" "$dst/cert.pem"
             install -o stalwart-mail -g stalwart-mail -m 0600 "$srcKey" "$dst/key.pem"
           fi
