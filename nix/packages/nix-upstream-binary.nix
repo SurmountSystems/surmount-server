@@ -2,12 +2,16 @@
 # URL and hash are the pin that was already recorded for this tree.
 # The dynamic loader is the mail-host glibc (2.44 or newer), not the
 # glibc path baked into the archive and not nixos-26.05's 2.42.
+# libgcc_s.so.1 in the tarball is a symlink to an absolute store path
+# that is not present after unpack. Copy it from gcc16.cc.lib
+# (gcc-16.2.0-lib). stdenv.cc.cc.lib is gcc 15.3.0 on this channel.
 # No Python, no Meson, and no C program.
 {
   stdenvNoCC,
   fetchurl,
   patchelf,
   glibc,
+  gccLib,
 }:
 
 assert stdenvNoCC.hostPlatform.isx86_64;
@@ -60,6 +64,11 @@ stdenvNoCC.mkDerivation {
     interp="${glibc}/lib/ld-linux-x86-64.so.2"
     test -e "$interp"
     rpath="${glibc}/lib:$out/lib"
+    gcc_lib="${gccLib}/lib"
+    if [ ! -e "$gcc_lib/libgcc_s.so.1" ]; then
+      echo "gcc lib output is missing libgcc_s.so.1" >&2
+      exit 1
+    fi
 
     list="$TMPDIR/nix-elf-list"
     : > "$list"
@@ -105,6 +114,17 @@ stdenvNoCC.mkDerivation {
           fi
           continue
         fi
+        if [ "$base" = "libgcc_s.so.1" ]; then
+          if [ ! -e "$out/lib/$base" ]; then
+            cp -L "$gcc_lib/$base" "$out/lib/$base"
+            chmod u+w "$out/lib/$base"
+            printf '%s\n' "$out/lib/$base" >> "$list"
+          fi
+          if [ "$need" != "$base" ]; then
+            patchelf --replace-needed "$need" "$base" "$file"
+          fi
+          continue
+        fi
         if [ ! -e "$out/lib/$base" ]; then
           src=$(find . -type f -name "$base" ! -path '*/share/*' ! -path '*/python/*' -print | head -n 1)
           if [ -z "$src" ]; then
@@ -135,6 +155,21 @@ stdenvNoCC.mkDerivation {
       echo "libnixstore still has an absolute needed entry" >&2
       exit 1
     fi
+    if [ -L "$out/lib/libgcc_s.so.1" ] || [ ! -f "$out/lib/libgcc_s.so.1" ]; then
+      echo "libgcc_s.so.1 was not a regular file from the gcc lib output" >&2
+      exit 1
+    fi
+    version_out=$("$out/bin/nix" --version 2>&1) || {
+      echo "nix --version failed: $version_out" >&2
+      exit 1
+    }
+    case "$version_out" in
+      *2.36.0*) ;;
+      *)
+        echo "nix --version did not report 2.36.0: $version_out" >&2
+        exit 1
+        ;;
+    esac
   '';
 
   meta = {

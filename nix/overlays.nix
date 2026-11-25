@@ -1670,9 +1670,12 @@ let
       # nix-daemon stays a symlink to nix. The mail host and the
       # remote builder use pkgs.nix/bin/nix-daemon. The loader is
       # final.glibc, which the mail-vps list sets to 2.44.
+      # libgcc_s.so.1 is copied from prev.gcc16.cc.lib (gcc-16.2.0-lib).
+      # stdenv.cc.cc.lib on this channel is gcc 15.3.0.
       nix = import ./nix-boehmgc-install.nix final (
         final.callPackage ./packages/nix-upstream-binary.nix {
           glibc = final.glibc;
+          gccLib = prev.gcc16.cc.lib;
         }
       );
 
