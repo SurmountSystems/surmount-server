@@ -8,9 +8,11 @@ let
   nodeArg = ".#mail-vps";
   # Single quotes so the shell does not treat # as a comment.
   surmountExecLine = "exec ${deployBin}/bin/deploy --skip-checks '${nodeArg}' \"$@\"";
-  program = pkgs.writeShellScript "deploy-rs-mail-vps" ''
+  # writeShellScript is a derivation. Flake apps require program to be
+  # the executable store path. This script's output is that file.
+  program = "${pkgs.writeShellScript "deploy-rs-mail-vps" ''
     ${surmountExecLine}
-  '';
+  ''}";
 in
 {
   type = "app";
