@@ -143,11 +143,11 @@ let
     else
       lib.splitString " " v;
 
-  # ssh-ng client advertises surmount-remote; the builder nix-daemon must
-  # list it too or rustc is not eligible on this machine. Use extra- so
-  # NixOS auto-detected features (big-parallel) stay. grok-build
-  # just check-remote / require_remote_builder gates on this name in the
-  # live daemon system-features list.
+  # ssh-ng client advertises surmount-remote and gccarch-x86-64-v3; the
+  # builder nix-daemon must list both or those jobs are not eligible on
+  # this machine. Use extra- so NixOS auto-detected features (benchmark,
+  # big-parallel) stay. grok-build just check-remote / require_remote_builder
+  # gates on surmount-remote in the live daemon system-features list.
   t39m-extra-system-features-advertises-surmount-remote =
     let
       e = evalRB { remoteBuilder.enable = true; };
@@ -156,6 +156,9 @@ let
     in
     assert failedAssertions e == [ ];
     assert lib.elem "surmount-remote" extra;
+    assert lib.elem "gccarch-x86-64-v3" extra;
+    assert lib.elem "benchmark" sys;
+    assert lib.elem "big-parallel" sys;
     assert !(lib.elem "surmount-remote" sys) || lib.elem "surmount-remote" extra;
     "t39m-extra-system-features-advertises-surmount-remote-ok";
 
@@ -169,6 +172,7 @@ let
     assert failedAssertions e == [ ];
     assert e.config.surmount.remoteBuilder.enable == false;
     assert !(lib.elem "surmount-remote" extra);
+    assert !(lib.elem "gccarch-x86-64-v3" extra);
     assert !(lib.elem "surmount-remote" sys);
     "t39n-disabled-does-not-require-surmount-remote-ok";
 

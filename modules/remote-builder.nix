@@ -142,10 +142,14 @@ in
     # not one slot per CPU. Laptop machines max-jobs must match.
     nix.settings.max-jobs = rb.maxJobs;
     nix.settings.cores = rb.buildCores;
-    # Client machines-file already lists surmount-remote. The builder
-    # nix-daemon must list it too or rustc is not eligible here. extra-
-    # keeps NixOS auto-detected features (big-parallel).
-    nix.settings.extra-system-features = [ "surmount-remote" ];
+    # Client machines-file lists surmount-remote and gccarch-x86-64-v3.
+    # The builder nix-daemon must list both or those jobs are not
+    # eligible here. extra- keeps NixOS auto-detected features
+    # (benchmark, big-parallel). Do not drop gcc.arch to hide the feature.
+    nix.settings.extra-system-features = [
+      "surmount-remote"
+      "gccarch-x86-64-v3"
+    ];
 
     # Trusted ssh-ng forwards rustc here. Cap and nice this cgroup.
     # Do not Nice= mail, management-ui, sshd, Arti, or networking.

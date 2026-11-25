@@ -3298,14 +3298,17 @@ mod edge_wire_tests {
         let decision = https_startup_decision(&mode, RUSTLS_ACCEPTOR_READY, false);
         assert_eq!(decision, HttpsStartupDecision::ServeHttps);
 
-        // Reserve ephemeral ports then drop so dispatch can bind (same as product path).
-        async fn free_port() -> u16 {
-            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            l.local_addr().unwrap().port()
-        }
-        let https_addr = SocketAddr::from(([127, 0, 0, 1], free_port().await));
-        let cleartext_addr = SocketAddr::from(([127, 0, 0, 1], free_port().await));
+        // Reserve two ephemeral ports, then drop so dispatch can bind
+        // (same as the product path). Both listeners stay open until both
+        // ports are known. Dropping the first before the second port-0 bind
+        // lets the kernel hand that port back (tokio sets SO_REUSEADDR).
+        let https_hold = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cleartext_hold = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let https_addr = https_hold.local_addr().unwrap();
+        let cleartext_addr = cleartext_hold.local_addr().unwrap();
         assert_ne!(https_addr.port(), cleartext_addr.port());
+        drop(https_hold);
+        drop(cleartext_hold);
 
         let state = test_state(0);
         let app = build_router(state.clone());
