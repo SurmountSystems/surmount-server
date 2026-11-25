@@ -1153,6 +1153,13 @@ let
                           export NIX_LDFLAGS="''${NIX_LDFLAGS:+$NIX_LDFLAGS }-L$mount_lib -L$seccomp_lib --no-as-needed -lmount -lseccomp --as-needed -rpath $mount_lib -rpath $seccomp_lib -rpath $out/lib/systemd"
           '';
           env = (old.env or { }) // {
+            # libsystemd-shared-*.so is installed in $out/lib/systemd.
+            # systemd uses __structuredAttrs, so this flag is exported
+            # only from env. Append. Do not replace an existing value.
+            # preConfigure adds the same -rpath again with mount and seccomp.
+            NIX_LDFLAGS =
+              (toString (old.env.NIX_LDFLAGS or old.NIX_LDFLAGS or ""))
+              + " -rpath ${placeholder "out"}/lib/systemd";
             # Do not -D any KEY_ name here. Those are keyboard gperf
             # identifiers stored in an unsigned short, and a global
             # -D fails -Werror=overflow. The copied
@@ -1394,17 +1401,22 @@ let
               if patchelf --print-needed "$resolved" | grep -F -x -q libatomic.so.1; then
                 add_rpath "$resolved" "$atomic_lib"
               fi
+              # systemd-hwdb NEEDS libsystemd-shared-*.so from $out/lib/systemd.
+              # The loader exits 127 when that directory is not on RUNPATH.
+              if patchelf --print-needed "$resolved" | grep -q '^libsystemd-shared'; then
+                add_rpath "$resolved" "$out/lib/systemd"
+              fi
             done
             # udevadm needs libsystemd-shared-260.so from $out/lib/systemd.
+            # env.NIX_LDFLAGS records that directory at link time.
             # installCheck execs the installed binary and exits 127 when
             # that directory is not on RUNPATH.
-            . ${./packages/systemd-shared-rpath.sh}
-            add_systemd_shared_runpath "$out/lib/systemd"
             if [ -e "$out/bin/udevadm" ]; then
               udev=$(resolve_elf "$out/bin/udevadm") || {
                 echo "udevadm is not an ELF" >&2
                 exit 1
               }
+              add_rpath "$udev" "$out/lib/systemd"
               udev_rpath=$(patchelf --print-rpath "$udev")
               case ":$udev_rpath:" in
                 *":$mount_lib:"*) ;;
@@ -1484,6 +1496,11 @@ let
               # Feature name is seccomp. That option links libseccomp.
               # There is no -Dlibseccomp option in systemd 260.
               "-Dseccomp=enabled"
+              # udevadm install_rpath is pkglibdir ($out/lib/systemd) when
+              # this is true. Meson keeps that path and drops other -rpath
+              # words. false clears install_rpath. This is an existing
+              # meson option, not a meson.build body.
+              "-Dlink-udev-shared=true"
             ]
             ++ prev.lib.optionals (!hasDbusInterfaces) [
               "-Ddbus-interfaces-dir=${placeholder "out"}/share/dbus-1/interfaces"
