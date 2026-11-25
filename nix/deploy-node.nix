@@ -6,6 +6,7 @@
   nodes.mail-vps = {
     hostname = "surmount-1";
     sshUser = "root";
+    sshOpts = [ "-o" "IdentityFile=~/.ssh/id_ed25519" "-o" "BatchMode=yes" "-o" "IdentitiesOnly=yes" ];
     autoRollback = true;
     magicRollback = true;
     profiles.system = {
