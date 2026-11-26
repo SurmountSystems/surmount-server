@@ -72,18 +72,20 @@ in
       # paper trail cannot fill the disk (same class as SHC ticket 261).
       # Rate limit is explicit and kept high so the start of an OOM or
       # cgroup kill is still in the journal. Completeness over vacuum.
-      services.journald.extraConfig = ''
-        Storage=persistent
-        SystemMaxUse=${log.systemMaxUse}
-        RuntimeMaxUse=${log.runtimeMaxUse}
-        MaxRetentionSec=${log.maxRetentionSec}
-        RateLimitIntervalSec=${log.rateLimitIntervalSec}
-        RateLimitBurst=${log.rateLimitBurst}
-        ForwardToSyslog=no
+      # release-26.11 removed services.journald.extraConfig. The same
+      # keys live on services.journald.settings.Journal.
+      services.journald.settings.Journal = {
+        Storage = "persistent";
+        SystemMaxUse = log.systemMaxUse;
+        RuntimeMaxUse = log.runtimeMaxUse;
+        MaxRetentionSec = log.maxRetentionSec;
+        RateLimitIntervalSec = log.rateLimitIntervalSec;
+        RateLimitBurst = log.rateLimitBurst;
+        ForwardToSyslog = "no";
         # Pin debug so a unit console at debug (Arti) is stored. trace is
         # not requested. This is not a guest disk size.
-        MaxLevelStore=debug
-      '';
+        MaxLevelStore = "debug";
+      };
 
       # Auth failures and disconnects without passwords. Not DEBUG3.
       # sshd_config DEBUG violates user privacy. VERBOSE stays the level.

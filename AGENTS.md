@@ -345,7 +345,17 @@ Top-level python3, python, and python3Minimal stay throws. Do not
 rebind them. Do not restore systemdMesonPython. python3 stays refused.
 
 glibc's python3Minimal in `nix/glibc-header-gen-overlay.nix` stays.
-No Rust or C replacement for gen-as-const.py was found.
+The glibc 2.44 Makerules recipes that ran python3 on
+scripts/gen-as-const.py now call the Rust program
+surmount-glibc-gen-as-const. The crate is
+crates/surmount-glibc-gen-as-const. The overlay edit is
+nix/glibc-header-gen-overlay.nix. The 32 tests in that crate have
+not been executed, because horizon must not run cargo test and
+surmount-1 was building Determinate Nix. python3Minimal stays on the
+glibc native build inputs because configure.ac and
+locale/gen-translit.py still need an interpreter. Top-level
+python3Minimal stays a throw. This is not a claim that the mail host
+has no Python left.
 
 logind stays enabled. Do not disable systemd, networking, sshd,
 journald, PAM, or nix-daemon.
@@ -622,6 +632,104 @@ deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps).
 activates the host. Those are different programs. Both are real
 switches. Agents must not run either. `just deploy-dry-run` and
 `just deploy-host -- --dry-run` stay the dry-run.
+
+See *A green dry-run is not a successful deploy (operator 2026-11-25)*.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## A green dry-run is not a successful deploy (operator 2026-11-25)
+
+Operator direction 2026-11-25. A green `just deploy-dry-run` is not
+evidence that `just deploy` will succeed. They are different programs.
+`just deploy-dry-run` builds the closure and does not switch. `just
+deploy` copies with deploy-rs and activates.
+
+Activation can stop network units, drop SSH, and leave a generation
+that fails the next boot. Agents do not run `just deploy` to discover
+those failures. The 2026-11-25 override that said to keep running
+`just deploy` until it worked is withdrawn. If a real deploy fails,
+the operator rolls it back and the dry-run was incomplete.
+
+The next work is to make the dry-run fail on that same class of
+problem. Do not resume a deploy-until-green loop. The section *Do not
+stop before a passing dry-run (operator 2026-11-09)* stays. This
+section does not weaken it.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Dry-runs expose flaws and compile in parallel (operator 2026-11-25)
+
+Operator 2026-11-25, always remember. A dry-run has to expose real
+flaws in the software. A green `just deploy-dry-run` is still not a
+successful `just deploy`. The dry-run must not be slow. Compilation
+has to run in parallel.
+
+A job cap is not a parallel build. `nix.conf`, `--max-jobs`,
+`--cores`, `MAKEFLAGS`, `NIX_BUILD_CORES`, and `CARGO_BUILD_JOBS` are
+settings. The proof is a live process list on surmount-1 with several
+compilers running at the same time (`rustc`, `cc1`, `cc1plus`, or
+ninja workers) and a busy-CPU count from that same turn. The maximum
+is 32. Do not go above 32. scram stays.
+
+Do not add naive shell scripts for this work. Use idiomatic Nix flakes
+and Rust tooling. No Python program. No handwritten C. No Meson
+program body in a Nix file we own. The existing systemd meson
+exception stays only for systemd.
+
+Audit every dependency and every transitive dependency for CVEs.
+Supply-chain attacks are in scope. A test-only crate is in scope. Do
+not add an ignore to silence an advisory. `cargo update` and `cargo
+audit` stay one pair. The audit command remains `just audit-remote` on
+surmount-1. Do not point cargo at crates.io to skip the menhera
+cooldown.
+
+Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
+
+## Parallel dry-run, niceness stays (operator 2026-11-25)
+
+surmount-1 builds stay maximally nice: `nice -n 19` and idle ionice.
+Removing niceness does not make a one-core build faster. Niceness
+stays so mail stays ahead when the build is actually wide.
+
+The width is 32. surmount-1 has 64 cores. 32 is the cap. scram stays.
+A flag, a `nix.conf` line, or `eval-cores` is not a parallel build.
+The proof is a process list during the compile with more than one of
+rustc, cc1, cc1plus, or ninja, and a busy-CPU count from that same
+sample.
+
+`just deploy-dry-run` is one `nix run .#deploy-dry-run`. It must not
+lead with a second `nix-instantiate` of the mail-host config. The
+checks in `tests/dry-run-reveals-deploy.nix` fail that build from
+inside the Nix graph. A green dry-run is not a successful `just
+deploy`.
+
+The dry-run Nix is pinned Determinate Nix 3.11.1 or later.
+`eval-cores` is 32, not 0. Their parallel-eval page lists search,
+flake check, flake show, and `nix eval --json`. It does not claim
+`nix build` of one NixOS configuration is parallel. Quote
+`nix --version` and the busy-CPU count during eval. See
+[Determinate Nix parallel eval](https://docs.determinate.systems/determinate-nix/parallel-eval)
+(accessed: 2026-11-25).
+
+No new shell scripts are added for this work. The work uses Rust and
+Nix. No new handwritten C is added. Every Python use is replaced with
+Rust or an existing maintained C tool. If neither exists, stop and
+name the program. The glibc 2.44 Makerules recipes that ran python3
+on scripts/gen-as-const.py now call the Rust program
+surmount-glibc-gen-as-const. The crate is
+crates/surmount-glibc-gen-as-const. The overlay edit is
+nix/glibc-header-gen-overlay.nix. The 32 tests in that crate have
+not been executed, because horizon must not run cargo test and
+surmount-1 was building Determinate Nix. python3Minimal stays on the
+glibc native build inputs because configure.ac and
+locale/gen-translit.py still need an interpreter. Top-level
+python3Minimal stays a throw. This is not a claim that the mail host
+has no Python left.
+
+No cargo-audit ignore remains. Transitive crates count. `just
+audit-remote` is the command. paste RUSTSEC-2024-0436 and heapless
+0.8.0 are fixed or the report stops and names them. The ignore does
+not go back.
 
 Dual-pin [docs/COMPACTION-PIN.md](docs/COMPACTION-PIN.md).
 

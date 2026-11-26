@@ -1,0 +1,24 @@
+[package]
+name = "surmount-glibc-gen-as-const"
+version = "0.1.0"
+edition = "2021"
+license = "Unlicense"
+publish = false
+description = "Replacement for glibc 2.44 scripts/gen-as-const.py"
+autobins = false
+
+[[bin]]
+name = "surmount-glibc-gen-as-const"
+path = "src/main.rs"
+
+# Test double for the compiler probe. The Nix package deletes this
+# binary after `cargo test`. It is not the program glibc runs.
+[[bin]]
+name = "fake-cc"
+path = "src/bin/fake-cc.rs"
+test = false
+doc = false
+
+[lib]
+name = "surmount_glibc_gen_as_const"
+path = "src/lib.rs"

@@ -70,13 +70,27 @@ let
       path = bin;
     }) names
   );
+  # Evaluating deploy-dry-run.program forces withFlake self .ok.
+  # The passed app is the symlink. The check does not import this file
+  # on that path, and it does not call getFlake.
+  appFor = name:
+    let
+      plain = {
+        type = "app";
+        program = "${farm}/${name}";
+      };
+    in
+    if name == "deploy-dry-run" then
+      (import ./deploy-dry-run-check.nix {
+        inherit self system;
+        app = plain;
+      }).deploy-dry-run
+    else
+      plain;
 in
 builtins.listToAttrs (
   map (name: {
     inherit name;
-    value = {
-      type = "app";
-      program = "${farm}/${name}";
-    };
+    value = appFor name;
   }) names
 )

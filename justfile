@@ -71,7 +71,7 @@ publish *args:
 deploy *args:
     nix run .#deploy -- "$@"
 
-# Does not activate and does not SSH a rollback. Not deploy-rs.
+# Does not activate and does not SSH a rollback. Not deploy-rs. That eval is a horizon check of tests/dry-run-reveals-deploy.nix, and running it on surmount-1 blocked the closure build on one CPU.
 deploy-dry-run *args:
     nix run .#deploy-dry-run -- "$@"
 

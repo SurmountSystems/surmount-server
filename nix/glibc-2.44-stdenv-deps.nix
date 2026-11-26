@@ -15,9 +15,10 @@
 # linuxHeaders. The source stays glibc 2.44, which provides
 # GLIBC_2.43 and GLIBC_2.44. The allow-list is not cleared.
 #
-# python3Minimal is the gen-as-const interpreter from a nixpkgs import
-# that does not carry the top-level throw. This file does not assign
-# python3, python3Minimal, or pythonPackages.
+# python3Minimal stays for configure.ac (python3 or python is a
+# critical program) and for locale/gen-translit.py. It is not the
+# gen-as-const interpreter. Makerules calls surmount-glibc-gen-as-const.
+# This file does not assign python3, python3Minimal, or pythonPackages.
 nixpkgs244: final: prev:
 let
   lib = prev.lib;
@@ -35,6 +36,9 @@ let
     // lib.optionalAttrs (hostArch != null && hostArch != "") { gcc.arch = hostArch; };
   };
   glibcPython = upstreamPkgs.python3Minimal;
+  genAsConst = import ./packages/glibc-gen-as-const.nix {
+    system = prev.stdenv.hostPlatform.system;
+  };
   # final.libidn2 is the bootstrap libidn2 after stdenvOverrides
   # (nuke-refs in the stage that builds glibc). That is the path
   # stdenv-linux allowedRequisites names. final.linuxHeaders is the
@@ -48,8 +52,14 @@ if builtins.match "2\\.(4[4-9]|[5-9][0-9]).*" version == null then
   throw "mail-host glibc must be a released 2.44 or newer, got ${version}"
 else
   {
-    glibc = callPackage glibcDir {
+    # The 2.44 expression lists python3Minimal. Keep that input.
+    # Append the Rust program and rewrite the three Makerules recipes
+    # that used to run scripts/gen-as-const.py under $(PYTHON).
+    glibc = (callPackage glibcDir {
       stdenv = final.gccStdenv;
       linuxHeaders = final.linuxHeaders;
-    };
+    }).overrideAttrs (old: {
+      nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ genAsConst ];
+      postPatch = (old.postPatch or "") + genAsConst.makerulesEdit;
+    });
   }

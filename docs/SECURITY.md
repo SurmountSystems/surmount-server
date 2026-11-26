@@ -87,8 +87,8 @@ patches i18n-config to kellpossible/cargo-i18n rev
 `2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4`, still version 0.4.8, which
 uses the toml crate. Do not ignore those four advisories. Do not fetch
 crates.io to skip menhera. Drop each git line when 10d lists the
-patched registry version. The only cargo-audit ignore stays
-RUSTSEC-2024-0436 (`paste`).
+patched registry version. The audit command does not pass --ignore. The
+ignore list was removed on 2026-11-25.
 
 On 2026-09-26 the lock replaced registry faster-hex 0.10.0 with git tag
 v0.10.1 (rev `c817979830ea5be2eafe0b0c99cb83b017ae2b8f`) for
@@ -117,10 +117,16 @@ paste or proc-macro-error. The crates run inside rustc while the UI is
 compiled. They are not in the mail server process and not in the running
 management UI process. A lockfile pin means a later crates.io upload
 does not enter the build until someone updates the lock. Do not vendor
-Leptos to clear paste. Do not ignore any other advisory.
-`checks.*.cargo-audit` passes `--ignore RUSTSEC-2024-0436` only, and it
-still passes `--deny warnings`. `RUSTSEC-2026-0173` is not in this lock,
-so that ignore is gone.
+Leptos to clear paste. The audit command does not pass --ignore. The
+ignore list was removed on 2026-11-25. paste 1.0.15, advisory
+RUSTSEC-2024-0436, has no patched release. Dependents in Cargo.lock are
+either_of 0.1.9, leptos 0.8.23, reactive_graph 0.2.16, reactive_stores
+0.4.4, and tachys 0.2.19. The ignore was not put back. heapless 0.8.0 is
+below the patched line >=0.9.4 (RUSTSEC-2026-0580). faster-hex 0.10.1
+requires heapless ^0.8 when alloc is off. nostr 0.45.7 requires
+faster-hex ^0.10. Heapless 0.9 was not forced onto that requirement. No
+ignore was added. just audit-remote has not been run since the ignore
+was removed. Do not claim a new exit code.
 proc-macro-error3 stays because i18n-embed-fl 0.10.1 uses it. See
 `.cargo/audit.toml` and
 [research/cargo-audit-2026-08-26.md](research/cargo-audit-2026-08-26.md).
@@ -150,7 +156,7 @@ See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
 and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
 (accessed: 2026-10-10).
 
-On 2026-10-18, `cargo update -p paste -p leptos -p either_of -p reactive_graph -p reactive_stores -p tachys` on the menhera-cooldown index locked 0 packages. `paste` stayed 1.0.15. `proc-macro-error2` is not in `Cargo.lock`. The locked advisory for RUSTSEC-2024-0436 has `patched = []`. The locked advisory for RUSTSEC-2026-0173 has `patched = []` and names `proc-macro-error2`. cargo-audit 0.22.1 with `--deny warnings` and no ignore, against that advisory database and this lock, exited 1 and reported only RUSTSEC-2024-0436. The same command with `--ignore RUSTSEC-2024-0436` is what `checks.*.cargo-audit` runs. A `[patch.crates-io]` of paste to pastey 0.2.3 was rejected as the same source, and a path patch of package `pastey` version 1.0.15 was not used in the crate graph. Leptos 0.8.22 and 0.9.0-rc0 still depend on `paste` 1.0. Do not vendor Leptos to clear paste.
+On 2026-10-18, `cargo update -p paste -p leptos -p either_of -p reactive_graph -p reactive_stores -p tachys` on the menhera-cooldown index locked 0 packages. `paste` stayed 1.0.15. `proc-macro-error2` is not in `Cargo.lock`. The locked advisory for RUSTSEC-2024-0436 has `patched = []`. The locked advisory for RUSTSEC-2026-0173 has `patched = []` and names `proc-macro-error2`. cargo-audit 0.22.1 with `--deny warnings` and no ignore, against that advisory database and this lock, exited 1 and reported only RUSTSEC-2024-0436. On that date, `checks.*.cargo-audit` ran the same command with `--ignore RUSTSEC-2024-0436`. The audit command does not pass --ignore. The ignore list was removed on 2026-11-25. A `[patch.crates-io]` of paste to pastey 0.2.3 was rejected as the same source, and a path patch of package `pastey` version 1.0.15 was not used in the crate graph. Leptos 0.8.22 and 0.9.0-rc0 still depend on `paste` 1.0. Do not vendor Leptos to clear paste.
 See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
 and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
 (accessed: 2026-10-18).

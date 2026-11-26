@@ -166,12 +166,16 @@ Ladder detail: [fix-and-fixos.md](fix-and-fixos.md).
 | **Existing Rust first, and every dry-run root together** | Operator 2026-11-07: replace a Python step with an existing Rust project. Prefer Rust over C. An existing C project is only the fallback when no Rust project does that job. Do not write a new C program from scratch. The homemade C files this session added under `nix/packages/` are not that replacement. Jinja templates have existing Rust renderers. MiniJinja is one (https://github.com/mitsuhiko/minijinja, accessed: 2026-11-07). Do not reject a Rust renderer because it is not a line-for-line copy of the Python script, and do not write a C renderer in its place. One `just deploy-dry-run` transcript is the full failure list (`--keep-going` is already on the build line). Fix every builder-failed root from that transcript before the next dry-run. Do not fix one root and rerun while other roots from the same transcript remain. Dependents of a failed root are not extra roots. Later the same day, handwritten C is forbidden. See the next row. Dual-pin `AGENTS.md` section *Existing Rust or C, and every dry-run root together*. |
 | **Handwritten C is forbidden** | Operator 2026-11-07, always remember. Handwritten C is forbidden in this repo. That includes a `.c` or `.h` file, and C embedded in Nix, bash, a patch, or any other file that emits a C program at build time. The operator cannot audit that code. Removing Python is to shrink the attack surface. Handwritten C is the same class of unauditable code. Upstream projects that are written in C may remain as dependencies. Do not replace removed C with new C. Remove every `.c` and `.h` file we added. Dual-pin `AGENTS.md` section *Handwritten C is forbidden*. |
 | **No Python script and no C program inside Nix** | Operator 2026-11-08, always remember. Do not inline a Python script in a Nix file. Do not inline a C program in a Nix file. A build-phase string must not carry a Python program body or a C program body. Renaming a `.py` file, hiding that text in `printf` or `cat`, or stuffing the same text into a patch is the same violation. Use an existing Rust tool, or change the build so the missing program is not invoked. Do not add a package whose name contains python. A Nix file we own must not carry a Meson program body. That includes meson.build text, a muon rewrite, a dependency() method sentence, an install_headers rewrite, or a PKG_CONFIG_PATH prepend whose purpose is to patch a Meson lookup. Hiding that text by rename, printf, cat, or a patch is the same forbid. Upstream packages may still be built by their own upstream build system. Our Nix files do not contain that program text. Operator 2026-11-08 stopped the Meson-in-Nix and C-in-Nix patching line. Dual-pin `AGENTS.md` section *No Python script and no C program inside Nix (operator 2026-11-08)*. |
-| **systemd meson.build may drop python3 (operator 2026-11-20)** | Operator direction 2026-11-20 allows a change to systemd's meson.build on this mail host. The change exists only to remove the required python3 plus jinja2 find_installation and to call minijinja for the templates that script rendered. This is not permission to rebind python3, to disable systemd or logind, or to paste a Meson program body for any other package. Top-level python3, python, and python3Minimal stay throws. Do not rebind them. Do not restore systemdMesonPython. python3 stays refused. glibc's python3Minimal in `nix/glibc-header-gen-overlay.nix` stays. No Rust or C replacement for gen-as-const.py was found. logind stays enabled. Do not disable systemd, networking, sshd, journald, PAM, or nix-daemon. Every other package still must not carry a Meson program body in a Nix file we own. The row above still forbids that. This row does not weaken that forbid. Dual-pin `AGENTS.md` section *systemd meson.build may drop python3 (operator 2026-11-20)*. |
+| **systemd meson.build may drop python3 (operator 2026-11-20)** | Operator direction 2026-11-20 allows a change to systemd's meson.build on this mail host. The change exists only to remove the required python3 plus jinja2 find_installation and to call minijinja for the templates that script rendered. This is not permission to rebind python3, to disable systemd or logind, or to paste a Meson program body for any other package. Top-level python3, python, and python3Minimal stay throws. Do not rebind them. Do not restore systemdMesonPython. python3 stays refused. glibc's python3Minimal in `nix/glibc-header-gen-overlay.nix` stays. The glibc 2.44 Makerules recipes that ran python3 on scripts/gen-as-const.py now call the Rust program surmount-glibc-gen-as-const. The crate is crates/surmount-glibc-gen-as-const. The overlay edit is nix/glibc-header-gen-overlay.nix. The 32 tests in that crate have not been executed, because horizon must not run cargo test and surmount-1 was building Determinate Nix. python3Minimal stays on the glibc native build inputs because configure.ac and locale/gen-translit.py still need an interpreter. Top-level python3Minimal stays a throw. This is not a claim that the mail host has no Python left. logind stays enabled. Do not disable systemd, networking, sshd, journald, PAM, or nix-daemon. Every other package still must not carry a Meson program body in a Nix file we own. The row above still forbids that. This row does not weaken that forbid. Dual-pin `AGENTS.md` section *systemd meson.build may drop python3 (operator 2026-11-20)*. |
+| **glibc Makerules call surmount-glibc-gen-as-const** | The glibc 2.44 Makerules recipes that ran python3 on scripts/gen-as-const.py now call the Rust program surmount-glibc-gen-as-const. The crate is crates/surmount-glibc-gen-as-const. The overlay edit is nix/glibc-header-gen-overlay.nix. The 32 tests in that crate have not been executed, because horizon must not run cargo test and surmount-1 was building Determinate Nix. python3Minimal stays on the glibc native build inputs because configure.ac and locale/gen-translit.py still need an interpreter. Top-level python3Minimal stays a throw. This is not a claim that the mail host has no Python left. Dual-pin `AGENTS.md` section *systemd meson.build may drop python3 (operator 2026-11-20)* and section *Parallel dry-run, niceness stays (operator 2026-11-25)*. |
 | **No nginx product edge** | In-tree nginx is **transitional-to-delete**. Target **first-party Axum** HTTPS edge. [EDGE_AND_TLS.md](EDGE_AND_TLS.md). |
 | **No Cloudflare products** | Direct-to-VPS path required. CF Research blog posts may be **cited for learning** only. No orange-cloud, Workers, Tunnel, CF WAF, CF Access as critical path. |
 | **Git index: stage a new file only** | The index is how the operator tracks agent work. `git add -- <path>` is allowed only for a path git does not track yet. If several new files are required, stage each new path and nothing else. Do not `git add .`. Do not stage modifications of files that are already tracked. Do not unstage, restore, or reset (`git restore --staged`, `git reset`, `git rm --cached`). Do not commit. Do not push. Do not "clean up" the index. Finding a staged tree is not a reason to unstage. Operator 2026-08-28 stop-touching-Git does not cancel the 2026-11-18 new-file carve-out. Dual-pin `AGENTS.md` section *New file git add, and the builder is back (operator 2026-11-18)* and host `~/.grok/AGENTS.md`. |
 | **Test and deploy procedure** | 2026-10-12: the update, audit, test, and switch command block is [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md) section *Update, audit, test, and switch*. `nix flake update`, then `cargo update`, then `just audit-remote`, `just check-remote`, `just check-heavy`, `just deploy-dry-run`, `just btop`, `just deploy`. No `just` recipe for the first two. 2026-10-05: `just publish` is the static-site command. `just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). `just deploy-dry-run` is the agent dry-run. `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Those are different programs. Both are real switches. Agents must not run either. `just deploy-host` has no default target. 2026-09-20: [TEST-AND-DEPLOY.md](TEST-AND-DEPLOY.md). Agent runs named eval, `just check-remote`, and the dry-run. Operator does not run those to find errors. Operator runs a real switch with Eternal Terminal open. Dual-pin `AGENTS.md` Deploy dry-run is agent work. |
-| **Do not stop before a passing dry-run (operator 2026-11-09)** | Never stop until just deploy-dry-run exits 0. The operator will not run just deploy until that dry-run passes. Stopping to ask the operator to deploy, or ending the task before a green dry-run, wastes the operator's time. The agent runs the dry-run. Agents must not run real `just deploy` unless the operator overrides. `just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Those are different programs. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. Dual-pin `AGENTS.md` section *Do not stop before a passing dry-run (operator 2026-11-09)*. |
+| **Do not stop before a passing dry-run (operator 2026-11-09)** | Never stop until just deploy-dry-run exits 0. The operator will not run just deploy until that dry-run passes. Stopping to ask the operator to deploy, or ending the task before a green dry-run, wastes the operator's time. The agent runs the dry-run. Agents must not run real `just deploy` unless the operator overrides. `just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Those are different programs. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. See *A green dry-run is not a successful deploy (operator 2026-11-25)*. Dual-pin `AGENTS.md` section *Do not stop before a passing dry-run (operator 2026-11-09)*. |
+| **A green dry-run is not a successful deploy (operator 2026-11-25)** | Operator direction 2026-11-25. A green `just deploy-dry-run` is not evidence that `just deploy` will succeed. They are different programs. `just deploy-dry-run` builds the closure and does not switch. `just deploy` copies with deploy-rs and activates. Activation can stop network units, drop SSH, and leave a generation that fails the next boot. Agents do not run `just deploy` to discover those failures. The 2026-11-25 override that said to keep running `just deploy` until it worked is withdrawn. If a real deploy fails, the operator rolls it back and the dry-run was incomplete. The next work is to make the dry-run fail on that same class of problem. Do not resume a deploy-until-green loop. The row *Do not stop before a passing dry-run (operator 2026-11-09)* stays. This row does not weaken it. Dual-pin `AGENTS.md` section *A green dry-run is not a successful deploy (operator 2026-11-25)*. |
+| **Dry-runs expose flaws and compile in parallel (operator 2026-11-25)** | Operator 2026-11-25, always remember. A dry-run has to expose real flaws in the software. A green `just deploy-dry-run` is still not a successful `just deploy`. The dry-run must not be slow. Compilation has to run in parallel. A job cap is not a parallel build. `nix.conf`, `--max-jobs`, `--cores`, `MAKEFLAGS`, `NIX_BUILD_CORES`, and `CARGO_BUILD_JOBS` are settings. The proof is a live process list on surmount-1 with several compilers running at the same time (`rustc`, `cc1`, `cc1plus`, or ninja workers) and a busy-CPU count from that same turn. The maximum is 32. Do not go above 32. scram stays. Do not add naive shell scripts for this work. Use idiomatic Nix flakes and Rust tooling. No Python program. No handwritten C. No Meson program body in a Nix file we own. The existing systemd meson exception stays only for systemd. Audit every dependency and every transitive dependency for CVEs. Supply-chain attacks are in scope. A test-only crate is in scope. Do not add an ignore to silence an advisory. `cargo update` and `cargo audit` stay one pair. The audit command remains `just audit-remote` on surmount-1. Do not point cargo at crates.io to skip the menhera cooldown. See the heading *Dry-runs expose flaws and compile in parallel (operator 2026-11-25)*. Dual-pin `AGENTS.md` section *Dry-runs expose flaws and compile in parallel (operator 2026-11-25)*. |
+| **Parallel dry-run, niceness stays (operator 2026-11-25)** | Operator 2026-11-25. surmount-1 builds stay maximally nice: `nice -n 19` and idle ionice. Removing niceness does not make a one-core build faster. Niceness stays so mail stays ahead when the build is actually wide. The width is 32. surmount-1 has 64 cores. 32 is the cap. scram stays. A flag, a `nix.conf` line, or `eval-cores` is not a parallel build. The proof is a process list during the compile with more than one of rustc, cc1, cc1plus, or ninja, and a busy-CPU count from that same sample. `just deploy-dry-run` is one `nix run .#deploy-dry-run`. It must not lead with a second `nix-instantiate` of the mail-host config. The checks in `tests/dry-run-reveals-deploy.nix` fail that build from inside the Nix graph. A green dry-run is not a successful `just deploy`. The dry-run Nix is pinned Determinate Nix 3.11.1 or later. `eval-cores` is 32, not 0. Their parallel-eval page lists search, flake check, flake show, and `nix eval --json`. It does not claim `nix build` of one NixOS configuration is parallel. Quote `nix --version` and the busy-CPU count during eval. See [Determinate Nix parallel eval](https://docs.determinate.systems/determinate-nix/parallel-eval) (accessed: 2026-11-25). No new shell scripts are added for this work. The work uses Rust and Nix. No new handwritten C is added. Every Python use is replaced with Rust or an existing maintained C tool. If neither exists, stop and name the program. The glibc 2.44 Makerules recipes that ran python3 on scripts/gen-as-const.py now call the Rust program surmount-glibc-gen-as-const. The crate is crates/surmount-glibc-gen-as-const. The overlay edit is nix/glibc-header-gen-overlay.nix. The 32 tests in that crate have not been executed, because horizon must not run cargo test and surmount-1 was building Determinate Nix. python3Minimal stays on the glibc native build inputs because configure.ac and locale/gen-translit.py still need an interpreter. Top-level python3Minimal stays a throw. This is not a claim that the mail host has no Python left. No cargo-audit ignore remains. Transitive crates count. `just audit-remote` is the command. paste RUSTSEC-2024-0436 and heapless 0.8.0 are fixed or the report stops and names them. The ignore does not go back. See the heading *Parallel dry-run, niceness stays (operator 2026-11-25)*. Dual-pin `AGENTS.md` section *Parallel dry-run, niceness stays (operator 2026-11-25)*. |
 | **Rebuilds must hit the cache (operator 2026-11-09)** | A later dry-run must not recompile a derivation that a previous dry-run already built, unless an input that derivation depends on actually changed. If the same package builds again with no input change, the cache is broken and that is a bug to fix. Do not treat a full rebuild of an unchanged package as normal. Dual-pin `AGENTS.md` section *Rebuilds must hit the cache (operator 2026-11-09)*. |
 | **Trim dependencies to this host (operator 2026-11-09)** | Drop dependencies the mail host configuration does not need. The machine is surmount-1. Keep what that configuration uses. Do not add a package only because nixpkgs pulls it by default. Dual-pin `AGENTS.md` section *Trim dependencies to this host (operator 2026-11-09)*. |
 | **GitHub tracking and git-flow (operator 2026-09-08)** | Same-turn GitHub issue on plan Approve (plan text, no secrets). Same-turn GitHub issue on operator bug reports, with screenshots attached. Agents never GPG-sign and never push. After the operator signs and pushes the feature branch, the agent opens the PR describing the work. Collaborating git uses git-flow `feature/<slug>` and `bugfix/<slug>` branches, not a pile on `main`. Dual-pin `AGENTS.md` and host `~/.grok/AGENTS.md`. |
@@ -197,6 +201,88 @@ Ladder detail: [fix-and-fixos.md](fix-and-fixos.md).
 | **No ADR jargon** | Plain American English: open choices, proposed, scaffold default, research finding. |
 | **ASCII docs** | No em dashes in docs we own. |
 | **No assumed acceptance** | Scaffold and research are not operator lock-in. |
+
+---
+
+## Dry-runs expose flaws and compile in parallel (operator 2026-11-25)
+
+Operator 2026-11-25, always remember. A dry-run has to expose real
+flaws in the software. A green `just deploy-dry-run` is still not a
+successful `just deploy`. The dry-run must not be slow. Compilation
+has to run in parallel.
+
+A job cap is not a parallel build. `nix.conf`, `--max-jobs`,
+`--cores`, `MAKEFLAGS`, `NIX_BUILD_CORES`, and `CARGO_BUILD_JOBS` are
+settings. The proof is a live process list on surmount-1 with several
+compilers running at the same time (`rustc`, `cc1`, `cc1plus`, or
+ninja workers) and a busy-CPU count from that same turn. The maximum
+is 32. Do not go above 32. scram stays.
+
+Do not add naive shell scripts for this work. Use idiomatic Nix flakes
+and Rust tooling. No Python program. No handwritten C. No Meson
+program body in a Nix file we own. The existing systemd meson
+exception stays only for systemd.
+
+Audit every dependency and every transitive dependency for CVEs.
+Supply-chain attacks are in scope. A test-only crate is in scope. Do
+not add an ignore to silence an advisory. `cargo update` and `cargo
+audit` stay one pair. The audit command remains `just audit-remote` on
+surmount-1. Do not point cargo at crates.io to skip the menhera
+cooldown.
+
+Dual-pin [../AGENTS.md](../AGENTS.md) section *Dry-runs expose flaws
+and compile in parallel (operator 2026-11-25)*.
+
+---
+
+## Parallel dry-run, niceness stays (operator 2026-11-25)
+
+surmount-1 builds stay maximally nice: `nice -n 19` and idle ionice.
+Removing niceness does not make a one-core build faster. Niceness
+stays so mail stays ahead when the build is actually wide.
+
+The width is 32. surmount-1 has 64 cores. 32 is the cap. scram stays.
+A flag, a `nix.conf` line, or `eval-cores` is not a parallel build.
+The proof is a process list during the compile with more than one of
+rustc, cc1, cc1plus, or ninja, and a busy-CPU count from that same
+sample.
+
+`just deploy-dry-run` is one `nix run .#deploy-dry-run`. It must not
+lead with a second `nix-instantiate` of the mail-host config. The
+checks in `tests/dry-run-reveals-deploy.nix` fail that build from
+inside the Nix graph. A green dry-run is not a successful `just
+deploy`.
+
+The dry-run Nix is pinned Determinate Nix 3.11.1 or later.
+`eval-cores` is 32, not 0. Their parallel-eval page lists search,
+flake check, flake show, and `nix eval --json`. It does not claim
+`nix build` of one NixOS configuration is parallel. Quote
+`nix --version` and the busy-CPU count during eval. See
+[Determinate Nix parallel eval](https://docs.determinate.systems/determinate-nix/parallel-eval)
+(accessed: 2026-11-25).
+
+No new shell scripts are added for this work. The work uses Rust and
+Nix. No new handwritten C is added. Every Python use is replaced with
+Rust or an existing maintained C tool. If neither exists, stop and
+name the program. The glibc 2.44 Makerules recipes that ran python3
+on scripts/gen-as-const.py now call the Rust program
+surmount-glibc-gen-as-const. The crate is
+crates/surmount-glibc-gen-as-const. The overlay edit is
+nix/glibc-header-gen-overlay.nix. The 32 tests in that crate have
+not been executed, because horizon must not run cargo test and
+surmount-1 was building Determinate Nix. python3Minimal stays on the
+glibc native build inputs because configure.ac and
+locale/gen-translit.py still need an interpreter. Top-level
+python3Minimal stays a throw. This is not a claim that the mail host
+has no Python left.
+
+No cargo-audit ignore remains. Transitive crates count. `just
+audit-remote` is the command. paste RUSTSEC-2024-0436 and heapless
+0.8.0 are fixed or the report stops and names them. The ignore does
+not go back.
+
+Dual-pin [../AGENTS.md](../AGENTS.md) section *Parallel dry-run,
+niceness stays (operator 2026-11-25)*.
 
 ---
 

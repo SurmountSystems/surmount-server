@@ -17,8 +17,11 @@
 #
 # This overlay selects that glibc. It does not move the mail-host
 # channel off nixos-26.05. It does not add a Python package. The
-# selected expression still lists python3Minimal for
-# scripts/gen-as-const.py. That is the existing generator exception.
+# selected expression still lists python3Minimal because configure.ac
+# requires python3 and locale/gen-translit.py still runs.
+# scripts/gen-as-const.py is not that interpreter.
+# nix/glibc-2.44-stdenv-deps.nix points Makerules at
+# surmount-glibc-gen-as-const.
 #
 # The derivation is built in nix/glibc-2.44-stdenv-deps.nix so its
 # libidn2, libunistring, and linux-headers are this package set's

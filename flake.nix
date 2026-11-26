@@ -18,7 +18,7 @@
 {
   description = "Surmount mail + web NixOS foundation (Stalwart, HTTPS edge, management UI)";
 
-  # Host channel: nixos-26.05. Deploy: just deploy-host /
+  # Host channel: release-26.11. Deploy: just deploy-host /
   # nix run .#surmount-deploy-host (public rsync + private host-local +
   # path: flake rebuild). See docs/deploy-host-local.md. Host-local under
   # ./host-local is auto-imported when present (path flake / remote rsync
@@ -31,7 +31,7 @@
 
   inputs = {
     # Prefer stable for a mail host. Bump deliberately after reading release notes.
-    # Host channel: nixos-26.05 (crane wants >= 26.05; operator direction 2026-08-07).
+    # Host channel: release-26.11 (operator direction 2026-11-25).
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
@@ -39,7 +39,7 @@
     # cargoHash is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=).
     # Builder-login Lean is NOT pkgs.lean4 from this channel (4.29.1).
     # See nix/packages/lean4.nix (official release v4.35.0).
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/release-26.11";
 
     # rustc/cargo for crane packages, Arti, Stalwart, wasm-bindgen, and
     # the mail-host rustc overlay. Not the mail-host channel
@@ -53,8 +53,8 @@
     # rustcVersion = "1.100.0" and bootstrapVersion = "1.100.0".
     # all-packages.nix sets rust = rust_1_100. Prior lock
     # 342414c3be9098a87dd50b560e96842a1c79cb9f was rustc 1.99.1.
-    # Do not add a second nixpkgs input. The mail-host channel stays
-    # nixos-26.05. Crane has no nixpkgs input: mkLib keeps host pkgs and
+    # Do not add a second nixpkgs input. The mail-host channel is
+    # release-26.11. Crane has no nixpkgs input: mkLib keeps host pkgs and
     # overrideToolchain supplies this rustc.
     nixpkgs-rust.url = "github:NixOS/nixpkgs/981724d1e07192596b94a2dcd4bd3c30139cc508";
 
@@ -113,6 +113,17 @@
     # Do not set inputs.nixpkgs.follows. This input keeps its own nixpkgs.
     # Do not import deploy-rs.lib.${system}.deployChecks (Python check-jsonschema).
     deploy-rs.url = "github:serokell/deploy-rs/26e0f241b1b7c6b1717fc7babc4852192886bbc0";
+
+    # Determinate Nix 3.24.2. Tag v3.24.2 is commit
+    # f43bee4f45c2d42e7d1f4e37908ec5c7bb0fdba1.
+    # Release note title is 2026-11-03. Merge commit date is 2026-11-04.
+    # .version-determinate in that commit is 3.24.2, which is newer than
+    # 3.11.1. Parallel evaluation has been available since 3.11.1.
+    # https://docs.determinate.systems/determinate-nix/parallel-eval
+    # (accessed: 2026-11-25). Do not float this input. Do not follow
+    # nixpkgs: that flake pins its own nixpkgs. This pin does not build
+    # packages from the input into the mail-host closure.
+    determinate-nix.url = "github:DeterminateSystems/nix-src/f43bee4f45c2d42e7d1f4e37908ec5c7bb0fdba1";
   };
 
   outputs =
@@ -127,12 +138,15 @@
       advisory-db,
       splora,
       deploy-rs,
+      determinate-nix,
       ...
     }:
     let
       inherit (nixpkgs) lib;
       # Overlay attrs are also named splora / splora-liquid; keep the flake input.
       sploraInput = splora;
+      # Metadata only. Do not evaluate determinate-nix.packages.
+      determinateNixRev = determinate-nix.rev;
 
       systems = [
         "x86_64-linux"
@@ -176,7 +190,7 @@
       glibcHeaderGenOverlay = import ./nix/glibc-header-gen-overlay.nix;
       # After the header overlay. Replaces pkgs.glibc with the released
       # 2.44 already packaged by Splora's locked nixpkgs. The mail-host
-      # channel stays nixos-26.05. Splora's own rev is not moved.
+      # channel is release-26.11. Splora's own rev is not moved.
       glibc244Overlay = import ./nix/glibc-2.44-overlay.nix sploraInput.inputs.nixpkgs;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.
@@ -348,6 +362,9 @@
           );
     in
     {
+      # Locked Determinate Nix revision. Not a package build.
+      inherit determinateNixRev;
+
       nixosModules = {
         default = {
           imports = [
@@ -359,7 +376,7 @@
         surmount = self.nixosModules.default;
       };
 
-      # Primary sample host: mail-vps (nixos-26.05). Generic public path only;
+      # Primary sample host: mail-vps (release-26.11). Generic public path only;
       # real hostname / hardware / SSH keys via ./host-local when present.
       # surmount-mail is a historical product alias (same config).
       # Do not enable public https / Arti / Vaultwarden here without host material.
@@ -1058,13 +1075,11 @@
             pkgs.writeText "arti-onion-package-contract" (builtins.toJSON r.ok);
 
           # Offline RustSec audit of Cargo.lock (no crates.io).
-          # Ignore RUSTSEC-2024-0436 (paste 1.0.15) only. That advisory's
-          # patched list is empty, and menhera-cooldown's newest paste is
-          # 1.0.15. Cargo does not select a pastey patch for crates that
-          # require paste 1.x. proc-macro-error2 (RUSTSEC-2026-0173) is
-          # not in this lock, so that ignore is gone.
-          # See docs/SECURITY.md and .cargo/audit.toml.
-          # --deny warnings stays. Do not ignore any other advisory.
+          # No advisory skip flag. paste 1.0.15 (RUSTSEC-2024-0436) has
+          # no patched version. heapless 0.8.0 is below the patched
+          # line >=0.9.4. faster-hex 0.10.1 requires heapless ^0.8
+          # when the alloc feature is off, so 0.9.4 does not resolve.
+          # --deny warnings stays.
           # yanked.enabled is false because the sandbox has no crates.io
           # index. cargo-audit otherwise prints "couldn't open crates.io
           # index" and still exits 0. The nixos-26.05 cargo-audit binary
@@ -1082,7 +1097,6 @@
                 mkdir -p .cargo "$HOME/.cargo"
                 printf '%s\n' '[yanked]' 'enabled = false' | tee .cargo/audit.toml > "$HOME/.cargo/audit.toml"
                 cargo-audit audit --no-fetch --stale --deny warnings \
-                  --ignore RUSTSEC-2024-0436 \
                   -d ${advisory-db} \
                   -f ${./Cargo.lock}
                 mkdir -p "$out"

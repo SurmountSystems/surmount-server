@@ -2546,6 +2546,12 @@ let
       # still builds. Perl bindings are unchanged.
       libapparmor = prev.libapparmor.override { withPython = false; };
 
+      # libpcap defaults withRdma on Linux. rdma-core's cmake build lists
+      # python3 in nativeBuildInputs. The mail host does not need RDMA
+      # packet capture. withRdma false leaves libpcap and does not rebind
+      # python3. nftables and tcpdump follow this libpcap.
+      libpcap = prev.libpcap.override { withRdma = false; };
+
       # nixpkgs 26.05 passes "-D=linux-4-17=true". Muon rejects the empty key.
       # The real options are linux-4-17 and system-console-users.
       dbus-broker = prev.dbus-broker.overrideAttrs (_old: {
@@ -3032,13 +3038,78 @@ let
             url = "https://ftp.gnu.org/gnu/grub/grub-2.12.tar.gz";
             hash = "sha256-IoRiJHNQ58y0UhCAD0CrpFiI8Mz1upzAtyh5K4Njh/w=";
           };
+          # nixpkgs unifont 18 builds fonts with imagemagick. That
+          # evaluates fontforge, and fontforge evaluates python3.
+          # Grub preConfigure only rewrites /usr/share/fonts so configure
+          # can find a file named unifont.pcf.gz. This is the prebuilt
+          # PCF from the same GNU release. Do not call the unifont
+          # expression. Do not call fontforge.
+          unifontPcf = prev.fetchurl {
+            url = "https://ftp.gnu.org/gnu/unifont/unifont-18.0.01/unifont-18.0.01.pcf.gz";
+            hash = "sha256-P3cCQpyUjwW5eYALZcfhODYU2SRZFieurl040gEBxp8=";
+          };
+          grubFont = prev.runCommand "grub-unifont-pcf" { } ''
+            mkdir -p \
+              "$out/share/fonts/X11/misc" \
+              "$out/share/fonts/unifont" \
+              "$out/share/fonts/misc"
+            cp ${unifontPcf} "$out/share/fonts/X11/misc/unifont.pcf.gz"
+            cp ${unifontPcf} "$out/share/fonts/unifont/unifont.pcf.gz"
+            cp ${unifontPcf} "$out/share/fonts/misc/unifont.pcf.gz"
+          '';
         in
-        prev.grub2.overrideAttrs (old: {
-          # util/resolve.c is compiled with the makefile's -Werror.
-          # cc-wrapper appends NIX_CFLAGS_COMPILE after that flag.
-          NIX_CFLAGS_COMPILE =
-            (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or "")
-            + " -Wno-error=discarded-qualifiers";
+        (prev.grub2.override { unifont = grubFont; }).overrideAttrs (
+          old:
+          let
+            # nixpkgs grub2 does not set this flag. The package does not
+            # set __structuredAttrs (the nixpkgs default is false), so the
+            # one legal place is the derivation argument. When that bool
+            # is true, the one legal place is env. Never both.
+            extra = " -Wno-error=discarded-qualifiers";
+            structured = old.__structuredAttrs or false;
+            prevFlag =
+              if structured then old.env.NIX_CFLAGS_COMPILE or "" else old.NIX_CFLAGS_COMPILE or "";
+            flag =
+              if lib.hasInfix "-Wno-error=discarded-qualifiers" prevFlag then prevFlag else prevFlag + extra;
+            cflags =
+              if structured then
+                {
+                  env = (old.env or { }) // {
+                    NIX_CFLAGS_COMPILE = flag;
+                  };
+                }
+              else
+                {
+                  NIX_CFLAGS_COMPILE = flag;
+                }
+                // lib.optionalAttrs ((old.env or { }) ? NIX_CFLAGS_COMPILE) {
+                  env = builtins.removeAttrs old.env [ "NIX_CFLAGS_COMPILE" ];
+                };
+          in
+          cflags
+          // {
+          # nixpkgs lists python3 in nativeBuildInputs. postPatch already
+          # deletes AM_PATH_PYTHON and the autogen.sh hook. Drop the
+          # element that throws. Do not add an interpreter package.
+          nativeBuildInputs = builtins.filter (
+            dep:
+            let
+              tried = builtins.tryEval dep;
+            in
+            if !tried.success then
+              false
+            else
+              let
+                name = tried.value.name or "";
+                pname = tried.value.pname or "";
+              in
+              !(
+                lib.hasInfix "python" name
+                || lib.hasInfix "Python" name
+                || lib.hasInfix "python" pname
+                || lib.hasInfix "Python" pname
+              )
+          ) (old.nativeBuildInputs or [ ]);
           postPatch = (old.postPatch or "") + ''
                         sed -i '/\.\/autogen\.sh/d' bootstrap.conf
                         chmod u+w configure.ac
@@ -3117,7 +3188,8 @@ let
               exit 1
             fi
           '';
-        });
+          }
+        );
 
       # libnbd 1.22.5 configure.ac AC_ARG_ENABLE([fuse]) documents
       # --disable-fuse. nbdfuse.c uses the FUSE 3 API. This build
@@ -3527,10 +3599,15 @@ let
         });
 
       # CMakeLists.txt requires Python 3.8 when ENABLE_PYTHON_SCRIPTING
-      # is on. Turn the option off. Do not add an interpreter package.
+      # is on. The same expression puts python3.withPackages on the
+      # sys.path patch and on buildInputs. That is the scripting module.
+      # A flag or patch that throws is the scripting path. Drop it.
+      # Do not add an interpreter package.
       fontforge = prev.fontforge.overrideAttrs (old: {
+        patches = builtins.filter (p: (builtins.tryEval p.outPath).success) (old.patches or [ ]);
+        buildInputs = builtins.filter (dep: (builtins.tryEval dep).success) (old.buildInputs or [ ]);
         cmakeFlags =
-          (builtins.filter (flag: flag != "-DENABLE_PYTHON_SCRIPTING=ON") (old.cmakeFlags or [ ]))
+          builtins.filter (flag: (builtins.tryEval flag).success) (old.cmakeFlags or [ ])
           ++ [ "-DENABLE_PYTHON_SCRIPTING=OFF" ];
       });
 
@@ -3682,7 +3759,16 @@ let
           # requires >= 1.8. nix/packages/muon.nix is upstream 0.7.0,
           # which reports 1.11.99. libpkgconf stays disabled there.
           # Docs and tests stay off. No interpreter formal.
-          muonNoDocs = prev.callPackage ./packages/muon.nix { };
+          # curl with pslSupport pulls libpsl, and libpsl is built by this
+          # meson. Muon links curl. pkgs.pkgconf is also built by this
+          # meson. Either input is an eval cycle (systemd, curl, libpsl,
+          # meson, muon, pkgconf). curlMinimal leaves pslSupport false.
+          # pkg-config is the classic wrapper around pkg-config 0.29.2,
+          # not the pkgconf meson build.
+          muonNoDocs = prev.callPackage ./packages/muon.nix {
+            curl = final.curlMinimal;
+            pkgconf = final.pkg-config;
+          };
         in
         prev.stdenvNoCC.mkDerivation {
           pname = "meson";
@@ -3828,10 +3914,9 @@ let
       # bpftool build compiles. Do not add an interpreter package.
       bpftools = prev.bpftools.overrideAttrs (old: {
         # libbpf.c is compiled with -Werror=discarded-qualifiers.
-        # cc-wrapper appends NIX_CFLAGS_COMPILE after that flag.
-        NIX_CFLAGS_COMPILE =
-          (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or "")
-          + " -Wno-error=discarded-qualifiers";
+        # nix/discarded-qualifiers-overlay.nix already sets
+        # NIX_CFLAGS_COMPILE once, as a derivation argument.
+        # Do not append the flag again.
         nativeBuildInputs = builtins.filter (
           dep:
           let
@@ -3897,12 +3982,38 @@ let
       # top-level attribute. Patch that copy the same way.
       linuxPackages = prev.linuxPackages.extend (
         _lpFinal: lpPrev: {
-          bpftools = lpPrev.bpftools.overrideAttrs (old: {
-            # Same flag as the top-level bpftools derivation.
-            # cc-wrapper appends NIX_CFLAGS_COMPILE after -Werror.
-            NIX_CFLAGS_COMPILE =
-              (old.env.NIX_CFLAGS_COMPILE or old.NIX_CFLAGS_COMPILE or "")
-              + " -Wno-error=discarded-qualifiers";
+          bpftools = lpPrev.bpftools.overrideAttrs (
+            old:
+            let
+              # One place only. Structured attrs use env. Otherwise the
+              # derivation argument. Do not copy env into the argument.
+              # Do not append the flag when it is already in that value.
+              extra = " -Wno-error=discarded-qualifiers";
+              structured = old.__structuredAttrs or false;
+              prevFlag =
+                if structured then old.env.NIX_CFLAGS_COMPILE or "" else old.NIX_CFLAGS_COMPILE or "";
+              flag =
+                if lib.hasInfix "-Wno-error=discarded-qualifiers" prevFlag then
+                  prevFlag
+                else
+                  prevFlag + extra;
+              cflags =
+                if structured then
+                  {
+                    env = (old.env or { }) // {
+                      NIX_CFLAGS_COMPILE = flag;
+                    };
+                  }
+                else
+                  {
+                    NIX_CFLAGS_COMPILE = flag;
+                  }
+                  // lib.optionalAttrs ((old.env or { }) ? NIX_CFLAGS_COMPILE) {
+                    env = builtins.removeAttrs old.env [ "NIX_CFLAGS_COMPILE" ];
+                  };
+            in
+            cflags
+            // {
             nativeBuildInputs = builtins.filter (
               dep:
               let
@@ -3960,7 +4071,8 @@ let
                 exit 1
               fi
             '';
-          });
+            }
+          );
           # linux-6.18.60 runs scripts/bpf_doc.py from the kernel tree.
           # That file is not the bpftools copy. Its shebang is
           # /usr/bin/env, which is not in the sandbox, so make stops

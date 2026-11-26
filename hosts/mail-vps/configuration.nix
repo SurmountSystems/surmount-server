@@ -4,7 +4,7 @@
 # hostname on the machine or via a local overlay; do not commit first-deploy
 # box names into this public tree.
 # Flake primary attr: mail-vps. Alias: surmount-mail (same config).
-# Host channel / stateVersion: nixos-26.05.
+# Host channel: release-26.11. stateVersion stays 26.05.
 #
 # Host-local overlay contract (hardware, SSH keys, net, real hostname, PEMs):
 #   docs/deploy-host-local.md  -- private ./host-local at flake root; gitignored;
@@ -138,6 +138,12 @@
   # boot.kexec.enable's default to
   # lib.meta.availableOn pkgs.stdenv.hostPlatform pkgs.kexec-tools.
   # This host does not set boot.kexec.enable = true.
+  # release-26.11 programs/wayland/noctalia.nix assigns
+  # hardware.bluetooth.enable inside mkIf
+  # programs.noctalia.recommendedServices.enable. That enable is not
+  # set true. The option hardware.bluetooth still has to exist for the
+  # definition to type-check. Drop noctalia. Do not restore
+  # services/hardware/bluetooth.nix.
   # systemd-logind stays enabled. switch-to-configuration-ng calls
   # logind.list_users() on every switch.
   disabledModules = [
@@ -156,8 +162,13 @@
     "hardware/xpadneo.nix" # No Xbox controller. hardware.xpadneo.enable is not set true.
     "hardware/facter/bluetooth.nix" # No Facter Bluetooth probe. hardware.facter.detected.bluetooth.enable is not set true.
     "programs/gpaste.nix" # No clipboard manager. programs.gpaste.enable is not set true.
+    "programs/wayland/noctalia.nix" # No Wayland shell. programs.noctalia.enable is not set true.
     "services/x11/display-managers/lightdm-greeters/lomiri.nix" # No LightDM. services.xserver.displayManager.lightdm.greeters.lomiri.enable is not set true.
+    # nixos-26.05 still imports this path. Disabling only the 26.11 path
+    # leaves this file loaded, and it assigns services.gnome.core-os-services
+    # after gnome.nix (which declares that option) is dropped.
     "services/x11/desktop-managers/phosh.nix" # No phone shell. services.xserver.desktopManager.phosh.enable is not set true.
+    "services/desktop-managers/phosh.nix" # No phone shell. services.desktopManager.phosh.enable is not set true. The module moved out of services/x11 on release-26.11 and assigns services.gnome.core-os-services.
     "services/networking/ncdns.nix" # No Namecoin DNS bridge. services.ncdns.enable is not set true.
     "system/boot/systemd/tpm2.nix" # No TPM2 measured boot. systemd.tpm2.enable is not set true.
     "system/boot/kexec.nix" # No kexec reboot. boot.kexec.enable is not set true, and the default evaluates pkgs.kexec-tools.
@@ -328,7 +339,7 @@
   # commit first-deploy box names into this public tree.
   # Product FQDNs stay in surmount.* domain options.
   networking.hostName = lib.mkDefault "mail-vps";
-  # New installs track the flake host channel (nixos-26.05).
+  # New installs track the flake host channel (release-26.11).
   # Do not change stateVersion on a live box without reading NixOS release notes.
   system.stateVersion = "26.05";
 
@@ -341,6 +352,25 @@
     # up and rejected the switch.
     configurationLimit = 3;
   };
+
+  # PID 1 dlopens libkmod.so.2. nixpkgs release-26.11 does not copy
+  # that library onto the initrd search path. Copy the kmod lib output
+  # and set LD_LIBRARY_PATH for PID 1, systemd-udevd, and
+  # systemd-modules-load. release-26.11 removed
+  # boot.initrd.systemd.enable, so this file does not set it.
+  boot.initrd.systemd =
+    let
+      kmodLib = "${lib.getLib config.boot.initrd.systemd.package.kmod}/lib";
+    in
+    {
+      storePaths = [ "${kmodLib}/libkmod.so.2" ];
+      managerEnvironment.LD_LIBRARY_PATH = kmodLib;
+      services.systemd-udevd.environment.LD_LIBRARY_PATH = kmodLib;
+      services.systemd-modules-load.environment.LD_LIBRARY_PATH = kmodLib;
+    };
+
+  # kernel.nix default availableKernelModules does not name virtio_scsi.
+  boot.initrd.availableKernelModules = [ "virtio_scsi" ];
 
   # Install-time root FS placeholder. Replace with nixos-generate-config /
   # disko output for real disks. Do not invent LUKS layout here (Q-HOST-2).
@@ -381,6 +411,19 @@
   programs.fish.generateCompletions = false;
   programs.fish.package = pkgs.fish.override { usePython = false; };
   users.users.root.shell = config.programs.fish.package;
+
+  # nixpkgs nixos/modules/programs/fish.nix (release-26.11, rev 823a281)
+  # lines 244-245 set documentation.man.cache.enable and
+  # documentation.man.cache.generateAtRuntime to mkDefault true when fish
+  # is enabled. The comment there is "Required for man completions".
+  # That starts systemd.services.mandb. man-db.nix line 125 interpolates
+  # manualPages, a buildEnv of every system package. The failed toplevel
+  # named vala-0.56.19 while evaluating that script. A full trace of the
+  # script reaches gtk-doc and gi-docgen, which take python3. Completions
+  # are already off. This host does not run the man-page cache. A plain
+  # false beats fish's mkDefault. Do not rebind python3.
+  documentation.man.cache.enable = false;
+  documentation.man.cache.generateAtRuntime = false;
 
   # ---- Nix -----------------------------------------------------------------
   nix.settings = {

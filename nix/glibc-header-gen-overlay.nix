@@ -3,14 +3,15 @@
 # This file does not assign those names.
 # nix/glibc-2.44-overlay.nix runs after this overlay and replaces
 # the glibc attribute with released glibc 2.44. This file still
-# strips Python from glibcLocales. The 2.44 package expression
-# still lists python3Minimal for scripts/gen-as-const.py.
-# glibc 2.42 configure requires python3 on PATH. Stripping that input
-# rebuilds glibc and configure stops with "python3... no". The library
-# derivation therefore keeps the nixpkgs interpreter from before the
-# throw, as a native build input only. That import is not final.python3
-# and not final.python. It does not replace the configure
-# critical-program check with a colon.
+# strips Python from glibcLocales.
+# scripts/gen-as-const.py is not invoked. Makerules calls
+# surmount-glibc-gen-as-const (nix/packages/glibc-gen-as-const.nix).
+# The .py file stays in the glibc source tree.
+# configure.ac still requires python3 or python on PATH, and
+# locale/gen-translit.py still runs during before-compile. Those are
+# why glibcPython stays. This import is not final.python3 and not
+# final.python. It does not replace the configure critical-program
+# check with a colon.
 # glibcLocales does not run configure, ./configure, or the glibc
 # configure script. Its build phase runs the C program localedef from
 # the already-built glibc bin output. localedef --prefix writes
@@ -33,6 +34,10 @@ let
       // lib.optionalAttrs (hostArch != null && hostArch != "") { gcc.arch = hostArch; };
   };
   glibcPython = upstreamPkgs.python3Minimal;
+  # Separate nixpkgs-rust import (rustc 1.100.0). Not the glibc being built.
+  genAsConst = import ./packages/glibc-gen-as-const.nix {
+    system = prev.stdenv.hostPlatform.system;
+  };
   # glibc common.nix lists python3Minimal in nativeBuildInputs.
   # The mail-host overlay sets that attribute to a throw. isAttrs
   # forces the throw and aborts eval. tryEval drops that element.
@@ -74,8 +79,14 @@ let
   # input the scrub already rewrote. glibcPython is then the only
   # interpreter on this derivation. Configure is not patched. The
   # critical-program check stays in the upstream script.
+  # makerulesEdit stops the three $(PYTHON) recipes that ran
+  # scripts/gen-as-const.py. It does not hide python3 behind a colon.
   glibcLibraryBuild = old: {
-    nativeBuildInputs = (dropPythonNamed (old.nativeBuildInputs or [ ])) ++ [ glibcPython ];
+    nativeBuildInputs = (dropPythonNamed (old.nativeBuildInputs or [ ])) ++ [
+      glibcPython
+      genAsConst
+    ];
+    postPatch = (old.postPatch or "") + genAsConst.makerulesEdit;
   };
   # Do not run glibc configure. localedef is the C binary from the
   # built glibc bin output. The locale archive is the build product.

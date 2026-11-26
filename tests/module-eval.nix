@@ -3063,19 +3063,19 @@ let
   t42-journal-persistent-when-logging-on =
     let
       e = evalSurmount { };
-      extra = e.config.services.journald.extraConfig or "";
-      blob = builtins.replaceStrings [ "\n" ] [ " " ] extra;
+      # release-26.11 removed services.journald.extraConfig.
+      journal = e.config.services.journald.settings.Journal;
     in
     assert failedAssertions e == [ ];
     assert e.config.surmount.logging.enable == true;
-    assert lib.hasInfix "Storage=persistent" blob;
-    assert lib.hasInfix "SystemMaxUse=1G" blob;
-    assert lib.hasInfix "RuntimeMaxUse=256M" blob;
-    assert lib.hasInfix "RateLimitIntervalSec=30s" blob;
-    assert lib.hasInfix "RateLimitBurst=50000" blob;
-    assert lib.hasInfix "MaxRetentionSec=30day" blob;
+    assert journal.Storage == "persistent";
+    assert journal.SystemMaxUse == "1G";
+    assert journal.RuntimeMaxUse == "256M";
+    assert journal.RateLimitIntervalSec == "30s";
+    assert journal.RateLimitBurst == "50000";
+    assert journal.MaxRetentionSec == "30day";
     assert e.config.surmount.logging.maxRetentionSec == "30day";
-    assert lib.hasInfix "ForwardToSyslog=no" blob;
+    assert journal.ForwardToSyslog == "no";
     assert (e.config.services.openssh.settings.LogLevel or "") == "VERBOSE";
     "t42-journal-persistent-when-logging-on-ok";
 
@@ -3644,7 +3644,7 @@ let
         __extraModules = [ ../hosts/mail-vps/configuration.nix ];
       };
       scOf = name: e.config.systemd.services.${name}.serviceConfig;
-      journal = e.config.services.journald.extraConfig or "";
+      journal = e.config.services.journald.settings.Journal;
       ssh = e.config.services.openssh.settings;
       scram = scOf "surmount-scram";
       sshdSc = scOf "sshd";
@@ -3787,8 +3787,8 @@ let
     assert e.config.surmount.web.enable == false;
     assert e.config.services.nginx.enable == false;
     assert e.config.surmount.logging.enable == true;
-    assert lib.hasInfix "MaxLevelStore=debug" journal;
-    assert !(lib.hasInfix "MaxLevelStore=trace" journal);
+    assert journal.MaxLevelStore == "debug";
+    assert journal.MaxLevelStore != "trace";
     assert e.config.networking.firewall.logRefusedConnections == true;
     assert (e.config.networking.firewall.logRefusedPackets or false) == false;
     assert (e.config.networking.firewall.rejectPackets or false) == false;
@@ -4355,10 +4355,11 @@ let
   # under those roots fails this assert. A derivation whose name or pname
   # contains python, python3, pythonPackages, dbus-python, pandas, pip, or
   # json-schema-for-humans fails the same walk. The glibc library's
-  # python3Minimal is a native build input for scripts/gen-as-const.py.
-  # Installed glibc outputs do not reference it, so that one configure
-  # edge is not an install reference. Any other python introducer still
-  # fails. An empty walk does not pass.
+  # python3Minimal stays for configure.ac and locale/gen-translit.py.
+  # scripts/gen-as-const.py is not invoked. Installed glibc outputs do
+  # not reference that interpreter, so the configure edge is not an
+  # install reference. Any other python introducer still fails. An
+  # empty walk does not pass.
   t73-no-haskell-mail-host-closure =
     let
       e = evalSurmount {
@@ -4691,6 +4692,45 @@ let
     assert sourceHas "writeShellScriptBin" ../nix/overlays.nix;
     "t73-no-haskell-mail-host-closure-ok";
 
+  # Mail sample (hosts/mail-vps/configuration.nix, no host-local).
+  # PID 1 dlopens libkmod.so.2. The initrd must copy that library via
+  # boot.initrd.systemd.storePaths, set LD_LIBRARY_PATH to the kmod lib
+  # directory for PID 1, systemd-udevd, and systemd-modules-load, and
+  # the initrd module list must name virtio_scsi. release-26.11 removed
+  # boot.initrd.systemd.enable, so this contract does not read that option.
+  t74-mail-vps-classic-initrd =
+    let
+      e = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      # storePaths entries are submodules ({ source, target, enable, dlopen }),
+      # not bare strings. Coercing the set throws.
+      kmodPresent = lib.any (
+        p: p.enable && lib.hasInfix "libkmod.so.2" (toString p.source)
+      ) e.config.boot.initrd.systemd.storePaths;
+      virtioScsi = lib.elem "virtio_scsi" e.config.boot.initrd.availableKernelModules;
+      kmodLib = "${lib.getLib e.config.boot.initrd.systemd.package.kmod}/lib";
+      ldMatches = value: value != null && toString value == kmodLib;
+      envLd = env: env.LD_LIBRARY_PATH or null;
+    in
+    assert lib.assertMsg kmodPresent
+      "libkmod.so.2 is absent from boot.initrd.systemd.storePaths";
+    assert lib.assertMsg virtioScsi
+      "mail-vps boot.initrd.availableKernelModules must include virtio_scsi";
+    assert lib.assertMsg (ldMatches (envLd e.config.boot.initrd.systemd.managerEnvironment))
+      "boot.initrd.systemd.managerEnvironment.LD_LIBRARY_PATH must be the kmod lib directory";
+    assert lib.assertMsg (
+      ldMatches (envLd e.config.boot.initrd.systemd.services.systemd-udevd.environment)
+    ) "boot.initrd.systemd.services.systemd-udevd.environment.LD_LIBRARY_PATH must be the kmod lib directory";
+    assert lib.assertMsg (
+      ldMatches (envLd e.config.boot.initrd.systemd.services.systemd-modules-load.environment)
+    ) "boot.initrd.systemd.services.systemd-modules-load.environment.LD_LIBRARY_PATH must be the kmod lib directory";
+    assert lib.assertMsg (failedAssertions e == [ ]) (
+      "mail-vps assertions failed: "
+      + lib.concatMapStringsSep " | " (a: a.message) (failedAssertions e)
+    );
+    "t74-mail-vps-classic-initrd-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -4827,11 +4867,16 @@ let
     t71-splora-popular-scripts-journal-burst
     t72-nix-daemon-journal-when-builder-on
     t73-no-haskell-mail-host-closure
+    t74-mail-vps-classic-initrd
   ];
 in
 {
   inherit results;
-  ok = [ t73-no-haskell-mail-host-closure ];
+  # t74 is first so a libkmod.so.2 miss fails before the closure walk.
+  ok = [
+    t74-mail-vps-classic-initrd
+    t73-no-haskell-mail-host-closure
+  ];
   inherit t41b-static-vhosts-default-proven-roots;
   inherit
     t53-splora-ui-extra-groups-when-both-on
