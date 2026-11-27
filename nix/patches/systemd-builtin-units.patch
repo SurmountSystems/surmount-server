@@ -1,0 +1,15 @@
+--- a/src/core/meson.build
++++ b/src/core/meson.build
+@@ -136,10 +136,11 @@
+         capture : true)
+ 
+ generate_builtin_units = files('generate-builtin-units.py')
++surmount_systemd_builtin_units = find_program('surmount-systemd-builtin-units', native : true)
+ builtin_units_inc = custom_target(
+         input : [generate_builtin_units, embedded_units],
+         output : 'builtin-units.inc',
+-        command : [python, generate_builtin_units, embedded_units],
++        command : [surmount_systemd_builtin_units, embedded_units],
+         capture : true)
+ 
+ generate_bpf_delegate_configs = files('generate-bpf-delegate-configs.py')

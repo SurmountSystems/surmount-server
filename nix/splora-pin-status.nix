@@ -4,7 +4,7 @@
 # has to match expected or this file throws.
 { lib, sploraRev }:
 let
-  expected = "79e0cae72e6e3d709465929c04866575f0acdd6e";
+  expected = "1a50824e06dec0680ea7e414255970e8618ddf13";
 in
 if !lib.isString sploraRev || sploraRev != expected then
   throw "splora status pin is ${toString sploraRev}, expected ${expected}"

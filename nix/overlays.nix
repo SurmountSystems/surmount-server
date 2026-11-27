@@ -18,6 +18,9 @@
 #             Not nix-everything. Safe on checks (mkPkgs) and on the
 #             mail host. The loader is pkgs.glibc. The mail-vps overlay
 #             list replaces that glibc with 2.44.
+#             libcap stays the C library. withGo is false and makeFlags
+#             pass GOLANG=no (nix/libcap-without-go-overlay.nix).
+#             htop is not added.
 #   tzdata    tzdata 2026e now.ck uses the NEWS release time.
 #             Appends that preCheck. Does not replace an earlier one.
 #             Mail-host nixosSystem, and the module-eval closure walk.
@@ -412,6 +415,13 @@ let
         '';
       };
 
+      # std-only replacement for generate-builtin-units.py.
+      # Same nixpkgs-rust pin as surmount-glibc-gen-as-const.
+      # Does not bind python, python3, or python3Minimal.
+      builtinUnitsGen = import ./packages/systemd-builtin-units.nix {
+        system = prev.stdenv.hostPlatform.system;
+      };
+
       # The ukify target still runs the jinja renderer. Drop that target.
       # Keep subdir('man') and the xsltproc pages.
       # The filter below drops native build inputs whose names contain
@@ -436,6 +446,14 @@ let
           # Bootloader stays disabled. Do not rebind python3.
           patches = (old.patches or [ ]) ++ [
             ./patches/systemd-no-python-jinja.patch
+            ./patches/systemd-builtin-units.patch
+            ./patches/systemd-no-extract-objects.patch
+            # Importers recompile exported sources, so they need the
+            # exporter cflags. libacl_cflags and libarchive_cflags are
+            # those dependencies. Do not restore extract_objects.
+            ./patches/systemd-import-cflags.patch
+            # compile_commands.json is not installed. BPF objects stay.
+            ./patches/systemd-no-bpf-compdb.patch
           ];
           # Stock auto-patchelf is a python script with a /usr/bin/env
           # shebang. Do not install a replacement walker. The hook is
@@ -469,6 +487,7 @@ let
             kept
             ++ [
               minijinjaCli
+              builtinUnitsGen
               # mount.pc and libseccomp.pc. The setup hook publishes them.
               # This is not a PKG_CONFIG_PATH prepend.
               (prev.lib.getDev prev.util-linuxMinimal)
@@ -879,18 +898,23 @@ let
                           # same path is also -I. GCC ignores -I for a directory
                           # that is also -isystem, then searches uapi first. uapi
                           # linux/fs.h and linux/magic.h do not define
-                          # FILEID_KERNFS or GFS2_MAGIC. uapi linux/keyctl.h does
+                          # FILEID_KERNFS or GFS2_MAGIC. uapi linux/nsfs.h does
+                          # not define FILEID_NSFS. uapi linux/keyctl.h does
                           # not define key_serial_t. The upstream override
-                          # linux/keyctl.h does, when KEY_POS_VIEW is unset.
+                          # linux/nsfs.h defines FILEID_NSFS. The upstream
+                          # override linux/keyctl.h defines key_serial_t when
+                          # KEY_POS_VIEW is unset.
                           # Copy those existing headers to a directory meson does
                           # not pass as -isystem so -I is not ignored. uapi stays
                           # the first -isystem linux directory, so include_next
-                          # from the keyctl.h copy reaches uapi before the
+                          # from the copied header reaches uapi before the
                           # original override. Do not -D KEY_POS_VIEW. Do not
-                          # write a header. Do not add a typedef.
+                          # -D FILEID_NSFS. Do not write a header. Do not add
+                          # a typedef.
                           if [ ! -f src/include/override/linux/fs.h ] \
                             || [ ! -f src/include/override/linux/magic.h ] \
-                            || [ ! -f src/include/override/linux/keyctl.h ]; then
+                            || [ ! -f src/include/override/linux/keyctl.h ] \
+                            || [ ! -f src/include/override/linux/nsfs.h ]; then
                             echo "systemd override headers are missing" >&2
                             exit 1
                           fi
@@ -901,8 +925,14 @@ let
                             src/include/override-first/linux/magic.h
                           cp src/include/override/linux/keyctl.h \
                             src/include/override-first/linux/keyctl.h
+                          cp src/include/override/linux/nsfs.h \
+                            src/include/override-first/linux/nsfs.h
                           if ! grep -F -q FILEID_KERNFS src/include/override-first/linux/fs.h; then
                             echo "copied fs.h does not define FILEID_KERNFS" >&2
+                            exit 1
+                          fi
+                          if ! grep -F -q '#define FILEID_NSFS 0xf1' src/include/override-first/linux/nsfs.h; then
+                            echo "copied nsfs.h does not define FILEID_NSFS" >&2
                             exit 1
                           fi
                           if ! grep -F -q GFS2_MAGIC src/include/override-first/linux/magic.h; then
@@ -1186,9 +1216,9 @@ let
               # linux/bpf_insn.h. Do not -include linux/keyctl.h.
               # Do not add a C function.
               # override-first is not a meson -isystem directory, so this
-              # -I is not dropped. It is the upstream fs.h, magic.h, and
-              # keyctl.h that define FILEID_KERNFS, GFS2_MAGIC, and
-              # key_serial_t.
+              # -I is not dropped. It is the upstream fs.h, magic.h,
+              # nsfs.h, and keyctl.h that define FILEID_KERNFS, GFS2_MAGIC,
+              # FILEID_NSFS, and key_serial_t.
               + " -I ../src/include/override-first"
               + " -I ../src/include/override"
               + " -idirafter ../src/include/bpf-insn-next";
@@ -1698,6 +1728,7 @@ let
       shared-mime-info = prev.shared-mime-info.overrideAttrs (old: {
         buildInputs = (old.buildInputs or [ ]) ++ [ prev.stdenv.cc.cc.lib ];
         nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ prev.patchelf ];
+        mesonFlags = import ./shared-mime-info-build-tests.nix old;
         preConfigure = (old.preConfigure or "") + ''
           cxx_lib="${prev.stdenv.cc.cc.lib}/lib"
           if [ ! -e "$cxx_lib/libstdc++.so.6" ]; then
@@ -1778,7 +1809,12 @@ let
         '';
       });
     }
-    // (import ./discarded-qualifiers-overlay.nix final prev);
+    // (import ./discarded-qualifiers-overlay.nix final prev)
+    // (import ./libcap-without-go-overlay.nix final prev)
+    // (import ./libpsl-without-python-overlay.nix final prev)
+    // (import ./pixman-check-overlay.nix final prev)
+    // (import ./protobuf-check-overlay.nix final prev)
+    // (import ./bind-check-overlay.nix final prev);
 
   # nixos-26.05 firewall-nftables.nix puts pkgs.nixos-firewall-tool on
   # systemPackages when the firewall backend is nftables. Do not call the
@@ -2086,16 +2122,12 @@ let
       libpsl = prev.libpsl.overrideAttrs (
         old:
         let
-          # 0.21.5's release tarball has no suffixes_dafsa.h. 0.22.0's
-          # release tarball ships that header and the two test DAFSA blobs
-          # (EXTRA_DIST). Copy those files. Do not run the generator.
-          suffixesDafsaRelease = prev.fetchurl {
-            url = "https://github.com/rockdaboot/libpsl/releases/download/0.22.0/libpsl-0.22.0.tar.gz";
-            hash = "sha256-xFw6oXV2uZhz4FqbCaRAQbBlu/o5Dm1HTQb7+uucdyI=";
-          };
-          # Same script in postPatch and preAutoreconf. The second run deletes
-          # a search that is already gone, so autoreconfPhase still reaches
-          # the C library build.
+          # The 0.23.3 release tarball already ships src/suffixes_dafsa.h,
+          # tests/psl.dafsa, and tests/psl_ascii.dafsa. configure.ac calls
+          # AM_PATH_PYTHON only inside the missing-file test. Do not fetch
+          # an older tarball. Do not delete that call. Do not run the
+          # generator.
+          # Same script in postPatch and preAutoreconf.
           pslNoGtkDoc = (old.postPatch or "") + ''
             awk '
               BEGIN { skip = 0 }
@@ -2123,20 +2155,14 @@ let
                 printf '\nAM_CONDITIONAL([%s], [false])\n' "$cond" >> configure.ac
               fi
             done
-            # Delete the interpreter search. Do not assign that variable
-            # to a colon command.
-            sed -i '/AM_PATH_PYTHON/d' configure.ac
-            if grep -F 'AM_PATH_PYTHON' configure.ac >/dev/null; then
-              echo "AM_PATH_PYTHON token still present in configure.ac" >&2
-              exit 1
-            fi
             patch_one() {
               src="$1"
               if [ ! -f "$src" ]; then
                 return 0
               fi
-              # Drop generator recipes. The shipped header and DAFSA blobs
-              # are copied below. Do not run psl-make-dafsa. Do not author
+              # Drop generator recipes. The 0.23.3 tarball already ships
+              # the header and the DAFSA blobs. Do not copy an older
+              # header over them. Do not run psl-make-dafsa. Do not author
               # the header.
               awk '
                 /\$\(PYTHON\)/ { next }
@@ -2165,9 +2191,6 @@ let
               echo "PYTHON token still present in tests/Makefile.am" >&2
               exit 1
             fi
-            tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/src/suffixes_dafsa.h > src/suffixes_dafsa.h
-            tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl.dafsa > tests/psl.dafsa
-            tar -xzOf ${suffixesDafsaRelease} libpsl-0.22.0/tests/psl_ascii.dafsa > tests/psl_ascii.dafsa
             if ! grep -F kDafsa src/suffixes_dafsa.h >/dev/null; then
               echo "shipped suffixes_dafsa.h has no kDafsa symbol" >&2
               exit 1
@@ -3018,25 +3041,48 @@ let
           nativeBuildInputs = dropPythonInput (old.nativeBuildInputs or [ ]);
         });
 
-      # grub 2.12 is fetched from git tag grub-2.12. That tree has
-      # gentpl.py and Makefile.util.def, and it does not have
-      # Makefile.util.am. bootstrap.conf's post-import hook runs
-      # ./autogen.sh, which stops when no interpreter is on PATH,
-      # and automake then cannot open Makefile.util.am.
-      # The same nixpkgs expression already fetches the 2.12 release
-      # tarball for locales. That unpacked tree contains the generated
-      # makefile, unidata.c, and the imported libgcrypt tree.
-      # Copy those files and delete the autogen.sh line so bootstrap
-      # does not invoke an interpreter. Two later patches add
-      # key_protector to the .def files. Mirror that in the copied
-      # makefiles. configure.ac calls AM_PATH_PYTHON and then runs
-      # gentpl to list pci platforms. Delete that macro and write the
-      # pci list from gentpl.GROUPS["pci"]. Do not add an interpreter.
+      # The nixpkgs grub source is the git tag (package version 2.14).
+      # That tree has gentpl.py and Makefile.util.def, and it does not
+      # have Makefile.util.am, Makefile.utilgcry.def,
+      # grub-core/Makefile.gcry.def, grub-core/Makefile.core.am, or
+      # grub-core/unidata.c. bootstrap.conf's post-import hook runs
+      # ./autogen.sh, which stops when no interpreter is on PATH, and
+      # automake then cannot open Makefile.util.am. Copy those generated
+      # files from the GRUB 2.14 release tarball, the same fetch as the
+      # cipher tree. The 2.12 release Makefile.util.am puts cryptodisk.c
+      # in libgrubkern_a_SOURCES and does not list
+      # grub-core/lib/hwfeatures-gcry.c. That file defines
+      # grub_enable_gcry_hwf, which cryptodisk.c calls. Do not copy the
+      # 2.12 makefile over this tree. The 2.14 release makefiles already
+      # list key_protector. Mirror key_protector into a copied makefile
+      # only when that name is absent. configure.ac calls AM_PATH_PYTHON
+      # and then runs gentpl to list pci platforms. Delete that macro
+      # and write the pci list from gentpl.GROUPS["pci"]. Do not add an
+      # interpreter.
       grub2 =
         let
-          grubRelease = prev.fetchzip {
-            url = "https://ftp.gnu.org/gnu/grub/grub-2.12.tar.gz";
-            hash = "sha256-IoRiJHNQ58y0UhCAD0CrpFiI8Mz1upzAtyh5K4Njh/w=";
+          # The git tag has no grub-core/lib/libgcrypt-grub. The 2.12
+          # release cipher files start with a name string. GRUB 2.14
+          # include/grub/crypto.h starts that struct with int algo.
+          # nixpkgs already fetches the 2.14 release tarball for locales
+          # (mirror://gnu/grub/grub-2.14.tar.gz). That unpacked tree is
+          # the imported cipher sources. Copy it. Copy include/grub/gcrypt
+          # from this same tree. The 2.12 gcrypt.h includes
+          # gcrypt-module.h, and this cipher tree does not ship that
+          # header. Do not run util/import_gcry.py.
+          # The git tag also has no grub-core/lib/libtasn1-grub. The
+          # copied 2.14 Makefile.core.am lists
+          # lib/libtasn1-grub/lib/coding.c. Copy that directory from
+          # this same tarball. The 2.12 unpack has no such directory.
+          # Do not copy 2.12. The 2.14 unpack has no import_libtasn1.py.
+          # Do not run a Python importer.
+          # That same makefile lists tests/asn1/tests/CVE-2018-1000654.c.
+          # The git tag has no grub-core/tests/asn1/tests. Copy that
+          # directory from this same 2.14 tarball. Do not copy 2.12.
+          # Do not disable the tests.
+          grubRelease214 = prev.fetchzip {
+            url = "https://ftp.gnu.org/gnu/grub/grub-2.14.tar.gz";
+            hash = "sha256-NUlE6l8Ul3i1Si9mZgND6lnvFqc74EGptHV2iCtu+As=";
           };
           # nixpkgs unifont 18 builds fonts with imagemagick. That
           # evaluates fontforge, and fontforge evaluates python3.
@@ -3124,45 +3170,93 @@ let
                           echo "gentpl import still present in configure.ac" >&2
                           exit 1
                         fi
-                        rel=${grubRelease}
-                        test -f "$rel/Makefile.util.am"
-                        test -f "$rel/grub-core/Makefile.core.am"
-                        test -f "$rel/grub-core/unidata.c"
-                        cp -f "$rel/Makefile.util.am" Makefile.util.am
+                        rel214=${grubRelease214}
+                        test -f "$rel214/Makefile.util.am"
+                        test -f "$rel214/Makefile.utilgcry.def"
+                        test -f "$rel214/grub-core/Makefile.gcry.def"
+                        test -f "$rel214/grub-core/Makefile.core.am"
+                        test -f "$rel214/grub-core/unidata.c"
+                        cp -f "$rel214/Makefile.util.am" Makefile.util.am
                         chmod u+w Makefile.util.am
-                        cp -f "$rel/Makefile.utilgcry.def" Makefile.utilgcry.def
+                        cp -f "$rel214/Makefile.utilgcry.def" Makefile.utilgcry.def
                         chmod u+w Makefile.utilgcry.def
-                        cp -f "$rel/grub-core/Makefile.gcry.def" grub-core/Makefile.gcry.def
+                        cp -f "$rel214/grub-core/Makefile.gcry.def" grub-core/Makefile.gcry.def
                         chmod u+w grub-core/Makefile.gcry.def
-                        cp -f "$rel/grub-core/Makefile.core.am" grub-core/Makefile.core.am
+                        cp -f "$rel214/grub-core/Makefile.core.am" grub-core/Makefile.core.am
                         chmod u+w grub-core/Makefile.core.am
-                        cp -f "$rel/grub-core/unidata.c" grub-core/unidata.c
+                        cp -f "$rel214/grub-core/unidata.c" grub-core/unidata.c
                         chmod u+w grub-core/unidata.c
+                        if ! grep -F -q 'grub-core/lib/hwfeatures-gcry.c' Makefile.util.am; then
+                          echo "copied Makefile.util.am does not list grub-core/lib/hwfeatures-gcry.c" >&2
+                          exit 1
+                        fi
                         mkdir -p include/grub/gcrypt
+                        test -f "$rel214/include/grub/gcrypt/g10lib.h"
+                        test -f "$rel214/include/grub/gcrypt/gcrypt.h"
+                        test -f "$rel214/include/grub/gcrypt/gpg-error.h"
                         cp -f \
-                          "$rel/include/grub/gcrypt/g10lib.h" \
-                          "$rel/include/grub/gcrypt/gcrypt.h" \
-                          "$rel/include/grub/gcrypt/gpg-error.h" \
+                          "$rel214/include/grub/gcrypt/g10lib.h" \
+                          "$rel214/include/grub/gcrypt/gcrypt.h" \
+                          "$rel214/include/grub/gcrypt/gpg-error.h" \
                           include/grub/gcrypt/
+                        if grep -F -q 'gcrypt-module.h' include/grub/gcrypt/gcrypt.h; then
+                          echo "copied 2.14 gcrypt.h still includes gcrypt-module.h" >&2
+                          exit 1
+                        fi
+                        test -f "$rel214/grub-core/lib/libgcrypt-grub/cipher/arcfour.c"
                         rm -rf grub-core/lib/libgcrypt-grub
-                        cp -a "$rel/grub-core/lib/libgcrypt-grub" grub-core/lib/
+                        cp -a "$rel214/grub-core/lib/libgcrypt-grub" grub-core/lib/
                         chmod -R u+w grub-core/lib/libgcrypt-grub
+                        if ! grep -F -q 'GCRY_CIPHER_ARCFOUR, {0, 0},' grub-core/lib/libgcrypt-grub/cipher/arcfour.c; then
+                          echo "copied arcfour.c does not start the spec with GCRY_CIPHER_ARCFOUR" >&2
+                          exit 1
+                        fi
+                        if ! grep -F -q 'GCRY_CIPHER_BLOWFISH, {0, 0},' grub-core/lib/libgcrypt-grub/cipher/blowfish.c; then
+                          echo "copied blowfish.c does not start the spec with GCRY_CIPHER_BLOWFISH" >&2
+                          exit 1
+                        fi
+                        if ! grep -F -q 'GCRY_MD_MD5, {0, 1},' grub-core/lib/libgcrypt-grub/cipher/md5.c; then
+                          echo "copied md5.c does not start the spec with GCRY_MD_MD5" >&2
+                          exit 1
+                        fi
+                        test -f "$rel214/grub-core/lib/libtasn1-grub/lib/coding.c"
+                        rm -rf grub-core/lib/libtasn1-grub
+                        cp -a "$rel214/grub-core/lib/libtasn1-grub" grub-core/lib/
+                        chmod -R u+w grub-core/lib/libtasn1-grub
+                        if ! test -f grub-core/lib/libtasn1-grub/lib/coding.c; then
+                          echo "copied libtasn1-grub is missing lib/coding.c" >&2
+                          exit 1
+                        fi
+                        test -f "$rel214/grub-core/tests/asn1/tests/CVE-2018-1000654.c"
+                        mkdir -p grub-core/tests/asn1
+                        rm -rf grub-core/tests/asn1/tests
+                        cp -a "$rel214/grub-core/tests/asn1/tests" grub-core/tests/asn1/
+                        chmod -R u+w grub-core/tests/asn1/tests
+                        if ! test -f grub-core/tests/asn1/tests/CVE-2018-1000654.c; then
+                          echo "copied asn1 tests directory is missing CVE-2018-1000654.c" >&2
+                          exit 1
+                        fi
                         echo timestamp > stamp-h.in
-                        sed -i 's|grub-core/disk/luks.c|grub-core/disk/key_protector.c grub-core/disk/luks.c|' Makefile.util.am
-                        awk '
-                          $0 ~ /^platform_PROGRAMS \+= scsi\.module$/ { grab=1 }
-                          grab { print }
-                          grab && /grep .MARKER/ { exit }
-                        ' grub-core/Makefile.core.am \
-                          | sed \
-                            -e 's/scsi\.module/key_protector.module/g' \
-                            -e 's/scsi_module/key_protector_module/g' \
-                            -e 's/scsi\.marker/key_protector.marker/g' \
-                            -e 's/scsi\.mod/key_protector.mod/g' \
-                            -e 's|disk\/scsi\.c|disk/key_protector.c|g' \
-                          >> grub-core/Makefile.core.am
+                        if ! grep -F -q 'grub-core/disk/key_protector.c' Makefile.util.am; then
+                          sed -i 's|grub-core/disk/luks.c|grub-core/disk/key_protector.c grub-core/disk/luks.c|' Makefile.util.am
+                        fi
+                        if ! grep -F -q 'key_protector.module' grub-core/Makefile.core.am; then
+                          awk '
+                            $0 ~ /^platform_PROGRAMS \+= scsi\.module$/ { grab=1 }
+                            grab { print }
+                            grab && /grep .MARKER/ { exit }
+                          ' grub-core/Makefile.core.am \
+                            | sed \
+                              -e 's/scsi\.module/key_protector.module/g' \
+                              -e 's/scsi_module/key_protector_module/g' \
+                              -e 's/scsi\.marker/key_protector.marker/g' \
+                              -e 's/scsi\.mod/key_protector.mod/g' \
+                              -e 's|disk\/scsi\.c|disk/key_protector.c|g' \
+                            >> grub-core/Makefile.core.am
+                        fi
                         find . -iname '*.[ch]' \
                           ! -ipath './grub-core/lib/libgcrypt-grub/*' \
+                          ! -ipath './grub-core/lib/libtasn1-grub/*' \
                           ! -ipath './build-aux/*' \
                           ! -ipath './grub-core/lib/libgcrypt/src/misc.c' \
                           ! -ipath './grub-core/lib/libgcrypt/src/global.c' \
@@ -3175,6 +3269,13 @@ let
                         find util -iname '*.in' ! -name Makefile.in | sort > po/POTFILES-shell.in
                         test -f Makefile.util.am
                         test -f grub-core/Makefile.core.am
+                        # Makefile.utilgcry.def is copied after Makefile.util.am,
+                        # so the generated file is older than that dependency.
+                        # conf/Makefile.common lists ordinary prerequisites, not
+                        # .PHONY or FORCE. Touch both outputs. preConfigure's
+                        # patchShebangs rewrites gentpl.py after this phase.
+                        # postConfigure touches the same two files again.
+                        touch Makefile.util.am grub-core/Makefile.core.am
           '';
           # bootstrap generates configure after postPatch. Fail here if
           # that script still searches for an interpreter or imports gentpl.
@@ -3188,7 +3289,29 @@ let
               exit 1
             fi
           '';
+          # patchShebangs rewrites the gentpl.py shebang during preConfigure,
+          # after the 2.14 copy. Touch the copied outputs after configure so
+          # make skips both gentpl recipes. Do not run gentpl.py.
+          postConfigure = (old.postConfigure or "") + ''
+            test -f Makefile.util.am
+            test -f grub-core/Makefile.core.am
+            test -f gentpl.py
+            test -f Makefile.util.def
+            test -f Makefile.utilgcry.def
+            test -f grub-core/Makefile.core.def
+            test -f grub-core/Makefile.gcry.def
+            touch Makefile.util.am grub-core/Makefile.core.am
+            if [ Makefile.util.am -ot gentpl.py ] || [ Makefile.util.am -ot Makefile.util.def ] || [ Makefile.util.am -ot Makefile.utilgcry.def ]; then
+              echo "Makefile.util.am is still older than a gentpl dependency" >&2
+              exit 1
+            fi
+            if [ grub-core/Makefile.core.am -ot gentpl.py ] || [ grub-core/Makefile.core.am -ot grub-core/Makefile.core.def ] || [ grub-core/Makefile.core.am -ot grub-core/Makefile.gcry.def ]; then
+              echo "grub-core/Makefile.core.am is still older than a gentpl dependency" >&2
+              exit 1
+            fi
+          '';
           }
+          // (import ./grub-mount-overlay.nix old)
         );
 
       # libnbd 1.22.5 configure.ac AC_ARG_ENABLE([fuse]) documents
@@ -3379,7 +3502,18 @@ let
                 fi
               done
             }
-            for d in $buildInputs $propagatedBuildInputs ${prev.stdenv.cc.libc}; do
+            # These lists are bash arrays in this build. A bare
+            # $buildInputs expands to the first element only. That
+            # first propagated input is zlib-dev, whose lib directory
+            # does not contain libffi.so.8. libffi-dev is a later
+            # element. Its propagated-build-inputs file names the
+            # libffi output, and that output's lib directory contains
+            # libffi.so.8. The [@] form visits every element. stdenv
+            # uses the same form. The four add_rpath calls name those
+            # library directories even when the walk misses them.
+            # patchelf --set-rpath below writes the resulting rpath.
+            # Do not add a package.
+            for d in ''${buildInputs[@]} ''${propagatedBuildInputs[@]} ${prev.stdenv.cc.libc}; do
               consider_root "$d"
               if [ -f "$d/nix-support/propagated-build-inputs" ]; then
                 for p in $(cat "$d/nix-support/propagated-build-inputs"); do
@@ -3387,6 +3521,10 @@ let
                 done
               fi
             done
+            add_rpath "${prev.lib.getLib prev.libffi}/lib"
+            add_rpath "${prev.lib.getLib prev.pcre2}/lib"
+            add_rpath "${prev.lib.getLib prev.util-linuxMinimal}/lib"
+            add_rpath "${prev.lib.getLib prev.libselinux}/lib"
             if ! command -v patchelf >/dev/null 2>&1; then
               echo "patchelf is not on PATH" >&2
               exit 1
@@ -4971,7 +5109,8 @@ let
       # CI does not import this overlay. systemdLibs is the package
       # whose pname is systemd-minimal-libs. These hyphenated names
       # are not nixpkgs attributes, so an override here never ran.
-    };
+    }
+    // (import ./pcsclite-service-overlay.nix final prev);
 in
 {
   pins = pinsOverlay;

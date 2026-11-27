@@ -24,6 +24,7 @@ members = [
   "crates/surmount-shc",
   "crates/surmount-stalwart-ops",
   "crates/surmount-static-sites",
+  "crates/surmount-systemd-builtin-units",
 ]
 
 [workspace.package]

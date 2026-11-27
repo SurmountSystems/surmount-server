@@ -1,7 +1,8 @@
-# wasm-bindgen-cli 0.2.128. frontend/web Cargo.lock pins wasm-bindgen
-# 0.2.128. This nixpkgs pin ships 0.2.121 and 0.2.126, not 0.2.128.
+# wasm-bindgen-cli 0.2.130. The Splora web build emits schema 0.2.130.
+# This nixpkgs pin ships 0.2.121 and 0.2.126, not 0.2.130.
 # Same shape as nixpkgs pkgs/by-name/wa/wasm-bindgen-cli_0_2_126/package.nix.
-# src hash and cargoHash are the fixed-output build got: lines.
+# src hash is the unpacked fetchCrate fixed-output hash (verified against
+# the previous 0.2.128 line). cargoHash is the vendor-staging got: line.
 {
   lib,
   buildWasmBindgenCli,
@@ -10,14 +11,14 @@
 }:
 
 let
-  # vendor-staging got: sha256-R1Tas33Ursy8kqsxguAkG0ZhNed2n5uFTAhw1l2qlLY=
-  cargoHash = "sha256-R1Tas33Ursy8kqsxguAkG0ZhNed2n5uFTAhw1l2qlLY=";
+  # vendor-staging got: sha256-j81sUf1m5yXU4FJfGj7GV+hdqVCV8mRmNb0QIsMCjqw=
+  cargoHash = "sha256-j81sUf1m5yXU4FJfGj7GV+hdqVCV8mRmNb0QIsMCjqw=";
 in
 buildWasmBindgenCli rec {
   src = fetchCrate {
     pname = "wasm-bindgen-cli";
-    version = "0.2.128";
-    hash = "sha256-a7lcXJnnZkYReja+iUO7NqqrWyv3toxnUgQb8s4IS5s=";
+    version = "0.2.130";
+    hash = "sha256-9Og1O/6/VC3sc5hBjoIWBErmLW2UHGMsTQO+6+m/dng=";
   };
 
   cargoDeps = rustPlatform.fetchCargoVendor {

@@ -1,0 +1,38 @@
+--- a/meson.build
++++ b/meson.build
+@@ -2332,6 +2332,6 @@
+         foreach val : dict.get('import', [])
+                 obj = exported_by_name[val]
+-                kwargs += { 'objects' : kwargs.get('objects', []) + obj['exported'] }
++                exe_sources += obj['sources']
+                 include_directories += obj['include_directories']
+         endforeach
+ 
+@@ -2401,8 +2401,8 @@
+         if 'export' in dict
+                 exported_by_name += {
+                         name : {
+-                                'exported' : exe.extract_objects(dict['export']),
++                                'sources' : dict['export'],
+                                 'include_directories' : fs.parent(dict['export'][0]),
+                         }
+                 }
+         endif
+@@ -2433,7 +2433,7 @@
+ 
+                 kwargs_static = kwargs + {
+                         # Always import all objects from the main executable.
+-                        'objects' : kwargs.get('objects', []) + exe.extract_objects(exe_sources),
++                        'objects' : kwargs.get('objects', []) + exe.extract_all_objects(),
+                         'link_with' : link_with_static,
+                         'link_args' : dict.get('link_args_static', kwargs.get('link_args', [])),
+                 }
+@@ -2594,7 +2594,7 @@
+ 
+                 kwargs_static = kwargs + {
+                         'sources' : [],
+-                        'objects' : kwargs.get('objects', []) + lib.extract_objects(dict.get('sources', [])),
++                        'objects' : kwargs.get('objects', []) + lib.extract_all_objects(),
+                         'link_with' : link_with_static,
+                         'install' : false,
+                         'build_by_default' : false,

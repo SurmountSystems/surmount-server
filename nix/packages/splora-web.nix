@@ -4,7 +4,7 @@
 # The mail-host management UI unit sets SURMOUNT_SPLORA_WEB_ROOT to this
 # package output (flake packages.<system>.splora-web). The Axum edge
 # serves $out. Do not copy dist by hand.
-# wasm-bindgen in frontend/web/Cargo.lock is 0.2.128. The CLI must match.
+# The web build emits wasm-bindgen schema 0.2.130. The CLI must match.
 # That lock is in the Splora checkout. Crane's deps dummy keeps only the
 # repo-root Cargo.lock, so the web lock is copied back into the dummy.
 #
@@ -29,7 +29,7 @@
 }:
 
 let
-  # wasm-bindgen-cli 0.2.128 from ./wasm-bindgen-cli.nix only.
+  # wasm-bindgen-cli 0.2.130 from ./wasm-bindgen-cli.nix only.
   # buildWasmBindgenCli from the mail-host channel closes over that
   # channel's rustPlatform. Re-call it with this rustPlatform so the
   # compile uses nixpkgs-rust rustc 1.100.0, and C libraries stay on
@@ -54,9 +54,9 @@ let
       !isMenheraCargoConfig;
   };
 
-  # Horizon prefetch of rustPlatform.fetchCargoVendor (vendor-staging).
-  # got: sha256-9OEeFci65XLav7XQkoOHOYyNwy/6lccuVhXq8Zc/WQM=
-  cargoHash = "sha256-9OEeFci65XLav7XQkoOHOYyNwy/6lccuVhXq8Zc/WQM=";
+  # surmount-1 vendor-staging for Splora rev 1a50824.
+  # got: sha256-Y5ApmbCi2VIhZE6g5rWLPL7IUX6HcMLwXGSIxreTpoA=
+  cargoHash = "sha256-Y5ApmbCi2VIhZE6g5rWLPL7IUX6HcMLwXGSIxreTpoA=";
 
   cargoDeps = rustPlatform.fetchCargoVendor {
     pname = "splora-web";
@@ -66,7 +66,7 @@ let
     cargoRoot = "frontend/web";
   };
 in
-craneLib.buildTrunkPackage {
+(craneLib.buildTrunkPackage {
   pname = "splora-web";
   version = "0.1.0";
   inherit src;
@@ -155,4 +155,42 @@ craneLib.buildTrunkPackage {
     inherit cargoDeps cargoHash;
   };
   meta.description = "Splora Trunk client bundle from frontend/web. Not wasm-pack and not cargo-leptos.";
-}
+})
+.overrideAttrs
+(
+  old: {
+    # Trunk derivation only. buildTrunkPackage forwards its arguments
+    # to buildDepsOnly, and that deps derivation already built.
+    patches = (old.patches or [ ]) ++ [
+      ../patches/splora-web-browser-type-annotation.patch
+      ../patches/splora-web-browser-missing-signer-annotations.patch
+    ];
+    # crane buildTrunkPackage always appends dart-sass and runs
+    # `sass --version`. The pinned web index has no sass or scss
+    # trunk link (inline style only). The release derivation must
+    # not take dart-sass, buf, or a Go compiler.
+    nativeBuildInputs = builtins.filter (
+      drv:
+      let
+        pname = if builtins.isAttrs drv then drv.pname or "" else "";
+        name =
+          if builtins.isString drv then
+            drv
+          else if builtins.isAttrs drv then
+            drv.name or ""
+          else
+            "";
+      in
+      pname != "dart-sass"
+      && name != "dart-sass"
+      && !(lib.hasPrefix "dart-sass-" name)
+    ) (old.nativeBuildInputs or [ ]);
+    preConfigure = lib.replaceStrings [
+      "TRUNK_TOOLS_SASS=$(sass --version | head -n1)\n"
+      "export TRUNK_TOOLS_SASS\n"
+    ] [
+      ""
+      ""
+    ] (old.preConfigure or "");
+  }
+)

@@ -107,7 +107,7 @@
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
     # JSON-RPC and a cookie; a local bitcoind datadir is not required.
     # Status observes this rev via nix/splora-pin-status.nix (do not float).
-    splora.url = "github:SurmountSystems/splora/79e0cae72e6e3d709465929c04866575f0acdd6e";
+    splora.url = "github:SurmountSystems/splora/1a50824e06dec0680ea7e414255970e8618ddf13";
 
     # deploy-rs 1.0.0, peeled commit 26e0f241 (2026-10-19).
     # Do not set inputs.nixpkgs.follows. This input keeps its own nixpkgs.
@@ -526,7 +526,7 @@
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
-          # mkPkgs inside splora rev 79e0cae hardcodes rust-bin 1.100.0
+          # mkPkgs inside splora rev 1a50824 hardcodes rust-bin 1.100.0
           # and takes no toolchain argument. That input's rust-overlay
           # has no stable 1.100.0 manifest.
           # nix/splora-rust-1.100.nix re-calls that flake and puts
@@ -541,10 +541,24 @@
           # rustPlatform is nixpkgs-rust rustc 1.100.0 (mkArtiRustPlatform).
           # Do not leave callPackage to inject mail-host rustPlatform
           # (nixos-26.05 rustc 1.95.0) into wasm-bindgen or the web vendor.
-          splora-web = pkgs.callPackage ./nix/packages/splora-web.nix {
-            inherit craneLib sploraInput;
-            rustPlatform = mkArtiRustPlatform system;
-          };
+          # Separate nixpkgs (nix/splora-web-nixpkgs.nix), not every
+          # mail-host overlay. Splora rev 1a50824 does not put Sass on
+          # the release web. nix/packages/splora-web.nix drops the
+          # dart-sass that crane buildTrunkPackage appends. This import
+          # does not rewrite buf and does not overlay libcap.
+          # mail-vps.pkgs.libcap still uses nix/libcap-without-go-overlay.nix.
+          splora-web =
+            let
+              pkgsSploraWeb = import ./nix/splora-web-nixpkgs.nix {
+                inherit nixpkgs system;
+              };
+              craneLibSploraWeb = (crane.mkLib pkgsSploraWeb).overrideToolchain rustToolchain;
+            in
+            pkgsSploraWeb.callPackage ./nix/packages/splora-web.nix {
+              craneLib = craneLibSploraWeb;
+              inherit sploraInput;
+              rustPlatform = mkArtiRustPlatform system;
+            };
           # Rust nixfmt-rs (Mic92). Not Haskell pkgs.nixfmt and not
           # nixfmt-rfc-style (that alias is the channel Haskell package).
           # Upstream attribute is packages.${system}.default. Binary name
@@ -576,8 +590,8 @@
               };
             in
             pkgsOokla.callPackage ./nix/packages/speedtest.nix { };
-          # boyter/scc from the host nixpkgs channel.
-          scc = pkgs.scc;
+          # tokei from the host nixpkgs channel. Replaces boyter/scc.
+          tokei = pkgs.tokei;
           default = self.packages.${system}.management-ui;
         }
       );
@@ -757,9 +771,9 @@
             type = "app";
             program = "${self.packages.${system}.speedtest}/bin/speedtest";
           };
-          scc = {
+          tokei = {
             type = "app";
-            program = "${self.packages.${system}.scc}/bin/scc";
+            program = "${self.packages.${system}.tokei}/bin/tokei";
           };
         }
         // import ./nix/just-recipe-apps.nix { inherit self system; }

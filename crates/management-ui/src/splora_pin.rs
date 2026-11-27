@@ -5,7 +5,7 @@
 //! does not start a second status page.
 
 /// Locked Splora revision the status row must report as pinned.
-pub const EXPECTED_SPLORA_REV: &str = "79e0cae72e6e3d709465929c04866575f0acdd6e";
+pub const EXPECTED_SPLORA_REV: &str = "1a50824e06dec0680ea7e414255970e8618ddf13";
 
 /// Rev from the process environment. Empty or unset is `absent`.
 pub fn observed_rev() -> String {
@@ -49,7 +49,7 @@ mod tests {
     fn expected_rev_is_the_locked_pin() {
         assert_eq!(
             EXPECTED_SPLORA_REV,
-            "79e0cae72e6e3d709465929c04866575f0acdd6e"
+            "1a50824e06dec0680ea7e414255970e8618ddf13"
         );
         assert_eq!(EXPECTED_SPLORA_REV.len(), 40);
     }

@@ -1,4 +1,4 @@
-# Splora's mkPkgs takes only pkgs. Rev 79e0cae hardcodes
+# Splora's mkPkgs takes only pkgs. Rev 1a50824 hardcodes
 # pkgs.rust-bin.stable."1.100.0".default and does not take toolchain,
 # rustc, or cargo. The sibling flake is not edited.
 # The rust-overlay locked by that rev has no stable 1.100.0 manifest.

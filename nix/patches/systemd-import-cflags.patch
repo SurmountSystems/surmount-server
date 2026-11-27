@@ -1,0 +1,23 @@
+--- a/meson.build
++++ b/meson.build
+@@ -2333,6 +2333,12 @@
+                 obj = exported_by_name[val]
+                 exe_sources += obj['sources']
+                 include_directories += obj['include_directories']
++                kwargs += {
++                        'dependencies' : [
++                                kwargs.get('dependencies', []),
++                                obj['dependencies'],
++                        ],
++                }
+         endforeach
+ 
+         if is_test
+@@ -2402,6 +2408,7 @@
+                 exported_by_name += {
+                         name : {
+                                 'sources' : dict['export'],
++                                'dependencies' : kwargs.get('dependencies', []),
+                                 'include_directories' : fs.parent(dict['export'][0]),
+                         }
+                 }

@@ -46,7 +46,7 @@ if [ -n "$u" ]; then
   systemctl show "user-${u}.slice" -p MemoryMax,MemoryCurrent,Description --no-pager || true
 fi
 echo lake=$(pgrep -c -x lake 2>/dev/null || echo 0)
-expected=79e0cae72e6e3d709465929c04866575f0acdd6e
+expected=1a50824e06dec0680ea7e414255970e8618ddf13
 splora_rev=$(systemctl show surmount-management-ui -p Environment --value --no-pager 2>/dev/null | tr ' ' '\n' | sed -n 's/^SURMOUNT_SPLORA_REV=//p' | head -n 1)
 if [ -z "$splora_rev" ]; then
   splora_rev=absent
@@ -273,7 +273,7 @@ case "$cmd" in
     exit 0
     ;;
   show)
-    printf '%s\n' "SURMOUNT_SPLORA_REV=${HOST_STATUS_SPLORA_REV:-79e0cae72e6e3d709465929c04866575f0acdd6e}"
+    printf '%s\n' "SURMOUNT_SPLORA_REV=${HOST_STATUS_SPLORA_REV:-1a50824e06dec0680ea7e414255970e8618ddf13}"
     exit 0
     ;;
   *)
@@ -376,14 +376,14 @@ esac
     fn host_status_observes_the_splora_pin() {
         let script = host_status_remote_script();
         assert!(
-            script.contains("79e0cae72e6e3d709465929c04866575f0acdd6e"),
+            script.contains("1a50824e06dec0680ea7e414255970e8618ddf13"),
             "{script}"
         );
         let out = run("");
         let body = text(&out);
         assert!(out.status.success(), "{body}");
         assert!(
-            body.contains("splora_rev=79e0cae72e6e3d709465929c04866575f0acdd6e"),
+            body.contains("splora_rev=1a50824e06dec0680ea7e414255970e8618ddf13"),
             "{body}"
         );
         assert!(body.contains("splora_pin=pinned"), "{body}");

@@ -461,7 +461,6 @@
     # interpreter-feature argument. vim-full is the package that
     # defaults that feature on, and this host does not install it.
     vim
-    htop
     curl
     dig
     tcpdump
@@ -473,7 +472,9 @@
       pythonSupport = false;
       rustSupport = false;
     })
-    scc
+    # Rust line counter. Replaces scc (Go). btop is already installed
+    # by modules/btop.nix when surmount.enable is true.
+    tokei
     fio
     sysstat
   ];

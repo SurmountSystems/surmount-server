@@ -1,0 +1,16 @@
+[package]
+name = "surmount-systemd-builtin-units"
+version = "0.1.0"
+edition = "2021"
+license = "Unlicense"
+publish = false
+description = "Replacement for systemd 262.2 src/core/generate-builtin-units.py"
+autobins = false
+
+[[bin]]
+name = "surmount-systemd-builtin-units"
+path = "src/main.rs"
+
+[lib]
+name = "surmount_systemd_builtin_units"
+path = "src/lib.rs"

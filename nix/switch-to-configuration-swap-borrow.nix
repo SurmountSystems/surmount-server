@@ -1,6 +1,9 @@
 # Clippy compiles pkgs.switch-to-configuration-ng src/main.rs under
-# #![deny(clippy::all)]. The two swap eprintln lines pass &device.
-# That borrow is redundant. Do not allow the lint. Do not copy the crate.
+# #![deny(clippy::all)]. The two swap eprintln lines must pass device
+# with no redundant borrow. A tarball that still writes &device on
+# those two calls is rewritten to device. A tarball that already
+# passes device is left as it is. Do not allow the lint. Do not copy
+# the crate. Do not match new_swaps.contains_key(&device).
 { prev }:
 prev.switch-to-configuration-ng.overrideAttrs (old: {
   postPatch = (old.postPatch or "") + ''
@@ -9,10 +12,26 @@ prev.switch-to-configuration-ng.overrideAttrs (old: {
       echo "switch-to-configuration src/main.rs is missing" >&2
       exit 1
     fi
-    would=$(grep -n -F 'eprintln!("would stop swap device: {}", &device);' "$f" || true)
-    stopping=$(grep -n -F 'eprintln!("stopping swap device: {}", &device);' "$f" || true)
-    if [ -z "$would" ] || [ -z "$stopping" ]; then
-      echo "swap eprintln borrows are not in the clippy source" >&2
+    sed -i \
+      -e 's/eprintln!("would stop swap device: {}", \&device);/eprintln!("would stop swap device: {}", device);/' \
+      -e 's/eprintln!("stopping swap device: {}", \&device);/eprintln!("stopping swap device: {}", device);/' \
+      "$f"
+    if grep -F -q 'eprintln!("would stop swap device: {}", &device);' "$f"; then
+      echo "would-stop swap eprintln still borrows device" >&2
+      exit 1
+    fi
+    if grep -F -q 'eprintln!("stopping swap device: {}", &device);' "$f"; then
+      echo "stopping swap eprintln still borrows device" >&2
+      exit 1
+    fi
+    would=$(grep -n -F 'eprintln!("would stop swap device: {}", device);' "$f" || true)
+    stopping=$(grep -n -F 'eprintln!("stopping swap device: {}", device);' "$f" || true)
+    if [ -z "$would" ]; then
+      echo "would-stop swap eprintln is missing from the clippy source" >&2
+      exit 1
+    fi
+    if [ -z "$stopping" ]; then
+      echo "stopping swap eprintln is missing from the clippy source" >&2
       exit 1
     fi
     case "$would" in
@@ -27,25 +46,6 @@ prev.switch-to-configuration-ng.overrideAttrs (old: {
         exit 1
         ;;
     esac
-    sed -i \
-      -e 's/eprintln!("would stop swap device: {}", \&device);/eprintln!("would stop swap device: {}", device);/' \
-      -e 's/eprintln!("stopping swap device: {}", \&device);/eprintln!("stopping swap device: {}", device);/' \
-      "$f"
-    if grep -F -q 'eprintln!("would stop swap device: {}", &device);' "$f"; then
-      echo "would-stop swap eprintln still borrows device" >&2
-      exit 1
-    fi
-    if grep -F -q 'eprintln!("stopping swap device: {}", &device);' "$f"; then
-      echo "stopping swap eprintln still borrows device" >&2
-      exit 1
-    fi
-    if ! grep -F -q 'eprintln!("would stop swap device: {}", device);' "$f"; then
-      echo "would-stop swap eprintln was not rewritten" >&2
-      exit 1
-    fi
-    if ! grep -F -q 'eprintln!("stopping swap device: {}", device);' "$f"; then
-      echo "stopping swap eprintln was not rewritten" >&2
-      exit 1
-    fi
+    echo "swap eprintln lines pass device with no redundant borrow"
   '';
 })

@@ -1,0 +1,41 @@
+--- a/frontend/web/src/browser.rs
++++ b/frontend/web/src/browser.rs
+@@ -112,14 +112,14 @@
+     }
+     let window = web_sys::window().ok_or(ClientError::MissingSigner)?;
+     let nostr = Reflect::get(&window, &JsValue::from_str("nostr"))
+-        .map_err(|_| ClientError::MissingSigner)?;
++        .map_err(|_: JsValue| ClientError::MissingSigner)?;
+     let get_public_key = Reflect::get(&nostr, &JsValue::from_str("getPublicKey"))
+-        .map_err(|_| ClientError::MissingSigner)?
++        .map_err(|_: JsValue| ClientError::MissingSigner)?
+         .dyn_into::<Function>()
+-        .map_err(|_| ClientError::MissingSigner)?;
++        .map_err(|_: JsValue| ClientError::MissingSigner)?;
+     let pk_promise = get_public_key
+         .call0(&nostr)
+-        .map_err(|_| ClientError::MissingSigner)?;
++        .map_err(|_: JsValue| ClientError::MissingSigner)?;
+     let pk_val: JsValue = JsFuture::from(Promise::unchecked_from_js(pk_promise))
+         .await
+         .map_err(|_: JsValue| ClientError::MissingSigner)?;
+@@ -167,15 +167,15 @@
+         .map_err(|_| ClientError::RejectedEvent)?;
+ 
+     let sign_event = Reflect::get(&nostr, &JsValue::from_str("signEvent"))
+-        .map_err(|_| ClientError::MissingSigner)?
++        .map_err(|_: JsValue| ClientError::MissingSigner)?
+         .dyn_into::<Function>()
+-        .map_err(|_| ClientError::MissingSigner)?;
++        .map_err(|_: JsValue| ClientError::MissingSigner)?;
+     let signed_promise = sign_event
+         .call1(&nostr, &event)
+-        .map_err(|_| ClientError::MissingSigner)?;
++        .map_err(|_: JsValue| ClientError::MissingSigner)?;
+     let signed_val: JsValue = JsFuture::from(Promise::unchecked_from_js(signed_promise))
+         .await
+-        .map_err(|_| ClientError::MissingSigner)?;
++        .map_err(|_: JsValue| ClientError::MissingSigner)?;
+     let signed_json = JSON::stringify(&signed_val)
+         .map_err(|_| ClientError::RejectedEvent)?
+         .as_string()
