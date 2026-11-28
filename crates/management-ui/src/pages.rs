@@ -1392,7 +1392,7 @@ pub fn render_mail_page_with(
         "Stalwart HTTP answered. Mail protocols still depend on host DNS, firewall, and account setup. Browser webmail is not shipped yet. Use IMAP and SMTP in Evolution or iPhone Mail, or use JMAP when the authenticated proxy lands."
             .to_string()
     } else {
-        "When down: start Stalwart on the host, confirm the configured probe URL, or use SSH tunnel / bootstrap /stalwart-admin/ while bringing the host up. Probe URL env is documented on System."
+        "When down: start Stalwart on the host, confirm the configured probe URL, or use an SSH tunnel to the loopback Stalwart HTTP listener while bringing the host up. Probe URL env is documented on System."
             .to_string()
     };
 

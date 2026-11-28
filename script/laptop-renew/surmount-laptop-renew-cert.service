@@ -6,6 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Issuance lines go to the user journal. The script must not print env
+# files or PEM bodies. Host ACME stays off. This file is still an example.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=surmount-laptop-renew-cert
 # Copy this unit to the laptop user systemd dir, then fill ExecStart via:
 #   just laptop-renew-cert -- --install-timer --directory production --target root@YOUR_HOST
 # Namecheap env stays on the laptop. Do not install this on the VPS.

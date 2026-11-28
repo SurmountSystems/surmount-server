@@ -9,10 +9,12 @@ Those failures belong on the agent. The operator runs the real switch
 in section 5 after the agent has already reported those gates green,
 and keeps Eternal Terminal open so activation cannot strand the box.
 
-**Last updated:** 2026-10-12. Update, audit, test, and switch is the
+**Last updated:** 2026-10-23 (this flake does not take grok-oss or tau
+inputs). Prior 2026-10-12. Update, audit, test, and switch is the
 command block below. `just publish` publishes static sites.
-`just deploy` is the host switch. `just deploy-dry-run` is the agent
-dry-run. `just deploy-host` stays the explicit equivalent.
+`just deploy` is `nix run .#deploy` and that app execs deploy-rs for
+node mail-vps. `just deploy-dry-run` stays the nixos-rebuild dry-run
+and is not deploy-rs. `just deploy-host` stays surmount-deploy-host.
 
 Companions: [OPS.md](OPS.md), [deploy-host-local.md](deploy-host-local.md),
 [SECRETS.md](SECRETS.md), [hygiene.md](hygiene.md), [../AGENTS.md](../AGENTS.md).
@@ -21,12 +23,13 @@ Companions: [OPS.md](OPS.md), [deploy-host-local.md](deploy-host-local.md),
 
 ## Update, audit, test, and switch
 
-From the repo root, in this order. One Nix client at a time. There is
-no `just` recipe for the first two lines.
+From the repo root, in this order. One Nix client at a time.
+`just deploy` stays the operator's real switch. Agents must not run
+`just deploy`. Agents run `just deploy-dry-run`.
 
 ```bash
-nix flake update
-cargo update
+nix run .#update-flakes
+nix run .#update-software
 just audit-remote
 just check-remote
 just check-heavy
@@ -35,20 +38,40 @@ just btop
 just deploy
 ```
 
-`nix flake update` moves branch inputs: nixpkgs `nixos-26.05`,
-`advisory-db`, grok-oss `main`, Splora, and `surmount-site`. It does
-not move commit-pinned `nixpkgs-rust`, `crane`, or `sops-nix`. grok-oss
-stays on `main` until `flake.nix` names another ref. Stalwart versions
-are the fixed-output files under `nix/packages/`, not this command.
+`just vendor` is not part of that switch. From the repo root it
+writes locked flake inputs and fixed-output sources as ordinary
+directories under `./vendor` on the disk that holds that checkout.
+On horizon that is the laptop checkout. On surmount-1 the checkout
+for this dump is `/mnt/hdd/projects/server`, so the trees land on
+`/mnt/hdd`. Do not commit `vendor/`.
 
-`cargo update` uses the menhera index already configured on the laptop.
+When testing, transfer only source from horizon to surmount-1. Do not
+upload `vendor/`, `target/`, the cargo registry, or a Nix store from
+horizon. Vendor and fetch dependencies on surmount-1, in the checkout
+`/mnt/hdd/projects/server` on the extra disk. The cargo lock write
+inside `nix run .#update-software` is the lock step. Builds, audits,
+and tests run on surmount-1.
+`just check-remote` and `nix build` on horizon are the laptop Nix client. That client copies the closure back and uses horizon's network. Do not run them for this mail-host check. SSH to surmount-1 and run the build there. The SSH channel carries the log, not the store. Dependencies are fetched by surmount-1 onto `/mnt/hdd`.
+
+`nix run .#update-flakes` walks every `flake.nix`. A branch input
+keeps its URL. `nixpkgs` stays `nixos-26.05`. `advisory-db` and
+`surmount-site` stay branch URLs. Their locks move when the command
+runs `nix flake lock --update-input`. A commit pin is a `github:` URL
+whose last path segment is a 40-hex commit. The command writes the
+newer rev into that file, then locks. Commit pins here are
+`nixpkgs-rust`, `crane`, `sops-nix`, `nixfmt-rs`, and `splora`.
+This flake does not take grok-oss or tau inputs.
+
+`nix run .#update-software` updates the hand pins under `nix/packages`,
+then runs cargo update against the menhera cooldown index (not
+crates.io), then the hermetic cargo-audit check, in that same pass.
 `just audit` and `just audit-remote` run the same RustSec check.
-`just audit-remote` forces the mail-host builder. Run one of them as
-the next command after `cargo update`. Do not update and skip it. Do
-not audit a lock that was not just updated, unless a significant
-amount of time has passed. A few days is not that gap. The check sets `[yanked] enabled = false` because the Nix sandbox
+`just audit-remote` forces the mail-host builder. Do not update and
+skip the audit. Do not audit a lock that was not just updated, unless
+a significant amount of time has passed. A few days is not that gap.
+The check sets `[yanked] enabled = false` because the Nix sandbox
 has no crates.io index. Yanked crates are refused by the menhera index
-during `cargo update`.
+during that cargo update.
 Nix does not warn that the git tree is dirty on these builds. The lock
 files are supposed to be uncommitted at this step.
 
@@ -68,7 +91,7 @@ is only the static sites. It is not this sequence.
 
 The agent can and must run the entire procedure **up to and including**
 `just deploy-dry-run`. Named eval, `just check-remote` (fmt and
-nixfmt, then clippy), and the dry-run plan are how errors show up. Dumping those
+nixfmt, then clippy), and the dry-run build are how errors show up. Dumping those
 commands on the operator is a broken leftover. Standing law:
 [../AGENTS.md](../AGENTS.md) *Deploy dry-run is agent work* and *Prove
 the operator gate*. The explicit equivalent of the dry-run is
@@ -101,7 +124,7 @@ reason. Eval, remote CI, and dry-run are not secrets custody.
 
 | Who | Does | Does not |
 |-----|------|----------|
-| Agent | **All of sections 2, 3, and 4**, including every named `nix eval` and `just check-remote` and `just deploy-dry-run`. Report pass or fail with the store path or the named error. GitHub issues on plan Approve and on bug reports (screenshots attached). GitHub pull request after the operator has signed and pushed a git-flow feature branch. Laptop Let's Encrypt `--issue` when this laptop already has the Namecheap env files (do not print the env). | Laptop `cargo`, `rustc`, `BUILD_LOCAL=true`. Real `just deploy` switch unless the operator overrides (`just deploy-host` without `--dry-run` is the same switch). `git commit`, GPG sign, `git push`. Reboot. Invent secrets, cookie bytes, or JSON-RPC addresses. Asking the operator to run eval or `check-remote` so the operator can see the error. |
+| Agent | **All of sections 2, 3, and 4**, including every named `nix eval` and `just check-remote` and `just deploy-dry-run`. Report pass or fail with the store path or the named error. GitHub issues on plan Approve and on bug reports (screenshots attached). GitHub pull request after the operator has signed and pushed a git-flow feature branch. Laptop Let's Encrypt `--issue` when this laptop already has the Namecheap env files (do not print the env). | Laptop `cargo`, `rustc`, `BUILD_LOCAL=true`. Real `just deploy`, and real `just deploy-host` without `--dry-run`, unless the operator overrides. `just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Those are different programs. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. `git commit`, GPG sign, `git push`. Reboot. Invent secrets, cookie bytes, or JSON-RPC addresses. Asking the operator to run eval or `check-remote` so the operator can see the error. |
 | Operator | Eternal Terminal window before a switch. Real `just deploy` (no `--dry-run`) after the agent reports dry-run green. GPG-signed commit and `git push` on a git-flow `feature/` or `bugfix/` branch. Place cookie files and other Domain B secrets the agent cannot create. | Run section 2, 3, or 4 in order to discover CI or eval failures. Leave the only SSH session as the one that started `nixos-rebuild switch`. |
 
 Laptop = this session host. It is not the remote builder.
@@ -290,7 +313,8 @@ Do not use those as the mail-host quality bar.
 The **agent** runs this. Agents must have already run section 2 and
 section 3, then this dry-run, before asking the operator to switch.
 The dry-run does not switch. A dry-run failure (bad host-local, missing
-keys, rsync refuse) is an agent problem until it is green.
+keys, rsync refuse, or a failed `nixos-rebuild build`) is an agent
+problem until it is green.
 
 From the repo root:
 
@@ -318,18 +342,25 @@ nix run .#surmount-deploy-host -- --dry-run --target root@surmount-1 --host-loca
 The extra `--` after `just deploy-host` stops just from eating flags.
 `just deploy-dry-run` already includes those flags.
 
-What the dry-run prints (it must not rebuild the guest):
+What the dry-run does (it must not switch the guest):
 
 - rsync of the public tree to `root@surmount-1:/root/surmount-server/`
   (excludes `.git/`, `host-local/`, the workspace `target/` cargo cache,
   `crates/target/`, secrets patterns)
 - rsync of private host-local to
   `root@surmount-1:/root/surmount-server/host-local/`
-- `nixos-rebuild switch --flake path:/root/surmount-server#mail-vps`
-  as a planned remote command
-- post-switch smoke as a planned remote command
+- on the guest, bootstraps `gccarch-x86-64-v3` when the daemon's
+  system-features omit it, the same way `just deploy` does, then runs
+  `nixos-rebuild build --flake path:/root/surmount-server#mail-vps`
+  with `--option max-jobs 32 --option cores 32`
+- does not run `nixos-rebuild switch`
+- does not change `/nix/var/nix/profiles/system`
+- does not run post-switch smoke
+- does not install secrets (that plan stays print-only)
 
-Success is a printed plan and exit 0. It is not a new generation.
+Success is a finished build and exit 0. The running generation was not
+switched. A later `just deploy` of the same tree reuses the store paths
+this build produced.
 
 Host-local never comes from public git. The flake on the guest is
 `path:` so untracked host-local is visible to Nix.
@@ -344,8 +375,9 @@ just deploy-host -- --dry-run --target root@surmount-1 \
   --secrets-require-kind tls-cert --secrets-require-kind tls-key
 ```
 
-Do not pass `--install-secrets` unless you mean to copy Domain B secrets
-in that same deploy. Schema: [SECRETS.md](SECRETS.md).
+On a dry-run, `--install-secrets` only prints the install plan and does
+not copy secrets. A real deploy with that flag does copy them. Schema:
+[SECRETS.md](SECRETS.md).
 
 ---
 
@@ -360,26 +392,37 @@ green, including the exact dry-run command and exit 0.
 just deploy
 ```
 
-Explicit equivalent (`just deploy-host` has no default target):
+`just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). The next command is a different program. `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. `just deploy-host` has no default target:
 
 ```bash
 just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local
 ```
 
-That rsyncs, then runs `nixos-rebuild switch` on the guest. A generation
-that compiles grok-oss or Splora can sit on one `building ...drv` line
-for a long time. Check guest rustc before killing it.
+That rsyncs, then on the guest bootstraps `gccarch-x86-64-v3` when
+`nix config show` system-features omits it, then runs `nixos-rebuild
+switch`. The bootstrap reads the nix.conf the daemon is using, writes
+`/run/surmount-nix.conf` (it does not write the store file in place),
+bind-mounts that file over the store path, and restarts nix-daemon
+only when the feature was missing. If the feature is still absent, the
+tool stops and does not start the system build. If the daemon already
+advertises the feature, it does not rewrite the conf and does not
+restart the daemon. The `/run` bind does not survive reboot. A
+successful switch is what puts the feature in the generation's
+nix.conf. Do not SSH a separate bind before `just deploy`. A generation
+that compiles Splora can sit on one `building ...drv` line for a long
+time. Check guest rustc before killing it.
 
 After rebuild, the driver always runs
 `surmount-deploy-host-post-switch-smoke` on the guest, even if rebuild
-exit is non-zero.
+exit is non-zero. The deploy-host process exits 0 only when the switch
+step exits 0 and that smoke exits 0. A switch exit of 4, including
+`stalwart-mail.service` failed during switch-to-configuration, fails
+the process even when the later smoke exits 0.
 
 Smoke must pass all of:
 
 - current NixOS generation store path
-- `sshd` active
-- `stalwart-mail` active
-- `surmount-management-ui` active (smoke may start it if inactive)
+- `sshd`, `stalwart-mail`, and `surmount-management-ui` each stay active for the sample window. `failed` and `inactive` fail on the first read. A unit that stays `activating` is polled. A unit that becomes `active` passes only if it stays `active` for `SURMOUNT_SMOKE_UNIT_WAIT_MS` (default 30000) with the same main PID and the same NRestarts. Any non-zero main-process exit status, a failed or unparsed `systemctl show`, an `NRestarts` value that does not parse, or a higher `NRestarts`, fails the smoke. One `active` sample is not a pass. Smoke may start `surmount-management-ui` if it is inactive, then that unit must stay active for the same window.
 - loopback `https://127.0.0.1:443/health`
 - TLS cert and key paths exist; key mode 600
 - listen proof for :443 and :80 (`ss`)
@@ -514,8 +557,7 @@ egress. Do not mint a second certificate.
 - Laptop `cargo test`, `cargo clippy`, `cargo build` for this repo's
   quality bar.
 - Two live `just check-remote` processes.
-- Real `just deploy` by an agent unless the operator overrides.
-  `just deploy-host` without `--dry-run` is the same switch.
+- Agents must not run real `just deploy` unless the operator overrides. `just deploy` execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Those are different programs. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run.
 - Secrets, PEMs, cookie bytes, tokens, provisioned IPs in git, issues,
   or chat.
 - Reboot.
@@ -535,8 +577,8 @@ The block in [Update, audit, test, and switch](#update-audit-test-and-switch)
 is the sequence. One-page copy:
 
 ```bash
-nix flake update
-cargo update
+nix run .#update-flakes
+nix run .#update-software
 just audit-remote
 just check-remote
 just check-heavy
@@ -580,7 +622,7 @@ just deploy
 just status
 ```
 
-Explicit equivalent of that switch:
+`just deploy` above execs deploy-rs (`nix run .#deploy`, `--skip-checks`, node mail-vps). The command below is a different program. `just deploy-host` without `--dry-run` runs surmount-deploy-host and activates the host. Both are real switches. Agents must not run either. `just deploy-dry-run` and `just deploy-host -- --dry-run` stay the dry-run. `just deploy-host` has no default target:
 
 ```bash
 just deploy-host -- --target root@surmount-1 --host-local /home/hunter/.local/share/surmount/host-local

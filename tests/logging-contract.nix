@@ -32,53 +32,68 @@ let
       ];
     };
   failedAssertions = e: builtins.filter (a: !a.assertion) e.config.assertions;
-  journalExtra = e: e.config.services.journald.extraConfig or "";
-  hasLine =
-    text: needle:
-    builtins.match (".*" + needle + ".*") (builtins.replaceStrings [ "\n" ] [ " " ] text) != null;
+  # release-26.11 removed services.journald.extraConfig. The same
+  # journald.conf [Journal] keys are services.journald.settings.Journal.
+  journalSettings = e: e.config.services.journald.settings.Journal;
 
   t42-journal-persistent-when-logging-on =
     let
       e = evalLogging { };
-      extra = journalExtra e;
+      journal = journalSettings e;
+      log = e.config.surmount.logging;
     in
     assert failedAssertions e == [ ];
-    assert e.config.surmount.logging.enable == true;
-    assert hasLine extra "Storage=persistent";
-    assert hasLine extra "SystemMaxUse=";
-    assert hasLine extra "RuntimeMaxUse=";
-    assert hasLine extra "RateLimitIntervalSec=";
-    assert hasLine extra "RateLimitBurst=";
-    assert hasLine extra "ForwardToSyslog=no";
+    assert log.enable == true;
+    # Storage=persistent
+    assert journal.Storage == "persistent";
+    # SystemMaxUse=<surmount.logging.systemMaxUse>
+    assert journal.SystemMaxUse == log.systemMaxUse;
+    # RuntimeMaxUse=<surmount.logging.runtimeMaxUse>
+    assert journal.RuntimeMaxUse == log.runtimeMaxUse;
+    # RateLimitIntervalSec=<surmount.logging.rateLimitIntervalSec>
+    assert journal.RateLimitIntervalSec == log.rateLimitIntervalSec;
+    # RateLimitBurst=<surmount.logging.rateLimitBurst>
+    assert journal.RateLimitBurst == log.rateLimitBurst;
+    # ForwardToSyslog=no
+    assert journal.ForwardToSyslog == "no";
     "t42-journal-persistent-when-logging-on-ok";
 
   t42b-system-max-use-is-scaffold-not-sku =
     let
       e = evalLogging { };
-      extra = journalExtra e;
+      journal = journalSettings e;
+      log = e.config.surmount.logging;
     in
     assert failedAssertions e == [ ];
-    assert e.config.surmount.logging.systemMaxUse == "1G";
-    assert hasLine extra "SystemMaxUse=1G";
-    assert e.config.surmount.logging.runtimeMaxUse == "256M";
-    assert hasLine extra "RuntimeMaxUse=256M";
-    assert e.config.surmount.logging.rateLimitIntervalSec == "30s";
-    assert e.config.surmount.logging.rateLimitBurst == "50000";
-    assert hasLine extra "RateLimitIntervalSec=30s";
-    assert hasLine extra "RateLimitBurst=50000";
+    assert log.systemMaxUse == "1G";
+    # SystemMaxUse=1G
+    assert journal.SystemMaxUse == "1G";
+    assert log.runtimeMaxUse == "256M";
+    # RuntimeMaxUse=256M
+    assert journal.RuntimeMaxUse == "256M";
+    assert log.rateLimitIntervalSec == "30s";
+    assert log.rateLimitBurst == "50000";
+    # RateLimitIntervalSec=30s
+    assert journal.RateLimitIntervalSec == "30s";
+    # RateLimitBurst=50000
+    assert journal.RateLimitBurst == "50000";
     "t42b-system-max-use-is-scaffold-not-sku-ok";
 
   t42c-logging-off-skips-persistent-journal =
     let
       e = evalLogging { logging.enable = false; };
-      extra = journalExtra e;
+      journal = journalSettings e;
     in
     assert failedAssertions e == [ ];
     assert e.config.surmount.logging.enable == false;
-    assert !(hasLine extra "Storage=persistent");
-    assert !(hasLine extra "SystemMaxUse=");
-    assert !(hasLine extra "RateLimitIntervalSec=");
-    assert !(hasLine extra "RateLimitBurst=");
+    # extraConfig did not contain Storage=persistent
+    assert (journal.Storage or null) != "persistent";
+    # extraConfig did not contain SystemMaxUse=
+    assert !(journal ? SystemMaxUse);
+    # extraConfig did not contain RateLimitIntervalSec=
+    assert !(journal ? RateLimitIntervalSec);
+    # extraConfig did not contain RateLimitBurst=
+    assert !(journal ? RateLimitBurst);
     "t42c-logging-off-skips-persistent-journal-ok";
 
   t42d-sshd-verbose-when-logging-on =

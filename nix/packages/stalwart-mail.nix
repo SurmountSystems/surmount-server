@@ -13,10 +13,10 @@
 #
 # Packaging mode: pinned upstream *release binary* FODs (default).
 #   Cargo source builds (rustPlatform) are preferred when cargo vendor works,
-#   but crates.io returned HTTP 403 from this environment's fetch-cargo-vendor
-#   (2026-07-30). Release tarballs are hermetic fixed-output hashes and match
-#   the published tag. Revisit source builds when vendor works again (see
-#   nix/packages/stalwart-mail-from-source.nix.disabled notes in the join).
+#   but the live store at /var/lib/stalwart-mail was created before 1.0.
+#   Stalwart 1.x refuses that store. This pin stays the 0.16.26 release
+#   binary until the operator accepts a store migration. Do not bump to 1.x
+#   and do not rewrite the store.
 #
 # Bump procedure:
 #   1. Set version = "X.Y.Z" to match GitHub tag vX.Y.Z on stalwartlabs/stalwart.
@@ -33,7 +33,7 @@
   lib,
   stdenv,
   fetchurl,
-  autoPatchelfHook,
+  patchelf,
   makeWrapper,
   openssl,
   zlib,
@@ -42,6 +42,7 @@
 
 let
   # Checked 2026-10-17: GitHub tag v0.16.26 (released 2026-10-11).
+  # Restored 2026-11-22 because 1.1.0 cannot open the pre-1.0 store.
   # v0.16.25 and v0.16.26 say an upgrade from 0.16.x replaces the binary.
   # Those notes do not change the settings schema. UPGRADING/v0_16.md is
   # the 0.15-and-below migration, which this pin already passed.
@@ -68,7 +69,7 @@ stdenv.mkDerivation (finalAttrs: {
   inherit version src;
 
   nativeBuildInputs = [
-    autoPatchelfHook
+    patchelf
     makeWrapper
   ];
 
@@ -97,10 +98,18 @@ stdenv.mkDerivation (finalAttrs: {
     runHook postInstall
   '';
 
-  # Keep OpenSSL discoverable if the binary is dynamically linked against it.
-  autoPatchelfIgnoreMissingDeps = [
-    # Some builds are mostly static; ignore soft missing libs if any.
-  ];
+  # patchelf is the binary. autoPatchelfHook pulls python3, which this
+  # mail host eval refuses.
+  postFixup = ''
+    patchelf \
+      --set-interpreter "$(< $NIX_CC/nix-support/dynamic-linker)" \
+      --set-rpath "${lib.makeLibraryPath [
+        openssl
+        zlib
+        stdenv.cc.cc.lib
+      ]}" \
+      "$out/bin/stalwart"
+  '';
 
   passthru = {
     # FOD companions (file:// pins for hermetic hosts).

@@ -1,0 +1,14 @@
+--- a/src/bpf/meson.build
++++ b/src/bpf/meson.build
+@@ -412,11 +412,3 @@
+         bpf_sources += source
+ endforeach
+ 
+-if bpf_sources.length() > 0
+-        meson.add_postconf_script(
+-                python,
+-                files('merge-bpf-compdb.py'),
+-                bpf_sources,
+-                '--',
+-                bpf_o_unstripped_cmd)
+-endif

@@ -1,0 +1,11 @@
+--- a/frontend/web/src/browser.rs
++++ b/frontend/web/src/browser.rs
+@@ -122,7 +122,7 @@
+         .map_err(|_| ClientError::MissingSigner)?;
+     let pk_val: JsValue = JsFuture::from(Promise::unchecked_from_js(pk_promise))
+         .await
+-        .map_err(|_| ClientError::MissingSigner)?;
++        .map_err(|_: JsValue| ClientError::MissingSigner)?;
+     let pubkey = pk_val
+         .as_string()
+         .filter(|key| !key.is_empty())

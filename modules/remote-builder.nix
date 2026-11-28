@@ -37,6 +37,63 @@ let
     export SURMOUNT_BUILDER_DISK_GUARD_PATH=${lib.escapeShellArg rb.diskGuardPath}
     export SURMOUNT_BUILDER_SLICE=${sliceName}.slice
   '';
+  # nixbuilder login profile only. Not nix-daemon Environment and not the
+  # sandbox PATH (derivations keep their own stdenv). pkgs.gcc is wrapCC
+  # (bin/cc, bin/c++). clang-unwrapped, not pkgs.clang, because the wrapped
+  # clang also ships cc. Lean is nix/packages/lean4.nix (v4.35.0),
+  # not pkgs.lean4 from this nixpkgs (4.29.1) and not an elan pin.
+  gccBin = pkgs.gcc;
+  clangBin = pkgs.llvmPackages.clang-unwrapped;
+  binutilsBin = pkgs.binutils;
+  lldBin = pkgs.lld;
+  makeBin = pkgs.gnumake;
+  leanBin = pkgs.callPackage ../nix/packages/lean4.nix { };
+  builderDevtools = pkgs.runCommand "surmount-builder-devtools" { } ''
+    set -eu
+    mkdir -p "$out/bin"
+    test -e ${gccBin}/bin/cc
+    test -e ${gccBin}/bin/c++
+    test -e ${gccBin}/bin/gcc
+    test -e ${gccBin}/bin/g++
+    test -e ${clangBin}/bin/clang
+    test -e ${binutilsBin}/bin/ld
+    test -e ${makeBin}/bin/make
+    test -e ${leanBin}/bin/lean
+    test -e ${leanBin}/bin/lake
+    test -e ${leanBin}/bin/leanc
+    test -e ${leanBin}/bin/leanmake
+    ln -s ${gccBin}/bin/cc "$out/bin/cc"
+    ln -s ${gccBin}/bin/c++ "$out/bin/c++"
+    ln -s ${gccBin}/bin/gcc "$out/bin/gcc"
+    ln -s ${gccBin}/bin/g++ "$out/bin/g++"
+    ln -s ${clangBin}/bin/clang "$out/bin/clang"
+    if [ -e ${clangBin}/bin/clang++ ]; then
+      ln -s ${clangBin}/bin/clang++ "$out/bin/clang++"
+    else
+      # argv[0] clang++ is C++ mode when the unwrapped tree has no symlink.
+      ln -s ${clangBin}/bin/clang "$out/bin/clang++"
+    fi
+    ln -s ${binutilsBin}/bin/ld "$out/bin/ld"
+    if [ -e ${lldBin}/bin/lld ]; then
+      ln -s ${lldBin}/bin/lld "$out/bin/lld"
+    fi
+    if [ -e ${lldBin}/bin/ld.lld ]; then
+      ln -s ${lldBin}/bin/ld.lld "$out/bin/ld.lld"
+    elif [ -e ${lldBin}/bin/lld ]; then
+      ln -s ${lldBin}/bin/lld "$out/bin/ld.lld"
+    else
+      echo "pkgs.lld has neither bin/lld nor bin/ld.lld" >&2
+      exit 1
+    fi
+    ln -s ${makeBin}/bin/make "$out/bin/make"
+    # Wrappers, not symlinks. leanmake uses dirname of its own path
+    # to find share/lean/lean.mk. A symlink would point that at this
+    # devtools tree. exec of the pinned file keeps that path.
+    for tool in lean lake leanc leanmake; do
+      printf '#!%s\nexec %s "$@"\n' '${pkgs.runtimeShell}' "${leanBin}/bin/$tool" > "$out/bin/$tool"
+      chmod +x "$out/bin/$tool"
+    done
+  '';
 in
 {
   config = mkIf (cfg.enable && rb.enable) {
@@ -72,6 +129,11 @@ in
       createHome = true;
       hashedPassword = "!";
       linger = true;
+      # Activation links this to /etc/profiles/per-user/<user>/bin, which
+      # is already on the nixbuilder ssh PATH. A switch rebuilds that
+      # profile from this list. Not the nix-daemon unit PATH and not
+      # the sandbox.
+      packages = [ builderDevtools ];
     };
 
     # Laptop ssh-ng SSHes as this user. Do not add nixbuilder to wheel.
@@ -79,33 +141,56 @@ in
     # Job slots stay under MemoryMax. Half the measured mail-host CPUs,
     # not one slot per CPU. Laptop machines max-jobs must match.
     nix.settings.max-jobs = rb.maxJobs;
-    nix.settings.cores = lib.mkIf (rb.buildCores != null) rb.buildCores;
-    # Client machines-file already lists surmount-remote. The builder
-    # nix-daemon must list it too or rustc is not eligible here. extra-
-    # keeps NixOS auto-detected features (big-parallel).
-    nix.settings.extra-system-features = [ "surmount-remote" ];
+    nix.settings.cores = rb.buildCores;
+    # Client machines-file lists surmount-remote and gccarch-x86-64-v3.
+    # The builder nix-daemon must list both or those jobs are not
+    # eligible here. extra- keeps NixOS auto-detected features
+    # (benchmark, big-parallel). Do not drop gcc.arch to hide the feature.
+    nix.settings.extra-system-features = [
+      "surmount-remote"
+      "gccarch-x86-64-v3"
+    ];
 
     # Trusted ssh-ng forwards rustc here. Cap and nice this cgroup.
     # Do not Nice= mail, management-ui, sshd, Arti, or networking.
     # SHC 261/262: prefer killing the builder over mail when the guest
     # is tight. MemoryMax alone does not protect mail if the builder
     # cap is most of guest RAM.
-    systemd.services.nix-daemon.serviceConfig = {
-      MemoryAccounting = true;
-      MemoryMax = rb.memoryMax;
-      Nice = 19;
-      IOSchedulingClass = lib.mkForce "idle";
-      OOMScoreAdjust = 500;
-      SyslogIdentifier = "nix-daemon";
-      LogRateLimitIntervalSec = "30s";
-      LogRateLimitBurst = 50000;
-    }
-    // sliceCpu;
+    # pkgs.nix is the source-built nix-cli. NixOS still generates this
+    # unit from the serviceConfig set here, so ExecStart has to be on
+    # this same unit.
+    # @ sets argv0 to nix-daemon. The binary is the multicall symlink.
+    systemd.services.nix-daemon = {
+      requires = [ "nix-daemon.socket" ];
+      after = [ "nix-daemon.socket" ];
+      serviceConfig = {
+        ExecStart = "@${nixDaemon} nix-daemon --daemon";
+        MemoryAccounting = true;
+        MemoryMax = rb.memoryMax;
+        Nice = 19;
+        IOSchedulingClass = lib.mkForce "idle";
+        OOMScoreAdjust = 500;
+        SyslogIdentifier = "nix-daemon";
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
+      }
+      // sliceCpu;
+    };
+
+    # The same missing package unit left the socket with no Listen line.
+    systemd.sockets.nix-daemon.listenStreams = [
+      "/nix/var/nix/daemon-socket/socket"
+    ];
 
     systemd.services.stalwart-mail.serviceConfig.OOMScoreAdjust = -300;
     systemd.services.surmount-management-ui.serviceConfig.OOMScoreAdjust = -300;
     systemd.services.sshd.serviceConfig.OOMScoreAdjust = -300;
-    systemd.services.surmount-arti-hidden-service.serviceConfig.OOMScoreAdjust = -300;
+    # Do not instantiate the daemon unit when startDaemon is false.
+    # A bare serviceConfig assignment would create it with enable defaulting
+    # to true. OOM protection still applies when the daemon is requested.
+    systemd.services.surmount-arti-hidden-service = mkIf cfg.artiHiddenService.startDaemon {
+      serviceConfig.OOMScoreAdjust = -300;
+    };
 
     systemd.slices.${sliceName} = {
       description = "Surmount ssh-ng builder (hard memory cap)";

@@ -277,3 +277,99 @@ fn missing_journalctl_fails_loud() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn status_failed_systemctl_empty_stdout_keeps_process_status() {
+    let dir = temp_dir("failed-empty");
+    stub_journalctl(&dir);
+    write_exec(
+        &dir,
+        "systemctl",
+        "#!/bin/sh\n\
+set -eu\n\
+args=\"$*\"\n\
+case \"$args\" in\n\
+  *--failed*)\n\
+    exit 7\n\
+    ;;\n\
+  *is-active*)\n\
+    echo active\n\
+    exit 0\n\
+    ;;\n\
+  *is-enabled*)\n\
+    echo enabled\n\
+    exit 0\n\
+    ;;\n\
+esac\n\
+exit 0\n",
+    );
+    let conf = dir.join("journald.conf");
+    fs::write(&conf, "Storage=persistent\n").unwrap();
+    let out = cmd()
+        .arg("--status")
+        .env("PATH", path_with(&dir))
+        .env("SURMOUNT_HOST_LOGS_JOURNALD_CONF", &conf)
+        .output()
+        .expect("run --status empty failed systemctl");
+    let text = combined(&out);
+    assert_eq!(
+        out.status.code(),
+        Some(7),
+        "empty systemctl failure must keep process status 7: {text}"
+    );
+    assert!(
+        text.contains("empty output"),
+        "empty failure must not look like zero failed units: {text}"
+    );
+    assert!(
+        !text.contains("0 loaded units listed."),
+        "must not invent a zero-failed listing: {text}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn status_listed_failed_units_does_not_return_ok() {
+    let dir = temp_dir("failed-listed");
+    stub_journalctl(&dir);
+    write_exec(
+        &dir,
+        "systemctl",
+        "#!/bin/sh\n\
+set -eu\n\
+args=\"$*\"\n\
+case \"$args\" in\n\
+  *--failed*)\n\
+    echo 'stalwart-mail.service loaded failed failed'\n\
+    exit 0\n\
+    ;;\n\
+  *is-active*)\n\
+    echo active\n\
+    exit 0\n\
+    ;;\n\
+  *is-enabled*)\n\
+    echo enabled\n\
+    exit 0\n\
+    ;;\n\
+esac\n\
+exit 0\n",
+    );
+    let conf = dir.join("journald.conf");
+    fs::write(&conf, "Storage=persistent\n").unwrap();
+    let out = cmd()
+        .arg("--status")
+        .env("PATH", path_with(&dir))
+        .env("SURMOUNT_HOST_LOGS_JOURNALD_CONF", &conf)
+        .output()
+        .expect("run --status listed failed units");
+    let text = combined(&out);
+    assert!(
+        !out.status.success(),
+        "listing failed units must not return ok: {text}"
+    );
+    assert!(
+        text.contains("stalwart-mail.service"),
+        "the failed unit must be reported: {text}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -3,7 +3,8 @@
 # Does not switch a host. Fake ssh only. No cargo, no rustc, no nix build.
 #
 # Case changed: nixos-rebuild exit 1, smoke exit 0, booted generation
-# moves to the generation the switch built -> recipe exit 0.
+# moves to the generation the switch built -> recipe exit 1.
+# A non-zero switch is not a successful deploy.
 # Case unchanged: same exits, booted generation stays -> recipe exit 1,
 # and the nixos-rebuild error text stays visible.
 #
@@ -98,20 +99,24 @@ unchanged_out=$(cat "$root/unchanged.out")
 booted_unchanged=$(cat "$state/booted")
 
 fail=0
-if [ "$changed_rc" -ne 0 ]; then
-  echo "FAIL smoke_exit_0_and_changed_generation_is_recipe_exit_0: expected recipe exit 0, got $changed_rc" >&2
+if [ "$changed_rc" -eq 0 ]; then
+  echo "FAIL smoke_exit_0_and_changed_generation_stays_process_failure: expected recipe exit non-zero, got 0" >&2
   printf '%s\n' "$changed_out" >&2
   fail=1
 else
-  echo "PASS smoke_exit_0_and_changed_generation_is_recipe_exit_0"
+  echo "PASS smoke_exit_0_and_changed_generation_stays_process_failure"
 fi
+printf '%s\n' "$changed_out" | command grep -F "nix build failed" >/dev/null || {
+  echo "FAIL changed case: nix build failed text missing" >&2
+  fail=1
+}
 
 if [ "$unchanged_rc" -eq 0 ]; then
   echo "FAIL smoke_exit_0_and_unchanged_generation_stays_exit_1_with_rebuild_error: expected recipe exit 1, got 0" >&2
   fail=1
 fi
-printf '%s\n' "$unchanged_out" | command grep -F "nixos-rebuild failed" >/dev/null || {
-  echo "FAIL unchanged case: nixos-rebuild failed text missing" >&2
+printf '%s\n' "$unchanged_out" | command grep -F "nix build failed" >/dev/null || {
+  echo "FAIL unchanged case: nix build failed text missing" >&2
   fail=1
 }
 printf '%s\n' "$unchanged_out" | command grep -F "synthetic-rebuild-error: switch exit 1" >/dev/null || {

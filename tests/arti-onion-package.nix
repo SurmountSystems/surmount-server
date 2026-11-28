@@ -6,11 +6,14 @@
 # Call from flake: import ./tests/arti-onion-package.nix {
 #   inherit pkgs lib rustPlatform artiUnstable;
 # }
+# rustPlatform is required. A missing argument must not select
+# mail-host pkgs.rustPlatform (nixos-26.05 rustc 1.95.0).
+# The flake passes mkArtiRustPlatform (nixpkgs-rust rustc 1.100.0).
 
 {
   pkgs,
   lib,
-  rustPlatform ? pkgs.rustPlatform,
+  rustPlatform ? throw "tests/arti-onion-package.nix: rustPlatform is required. Pass nixpkgs-rust mkArtiRustPlatform (rustc 1.100.0). Do not default to pkgs.rustPlatform (mail-host rustc 1.95.0).",
   artiUnstable,
 }:
 let
@@ -40,11 +43,11 @@ let
     );
 
   # Named contract: Surmount owns current upstream Arti (not nixpkgs 1.4.2 lag).
-  # Exact pin is the package binding in arti-onion-service.nix (2.7.0).
+  # Exact pin is the package binding in arti-onion-service.nix (2.8.0).
   t0 =
-    assert pkg.version == "2.7.0";
+    assert pkg.version == "2.8.0";
     assert !(lib.hasPrefix "1.4" pkg.version);
-    "t0-version-2.7.0-ok";
+    "t0-version-2.8.0-ok";
 
   t1 =
     assert builtins.elem "onion-service-service" buildFeatures;
@@ -73,11 +76,17 @@ let
     assert builtins.elem "onion-service-service" passthruFeatures;
     "t6-passthru-onion-service-features-ok";
 
-  # Named contract: Surmount owns GitLab-source packaging mode (not a silent
-  # return to feature-only overrideAttrs of host nixpkgs 1.4.x).
+  # Named contract: Surmount owns GitLab-source packaging for arti 2.8.0
+  # with this prefetched cargoHash. Reject the old missing-hash mode.
+  # Not a silent return to feature-only overrideAttrs of host nixpkgs 1.4.x.
   packaging = pkg.passthru.surmountArtiPackaging or { };
+  expectedCargoHash = "sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=";
   t7 =
-    assert packaging.mode or null == "gitlab-source-with-nixpkgs-rust-cargoDeps";
+    assert (packaging.mode or null) != "gitlab-source-cargoHash-missing";
+    assert (packaging.mode or null) == "gitlab-source-cargoHash-set";
+    assert (pkg.cargoHash or null) == expectedCargoHash;
+    assert lib.hasInfix expectedCargoHash (packaging.reason or "");
+    assert lib.hasInfix "missing-hash throw is gone" (packaging.reason or "");
     assert packaging.upstreamTag or null == "arti-v${pkg.version}";
     "t7-packaging-provenance-ok";
 

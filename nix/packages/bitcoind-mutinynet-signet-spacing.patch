@@ -1,0 +1,11 @@
+--- a/src/kernel/chainparams.cpp
++++ b/src/kernel/chainparams.cpp
+@@ -511,7 +511,7 @@
+         consensus.CSVHeight = 1;
+         consensus.SegwitHeight = 1;
+         consensus.nPowTargetTimespan = 14 * 24 * 60 * 60; // two weeks
+-        consensus.nPowTargetSpacing = 10 * 60;
++        consensus.nPowTargetSpacing = 30;
+         consensus.fPowAllowMinDifficultyBlocks = false;
+         consensus.enforce_BIP94 = false;
+         consensus.fPowNoRetargeting = false;

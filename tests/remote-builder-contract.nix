@@ -143,11 +143,11 @@ let
     else
       lib.splitString " " v;
 
-  # ssh-ng client advertises surmount-remote; the builder nix-daemon must
-  # list it too or rustc is not eligible on this machine. Use extra- so
-  # NixOS auto-detected features (big-parallel) stay. grok-build
-  # just check-remote / require_remote_builder gates on this name in the
-  # live daemon system-features list.
+  # ssh-ng client advertises surmount-remote and gccarch-x86-64-v3; the
+  # builder nix-daemon must list both or those jobs are not eligible on
+  # this machine. Use extra- so NixOS auto-detected features (benchmark,
+  # big-parallel) stay. grok-build just check-remote / require_remote_builder
+  # gates on surmount-remote in the live daemon system-features list.
   t39m-extra-system-features-advertises-surmount-remote =
     let
       e = evalRB { remoteBuilder.enable = true; };
@@ -156,6 +156,9 @@ let
     in
     assert failedAssertions e == [ ];
     assert lib.elem "surmount-remote" extra;
+    assert lib.elem "gccarch-x86-64-v3" extra;
+    assert lib.elem "benchmark" sys;
+    assert lib.elem "big-parallel" sys;
     assert !(lib.elem "surmount-remote" sys) || lib.elem "surmount-remote" extra;
     "t39m-extra-system-features-advertises-surmount-remote-ok";
 
@@ -169,6 +172,7 @@ let
     assert failedAssertions e == [ ];
     assert e.config.surmount.remoteBuilder.enable == false;
     assert !(lib.elem "surmount-remote" extra);
+    assert !(lib.elem "gccarch-x86-64-v3" extra);
     assert !(lib.elem "surmount-remote" sys);
     "t39n-disabled-does-not-require-surmount-remote-ok";
 
@@ -190,6 +194,22 @@ let
     assert !(mail ? Nice);
     assert !(sshd ? Nice);
     "t39o-builder-is-preferred-oom-victim-ok";
+
+  # Login profile only. The nix-daemon unit path must not gain this
+  # package: sandbox builds use the derivation stdenv, not this PATH.
+  t39q-builder-user-packages-devtools =
+    let
+      e = evalRB { remoteBuilder.enable = true; };
+      off = evalRB { remoteBuilder.enable = false; };
+      names = map (p: p.name or "") (e.config.users.users.nixbuilder.packages or [ ]);
+      daemonPaths = e.config.systemd.services.nix-daemon.path or [ ];
+      daemonNames = map (p: p.name or "") daemonPaths;
+    in
+    assert failedAssertions e == [ ];
+    assert lib.any (lib.hasInfix "surmount-builder-devtools") names;
+    assert !(lib.any (lib.hasInfix "surmount-builder-devtools") daemonNames);
+    assert !(off.config.users.users ? nixbuilder);
+    "t39q-builder-user-packages-devtools-ok";
 in
 {
   ok = [
@@ -203,5 +223,6 @@ in
     t39m-extra-system-features-advertises-surmount-remote
     t39n-disabled-does-not-require-surmount-remote
     t39o-builder-is-preferred-oom-victim
+    t39q-builder-user-packages-devtools
   ];
 }

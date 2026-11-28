@@ -55,6 +55,61 @@ in
     "services/mail/stalwart.nix"
   ];
 
+  # Separate module so the secret ban can see a direct unit
+  # environment assignment. Do not read
+  # config.systemd.services.stalwart-mail.environment: that is the
+  # merged attrsOf value, and NixOS discharges every service while
+  # building it, which overflows the stack and re-enters
+  # system.build.toplevel. Do not read
+  # options.systemd.services.stalwart-mail either: that attribute is
+  # not on the option. The secret ban stays. Read the parent
+  # definitions list only far enough to see the stalwart-mail key,
+  # then only that key's environment attribute names. Other units
+  # and merged values such as PATH are not read.
+  imports = [
+    (
+      {
+        config,
+        lib,
+        options,
+        ...
+      }:
+      {
+        config = lib.mkIf config.services.stalwart.enable {
+          assertions = [
+            {
+              assertion =
+                let
+                  recoveryAdminEnvName = "STALWART_RECOVERY_ADMIN";
+                  # `?` does not force attribute values, so PATH and other
+                  # environment strings are not read. Do not unwrap mkMerge
+                  # or mkIf here: walking those wrappers re-enters
+                  # system.build.toplevel.
+                  hasSecret =
+                    def:
+                    (
+                      builtins.isAttrs def
+                      && def ? stalwart-mail
+                      && builtins.isAttrs def.stalwart-mail
+                      && def.stalwart-mail ? environment
+                      && builtins.isAttrs def.stalwart-mail.environment
+                      && def.stalwart-mail.environment ? ${recoveryAdminEnvName}
+                    );
+                in
+                !(builtins.any hasSecret options.systemd.services.definitions);
+              message = ''
+                systemd.services.stalwart-mail.environment must not set
+                STALWART_RECOVERY_ADMIN (secret would enter the Nix store).
+                Use recoveryAdminEnvFile for a host EnvironmentFile path only,
+                or temporary unlock drop-in from nix run .#stalwart-recovery-unlock.
+              '';
+            }
+          ];
+        };
+      }
+    )
+  ];
+
   options.services.stalwart = {
     enable = lib.mkEnableOption "Stalwart mail and collaboration server (Surmount 0.16+ module)";
 
@@ -207,26 +262,15 @@ in
       }
       {
         # Password body must never land in the store via Environment=.
+        # Caller keys are cfg.extraEnvironment. A direct
+        # systemd.services.stalwart-mail.environment assignment is
+        # checked by the imported module above, via that option's
+        # definitions, not via the merged environment value.
         assertion = !(cfg.extraEnvironment ? STALWART_RECOVERY_ADMIN);
         message = ''
           services.stalwart.extraEnvironment must not set STALWART_RECOVERY_ADMIN
           (secret would enter the Nix store). Use recoveryAdminEnvFile for a
           host EnvironmentFile path only, or temporary unlock drop-in from
-          nix run .#stalwart-recovery-unlock. Prefer strip after permanent
-          admin API key.
-        '';
-      }
-      {
-        # Defense in depth: refuse direct unit environment too (host profile
-        # can set systemd.services.stalwart-mail.environment without going
-        # through extraEnvironment). Path-only EnvironmentFile is the only
-        # supported recovery pin load for this secret.
-        assertion = !((config.systemd.services.stalwart-mail.environment or { }) ? STALWART_RECOVERY_ADMIN);
-        message = ''
-          systemd.services.stalwart-mail.environment must not set
-          STALWART_RECOVERY_ADMIN (secret would enter the Nix store). Use
-          services.stalwart.recoveryAdminEnvFile for a host EnvironmentFile
-          path only, or temporary unlock drop-in from
           nix run .#stalwart-recovery-unlock. Prefer strip after permanent
           admin API key.
         '';
@@ -274,9 +318,15 @@ in
         KillSignal = "SIGINT";
         Restart = "on-failure";
         RestartSec = 5;
+        # Ordinary CFS. Mail is the database process. No fifo, rr, or realtime I/O.
+        Nice = -20;
         SyslogIdentifier = "stalwart-mail";
         StandardOutput = "journal";
         StandardError = "journal";
+        # RUST_LOG stays info (no message bodies). Raise the per-unit
+        # burst so auth and SMTP info lines are not dropped at 10000/30s.
+        LogRateLimitIntervalSec = "30s";
+        LogRateLimitBurst = 50000;
         LoadCredential = lib.mapAttrsToList (key: value: "${key}:${value}") cfg.credentials;
 
         ReadWritePaths = [ cfg.dataDir ];

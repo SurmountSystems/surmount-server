@@ -1,9 +1,11 @@
 //! In-process ACME (Let's Encrypt-capable) for management-ui HTTPS.
 //!
 //! **Default off.** CI and hermetic tests never require a live ACME directory
-//! or real DNS. Product challenge for this slice is **DNS-01** (fits
-//! redirect-only product :80). HTTP-01 on product :80 remains parked (Q-EDGE).
-//! TLS-ALPN-01 is residual (ALPN routing on the rustls acceptor).
+//! or real DNS. DNS-01 remains the in-process adapter. HTTP-01 is the
+//! surmount-1 renew path: the plain HTTP listener serves
+//! `/.well-known/acme-challenge/` from `SURMOUNT_ACME_HTTP01_WEBROOT`, and
+//! the host timer `surmount-cert-renew` runs the ACME client. TLS-ALPN-01
+//! is residual (ALPN routing on the rustls acceptor).
 //!
 //! # What `DnsProvider` / `SURMOUNT_ACME_DNS_PROVIDER` means
 //!
@@ -96,30 +98,28 @@ pub const HOOK_WAIT_UNSUPPORTED_EXIT: i32 = 2;
 pub const HOOK_MINIMAL_PATH: &str =
     "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin";
 
-/// Challenge type for this product slice. HTTP-01 is not offered.
+/// Challenge type. DNS-01 is the in-process adapter. HTTP-01 is the host
+/// renew path (webroot on the product :80 listener).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcmeChallenge {
-    /// DNS-01 (`_acme-challenge.<domain>` TXT). Primary for redirect-only :80.
+    /// DNS-01 (`_acme-challenge.<domain>` TXT).
     Dns01,
+    /// HTTP-01 (`/.well-known/acme-challenge/<token>` from the webroot).
+    Http01,
 }
 
 impl AcmeChallenge {
     pub fn parse(raw: &str) -> Result<Self, String> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "" | "dns-01" | "dns01" | "dns" => Ok(Self::Dns01),
-            "http-01" | "http01" | "http" => Err(
-                "ACME HTTP-01 on product :80 is parked (Q-EDGE). Use dns-01 \
-                 (SURMOUNT_ACME_CHALLENGE=dns-01) or external host PEMs"
-                    .into(),
-            ),
+            "http-01" | "http01" | "http" => Ok(Self::Http01),
             "tls-alpn-01" | "tls-alpn" | "alpn" => Err(
                 "ACME TLS-ALPN-01 is residual for this slice (not wired). Use \
-                 dns-01 or external host PEMs"
+                 dns-01, http-01, or external host PEMs"
                     .into(),
             ),
             other => Err(format!(
-                "unknown SURMOUNT_ACME_CHALLENGE {other:?}; only dns-01 is \
-                 supported in this build"
+                "unknown SURMOUNT_ACME_CHALLENGE {other:?}; use dns-01 or http-01"
             )),
         }
     }
@@ -127,6 +127,7 @@ impl AcmeChallenge {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Dns01 => "dns-01",
+            Self::Http01 => "http-01",
         }
     }
 }
@@ -186,6 +187,8 @@ pub struct AcmeConfig {
     pub dns_hook_timeout_secs: u64,
     /// Reissue when remaining leaf lifetime is under this many days.
     pub renew_days_before_expiry: u64,
+    /// Document root for HTTP-01 token files. Empty unless challenge is HTTP-01.
+    pub http01_webroot: PathBuf,
 }
 
 impl Default for AcmeConfig {
@@ -201,6 +204,7 @@ impl Default for AcmeConfig {
             dns_hook_path: PathBuf::new(),
             dns_hook_timeout_secs: DEFAULT_ACME_DNS_HOOK_TIMEOUT_SECS,
             renew_days_before_expiry: DEFAULT_ACME_RENEW_DAYS_BEFORE_EXPIRY,
+            http01_webroot: PathBuf::new(),
         }
     }
 }
@@ -254,6 +258,11 @@ impl AcmeConfig {
             }
             _ => DEFAULT_ACME_RENEW_DAYS_BEFORE_EXPIRY,
         };
+        let http01_webroot = PathBuf::from(
+            get("SURMOUNT_ACME_HTTP01_WEBROOT")
+                .unwrap_or_default()
+                .trim(),
+        );
 
         let cfg = Self {
             enable,
@@ -266,6 +275,7 @@ impl AcmeConfig {
             dns_hook_path,
             dns_hook_timeout_secs,
             renew_days_before_expiry,
+            http01_webroot,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -327,9 +337,16 @@ impl AcmeConfig {
                 self.account_credentials_path
             ));
         }
-        // Challenge already refused HTTP-01 / TLS-ALPN at parse.
-        if self.challenge != AcmeChallenge::Dns01 {
-            return Err("only ACME DNS-01 is supported in this build".into());
+        // TLS-ALPN is refused at parse. HTTP-01 needs an absolute webroot.
+        // DNS-01 does not.
+        if self.challenge == AcmeChallenge::Http01
+            && (path_is_blank(&self.http01_webroot) || !self.http01_webroot.is_absolute())
+        {
+            return Err(
+                "SURMOUNT_ACME_CHALLENGE=http-01 requires SURMOUNT_ACME_HTTP01_WEBROOT \
+                 as an absolute host path (fail-closed)"
+                    .into(),
+            );
         }
         // Lab mock must never target production Let's Encrypt (fail closed).
         if self.dns_provider == DnsProviderKind::Mock
@@ -988,29 +1005,22 @@ async fn dns01_publish_wait(
         .map_err(|e| format!("ACME DNS-01 propagation wait failed: {e}"))
 }
 
-async fn issue_with_instant_acme(
-    req: &IssueRequest,
-    dns: &dyn DnsProvider,
-) -> Result<IssuedCert, String> {
-    use instant_acme::{Account, ChallengeType, Identifier, NewAccount, NewOrder, RetryPolicy};
+/// Load a saved ACME account, or register one and write the credentials file.
+///
+/// Shared by DNS-01 and HTTP-01. Does not publish a challenge.
+async fn open_acme_account(req: &IssueRequest) -> Result<instant_acme::Account, String> {
+    use instant_acme::{Account, NewAccount};
 
     if req.domains.is_empty() {
-        return Err("instant-acme DNS-01 issuer requires at least one domain".into());
+        return Err("ACME issuer requires at least one domain".into());
     }
-
     // Ensure process-level rustls provider before hyper-rustls ClientConfig
     // (Account::builder). Without this, rustls panics when no automatic
     // default is selected. Idempotent if main already installed aws-lc-rs.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-
-    // Account::builder uses default hyper-rustls client (aws-lc-rs crypto).
     let builder = Account::builder().map_err(|e| format!("ACME account builder failed: {e}"))?;
-
     let contact = format!("mailto:{}", req.email);
-    let (account, credentials) = if !path_is_blank(&req.account_credentials_path)
-        && req.account_credentials_path.exists()
-    {
-        // Fail closed: same owner-only regular-file contract as TLS private key.
+    if !path_is_blank(&req.account_credentials_path) && req.account_credentials_path.exists() {
         require_owner_only_secret_file(&req.account_credentials_path, "ACME account credentials")?;
         let raw = std::fs::read_to_string(&req.account_credentials_path).map_err(|e| {
             format!(
@@ -1024,12 +1034,10 @@ async fn issue_with_instant_acme(
                 req.account_credentials_path.display()
             )
         })?;
-        let account = builder
+        builder
             .from_credentials(creds)
             .await
-            .map_err(|e| format!("restore ACME account from credentials: {e}"))?;
-        // Keep existing credentials file as-is.
-        (account, None)
+            .map_err(|e| format!("restore ACME account from credentials: {e}"))
     } else {
         let (account, creds) = builder
             .create(
@@ -1043,12 +1051,18 @@ async fn issue_with_instant_acme(
             )
             .await
             .map_err(|e| format!("ACME account create failed: {e}"))?;
-        (account, Some(creds))
-    };
-
-    if let Some(creds) = credentials {
         write_account_credentials(&req.account_credentials_path, &creds)?;
+        Ok(account)
     }
+}
+
+async fn issue_with_instant_acme(
+    req: &IssueRequest,
+    dns: &dyn DnsProvider,
+) -> Result<IssuedCert, String> {
+    use instant_acme::{ChallengeType, Identifier, NewOrder, RetryPolicy};
+
+    let account = open_acme_account(req).await?;
 
     // DNS-01: track each FQDN immediately after set_txt; always clear on exit
     // (success or any failure after publish: wait, set_ready, poll, finalize, cert).
@@ -1128,6 +1142,204 @@ async fn issue_with_instant_acme(
     .await;
     clear_published_txt(dns, &published).await;
     order_result
+}
+
+fn http01_challenge_dir(webroot: &Path) -> PathBuf {
+    webroot.join(".well-known").join("acme-challenge")
+}
+
+/// Write one HTTP-01 key authorization. The file name is the token.
+/// Body is the exact key authorization, no extra newline.
+fn write_http01_token_file(webroot: &Path, token: &str, body: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if http01_token_from_path(&format!("/.well-known/acme-challenge/{token}")).is_none() {
+        return Err("ACME HTTP-01 token is not a safe single path segment".into());
+    }
+    if body.is_empty()
+        || body.len() > 512
+        || !body.is_ascii()
+        || body.as_bytes().contains(&b'\n')
+        || body.as_bytes().contains(&0u8)
+    {
+        return Err(
+            "ACME HTTP-01 key authorization must be one non-empty ASCII line \
+             (fail-closed)"
+                .into(),
+        );
+    }
+    let dir = http01_challenge_dir(webroot);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("create HTTP-01 challenge directory {}: {e}", dir.display()))?;
+    let path = dir.join(token);
+    if path.exists() {
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("stat HTTP-01 token {}: {e}", path.display()))?;
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err(format!(
+                "HTTP-01 token path is not a regular file: {}",
+                path.display()
+            ));
+        }
+    }
+    let tmp = dir.join(format!(".{token}.tmp"));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o644)
+            .open(&tmp)
+            .map_err(|e| format!("open HTTP-01 token temp {}: {e}", tmp.display()))?;
+        file.write_all(body.as_bytes())
+            .map_err(|e| format!("write HTTP-01 token temp {}: {e}", tmp.display()))?;
+        file.sync_all()
+            .map_err(|e| format!("sync HTTP-01 token temp {}: {e}", tmp.display()))?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("rename HTTP-01 token into {}: {e}", path.display())
+    })?;
+    Ok(path)
+}
+
+fn remove_http01_token_files(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Let's Encrypt production (or any configured directory) via HTTP-01.
+///
+/// Token files land under `webroot`. The already-running management UI
+/// serves them on port 80. This function does not bind a port and does
+/// not call Namecheap.
+async fn issue_http01(acme: &AcmeConfig) -> Result<IssuedCert, String> {
+    use instant_acme::{ChallengeType, Identifier, NewOrder, RetryPolicy};
+
+    if acme.challenge != AcmeChallenge::Http01 {
+        return Err("HTTP-01 issuer requires SURMOUNT_ACME_CHALLENGE=http-01".into());
+    }
+    if path_is_blank(&acme.http01_webroot) || !acme.http01_webroot.is_absolute() {
+        return Err("HTTP-01 issuer requires an absolute SURMOUNT_ACME_HTTP01_WEBROOT".into());
+    }
+    let req = IssueRequest {
+        domains: acme.domains.clone(),
+        email: acme.email.clone(),
+        directory_url: acme.directory_url.clone(),
+        account_credentials_path: acme.account_credentials_path.clone(),
+    };
+    let account = open_acme_account(&req).await?;
+    let mut published: Vec<PathBuf> = Vec::new();
+    let order_result = async {
+        let identifiers: Vec<Identifier> = req
+            .domains
+            .iter()
+            .map(|d| Identifier::Dns(d.clone()))
+            .collect();
+        let mut order = account
+            .new_order(&NewOrder::new(identifiers.as_slice()))
+            .await
+            .map_err(|e| format!("ACME new_order failed: {e}"))?;
+        let mut authorizations = order.authorizations();
+        while let Some(result) = authorizations.next().await {
+            let mut authz = result.map_err(|e| format!("ACME authorization: {e}"))?;
+            match authz.status {
+                instant_acme::AuthorizationStatus::Pending => {}
+                instant_acme::AuthorizationStatus::Valid => continue,
+                other => {
+                    return Err(format!("ACME authorization unexpected status: {other:?}"));
+                }
+            }
+            let mut challenge = authz
+                .challenge(ChallengeType::Http01)
+                .ok_or_else(|| "ACME order has no HTTP-01 challenge".to_string())?;
+            let aid = challenge.identifier();
+            if aid.wildcard {
+                return Err(
+                    "wildcard ACME identifiers are not supported for HTTP-01 in this build \
+                     (fail-closed)"
+                        .into(),
+                );
+            }
+            let token = challenge.token.clone();
+            let body = challenge.key_authorization().as_str().to_string();
+            let path = write_http01_token_file(&acme.http01_webroot, &token, &body)?;
+            published.push(path);
+            challenge
+                .set_ready()
+                .await
+                .map_err(|e| format!("ACME challenge set_ready: {e}"))?;
+        }
+        let status = order
+            .poll_ready(&RetryPolicy::default())
+            .await
+            .map_err(|e| format!("ACME poll_ready: {e}"))?;
+        if status != instant_acme::OrderStatus::Ready {
+            return Err(format!(
+                "ACME order not ready after HTTP-01 (status={status:?}); fail-closed"
+            ));
+        }
+        let key_pem = order
+            .finalize()
+            .await
+            .map_err(|e| format!("ACME finalize (CSR/key): {e}"))?;
+        let cert_pem = order
+            .poll_certificate(&RetryPolicy::default())
+            .await
+            .map_err(|e| format!("ACME poll_certificate: {e}"))?;
+        Ok(IssuedCert { cert_pem, key_pem })
+    }
+    .await;
+    remove_http01_token_files(&published);
+    order_result
+}
+
+/// What `acme-renew` did. NotDue means the leaf is still outside the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Http01RenewOutcome {
+    /// Existing PEMs are still usable. Nothing was written.
+    NotDue,
+    /// New cert and key were written to the configured paths.
+    WrotePems,
+}
+
+/// Host timer entry. HTTP-01 only. Refuses DNS-01 and Namecheap hooks.
+///
+/// Skips the directory when the leaf is outside the early-renew window and
+/// already covers the configured names. Otherwise issues and writes PEMs.
+pub async fn renew_http01_if_due(
+    paths: &TlsPaths,
+    acme: &AcmeConfig,
+) -> Result<Http01RenewOutcome, String> {
+    if !acme.enable {
+        return Err("acme-renew requires SURMOUNT_ACME_ENABLE (fail-closed)".into());
+    }
+    if acme.challenge != AcmeChallenge::Http01 {
+        return Err(
+            "acme-renew is the HTTP-01 path on this host. dns-01 stays the \
+             in-process adapter and is not this timer (fail-closed)"
+                .into(),
+        );
+    }
+    if acme.dns_provider != DnsProviderKind::None {
+        return Err("HTTP-01 renew requires SURMOUNT_ACME_DNS_PROVIDER=none \
+             (Namecheap credentials stay off this host; fail-closed)"
+            .into());
+    }
+    let now = SystemTime::now();
+    let domains = if acme.domains.is_empty() {
+        None
+    } else {
+        Some(acme.domains.as_slice())
+    };
+    if pem_material_usable(paths, now, domains, acme.renew_days_before_expiry)? {
+        return Ok(Http01RenewOutcome::NotDue);
+    }
+    let issued = issue_http01(acme).await?;
+    write_issued_pems(paths, &issued)?;
+    Ok(Http01RenewOutcome::WrotePems)
 }
 
 fn write_account_credentials(
@@ -1554,6 +1766,61 @@ pub enum TlsMaterialDecision {
     IssuedAndWrotePems { mock: bool },
 }
 
+/// Token file name from an HTTP-01 request path. Rejects traversal.
+pub fn http01_token_from_path(path_and_query: &str) -> Option<&str> {
+    let path = path_and_query.split('?').next().unwrap_or(path_and_query);
+    let rest = path.strip_prefix("/.well-known/acme-challenge/")?;
+    if rest.is_empty()
+        || rest.contains('/')
+        || rest.contains('\\')
+        || rest.contains('.')
+        || rest.contains("..")
+    {
+        return None;
+    }
+    if !rest
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return None;
+    }
+    Some(rest)
+}
+
+/// Read one HTTP-01 key authorization from the webroot. None when this
+/// process is not in HTTP-01 mode, or the token file is missing.
+///
+/// The file must be a regular file under `webroot/.well-known/acme-challenge/`,
+/// at most 512 bytes, ASCII, and not a symlink.
+pub fn read_http01_challenge_file(acme: &AcmeConfig, path_and_query: &str) -> Option<Vec<u8>> {
+    if !acme.enable
+        || acme.challenge != AcmeChallenge::Http01
+        || path_is_blank(&acme.http01_webroot)
+    {
+        return None;
+    }
+    let token = http01_token_from_path(path_and_query)?;
+    let path = acme
+        .http01_webroot
+        .join(".well-known")
+        .join("acme-challenge")
+        .join(token);
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() == 0 || meta.len() > 512 {
+        return None;
+    }
+    let root = acme.http01_webroot.canonicalize().ok()?;
+    let file = path.canonicalize().ok()?;
+    if !file.starts_with(&root) {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.is_empty() || bytes.len() > 512 || !bytes.iter().all(|b| b.is_ascii() && *b != 0) {
+        return None;
+    }
+    Some(bytes)
+}
+
 /// Prepare TLS PEMs for HTTPS listen.
 ///
 /// - ACME **off**: require existing PEMs (fail closed). Same as historical path.
@@ -1578,6 +1845,19 @@ pub async fn ensure_tls_material(
     } else {
         Some(acme.domains.as_slice())
     };
+    // HTTP-01 issuance is the surmount-cert-renew timer, not this process.
+    // Keep serving a leaf that has not reached notAfter. Early renew is the
+    // timer's job, so a missed run does not take HTTPS down inside the window.
+    if acme.challenge == AcmeChallenge::Http01 {
+        if pem_material_usable(paths, now, domains, 0)? {
+            return Ok(TlsMaterialDecision::ReusedExistingPems);
+        }
+        return Err(
+            "HTTP-01 PEMs are missing or expired. The surmount-cert-renew unit \
+             must write the TLS cert and key (fail-closed; no silent cleartext)"
+                .into(),
+        );
+    }
     if pem_material_usable(paths, now, domains, acme.renew_days_before_expiry)? {
         return Ok(TlsMaterialDecision::ReusedExistingPems);
     }
@@ -1737,9 +2017,121 @@ mod tests {
     }
 
     #[test]
-    fn acme_http01_challenge_refused() {
-        let err = AcmeChallenge::parse("http-01").unwrap_err();
-        assert!(err.contains("parked") || err.contains("HTTP-01"), "{err}");
+    fn acme_http01_challenge_parses() {
+        assert_eq!(
+            AcmeChallenge::parse("http-01").unwrap(),
+            AcmeChallenge::Http01
+        );
+        assert_eq!(AcmeChallenge::Http01.as_str(), "http-01");
+        assert_eq!(
+            http01_token_from_path("/.well-known/acme-challenge/abc_DEF-123"),
+            Some("abc_DEF-123")
+        );
+        assert_eq!(
+            http01_token_from_path("/.well-known/acme-challenge/abc/def"),
+            None
+        );
+        assert_eq!(
+            http01_token_from_path("/.well-known/acme-challenge/.."),
+            None
+        );
+        assert_eq!(http01_token_from_path("/health"), None);
+    }
+
+    #[test]
+    fn acme_http01_requires_absolute_webroot() {
+        let err = AcmeConfig::from_env_map(|k| match k {
+            "SURMOUNT_ACME_ENABLE" => Some("1".into()),
+            "SURMOUNT_ACME_DOMAINS" => Some("services.example.test".into()),
+            "SURMOUNT_ACME_EMAIL" => Some("ops@example.test".into()),
+            "SURMOUNT_ACME_DIRECTORY" => Some(directories::LETS_ENCRYPT_PRODUCTION.into()),
+            "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH" => {
+                Some("/var/lib/surmount/secrets/acme/account.json".into())
+            }
+            "SURMOUNT_ACME_CHALLENGE" => Some("http-01".into()),
+            "SURMOUNT_ACME_DNS_PROVIDER" => Some("none".into()),
+            _ => None,
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("HTTP01_WEBROOT") || err.contains("webroot"),
+            "{err}"
+        );
+
+        let cfg = AcmeConfig::from_env_map(|k| match k {
+            "SURMOUNT_ACME_ENABLE" => Some("1".into()),
+            "SURMOUNT_ACME_DOMAINS" => Some("services.example.test".into()),
+            "SURMOUNT_ACME_EMAIL" => Some("ops@example.test".into()),
+            "SURMOUNT_ACME_DIRECTORY" => Some(directories::LETS_ENCRYPT_PRODUCTION.into()),
+            "SURMOUNT_ACME_ACCOUNT_CREDENTIALS_PATH" => {
+                Some("/var/lib/surmount/secrets/acme/account.json".into())
+            }
+            "SURMOUNT_ACME_CHALLENGE" => Some("http-01".into()),
+            "SURMOUNT_ACME_DNS_PROVIDER" => Some("none".into()),
+            "SURMOUNT_ACME_HTTP01_WEBROOT" => Some("/var/lib/surmount/acme-http01".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(cfg.challenge, AcmeChallenge::Http01);
+        assert_eq!(cfg.dns_provider, DnsProviderKind::None);
+        assert_eq!(
+            cfg.http01_webroot,
+            PathBuf::from("/var/lib/surmount/acme-http01")
+        );
+    }
+
+    #[test]
+    fn http01_token_file_roundtrip_and_rejects_dotdot() {
+        let dir = temp_dir("acme-http01-token");
+        let err = write_http01_token_file(&dir, "..", "x").unwrap_err();
+        assert!(
+            err.contains("safe"),
+            "dotdot token must be refused, got {err}"
+        );
+        write_http01_token_file(&dir, "abc_DEF-123", "abc_DEF-123.thumb").unwrap();
+        let acme = AcmeConfig {
+            enable: true,
+            challenge: AcmeChallenge::Http01,
+            http01_webroot: dir.clone(),
+            ..AcmeConfig::default()
+        };
+        let body = read_http01_challenge_file(&acme, "/.well-known/acme-challenge/abc_DEF-123")
+            .expect("token file");
+        assert_eq!(body, b"abc_DEF-123.thumb");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn renew_http01_refuses_dns01() {
+        let dir = temp_dir("acme-http01-refuse");
+        let cert = dir.join("cert.pem");
+        let key = dir.join("key.pem");
+        let acme = AcmeConfig {
+            enable: true,
+            challenge: AcmeChallenge::Dns01,
+            dns_provider: DnsProviderKind::None,
+            directory_url: "https://acme-v02.api.letsencrypt.org/directory".into(),
+            email: "ops@example.test".into(),
+            domains: vec!["services.example.test".into()],
+            account_credentials_path: dir.join("account.json"),
+            http01_webroot: dir.join("webroot"),
+            ..AcmeConfig::default()
+        };
+        let paths = TlsPaths {
+            cert_path: cert,
+            key_path: key,
+        };
+        let err = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(renew_http01_if_due(&paths, &acme))
+            .unwrap_err();
+        assert!(
+            err.contains("HTTP-01"),
+            "dns-01 must not take the host renew path, got {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

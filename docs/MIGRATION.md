@@ -152,14 +152,14 @@ the host allowlist. Q-AUTH-1 is unchanged.
 
 ## Import with Vandelay (Stalwart 0.16)
 
-Live `stalwart-cli` **1.0.12** is schema-driven JMAP admin only (`get`,
+Live `stalwart-cli` **1.0.14** is schema-driven JMAP admin only (`get`,
 `query`, `create`, `update`, `delete`, `describe`, `apply`, `snapshot`).
 It has **no** `import` subcommand. Do not run `stalwart-cli import messages`.
 The engine binary `stalwart -i` imports a **Stalwart store dump**, not
 Maildir.
 
-Official 0.16 Maildir++ path is **Vandelay** (pin `nix/packages/vandelay.nix`,
-currently 1.0.7): local tree -> SQLite archive -> JMAP export.
+Official Maildir++ path is **Vandelay** (pin `nix/packages/vandelay.nix`,
+currently 1.0.14): local tree -> SQLite archive -> JMAP export.
 
 See [Vandelay](https://github.com/stalwartlabs/vandelay) (accessed:
 2026-08-13) and [Vandelay: the JMAP importer-exporter](https://stalw.art/blog/jmap-account-migration/)

@@ -74,14 +74,71 @@ impl Fakes {
             r#"#!/bin/sh
 set -eu
 DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+# Fifth sample field is systemd Result=. Token "missing" omits the field.
+# Exec token "-" is an empty ExecMainStatus=. Absent fifth field is success.
+split_sample() {
+  line=$1
+  state=${line%% *}
+  rest=${line#* }
+  pid=${rest%% *}
+  rest=${rest#* }
+  restarts=${rest%% *}
+  rest=${rest#* }
+  status=${rest%% *}
+  case "$rest" in
+    *" "*) result=${rest#* } ;;
+    *) result=success ;;
+  esac
+}
 cmd=${1:-}
 case "$cmd" in
   is-active)
     unit=${2:-}
     case "$unit" in
       sshd) cat "$DIR/state.sshd" 2>/dev/null || echo inactive ;;
-      stalwart-mail) cat "$DIR/state.stalwart" 2>/dev/null || echo inactive ;;
-      surmount-management-ui) cat "$DIR/state.ui" 2>/dev/null || echo inactive ;;
+      stalwart-mail)
+        n=$(cat "$DIR/stalwart_polls" 2>/dev/null || echo 0)
+        n=$((n + 1))
+        printf '%s\n' "$n" >"$DIR/stalwart_polls"
+        if [ -f "$DIR/stalwart_samples" ]; then
+          line=$(sed -n "${n}p" "$DIR/stalwart_samples" || true)
+          if [ -z "$line" ]; then
+            line=$(tail -n 1 "$DIR/stalwart_samples")
+          fi
+          split_sample "$line"
+          printf '%s %s %s %s %s\n' "$state" "$pid" "$restarts" "$status" "$result" >"$DIR/stalwart_current"
+          printf '%s\n' "$state" >"$DIR/state.stalwart"
+          printf '%s\n' "$state"
+          exit 0
+        fi
+        state=$(cat "$DIR/state.stalwart" 2>/dev/null || echo inactive)
+        if [ -f "$DIR/stalwart_flip_after" ]; then
+          need=$(cat "$DIR/stalwart_flip_after")
+          if [ "$n" -ge "$need" ]; then
+            state=$(cat "$DIR/stalwart_flip_to")
+            printf '%s\n' "$state" >"$DIR/state.stalwart"
+          fi
+        fi
+        printf '%s\n' "$state"
+        exit 0
+        ;;
+      surmount-management-ui)
+        if [ -f "$DIR/ui_samples" ]; then
+          n=$(cat "$DIR/ui_polls" 2>/dev/null || echo 0)
+          n=$((n + 1))
+          printf '%s\n' "$n" >"$DIR/ui_polls"
+          line=$(sed -n "${n}p" "$DIR/ui_samples" || true)
+          if [ -z "$line" ]; then
+            line=$(tail -n 1 "$DIR/ui_samples")
+          fi
+          split_sample "$line"
+          printf '%s %s %s %s %s\n' "$state" "$pid" "$restarts" "$status" "$result" >"$DIR/ui_current"
+          printf '%s\n' "$state"
+          exit 0
+        fi
+        cat "$DIR/state.ui" 2>/dev/null || echo inactive
+        exit 0
+        ;;
       *) echo inactive ;;
     esac
     exit 0
@@ -111,6 +168,59 @@ case "$cmd" in
       echo "$out" | sed 's/^ *//'
       exit 0
     fi
+    unit=""
+    for a in "$@"; do
+      case "$a" in
+        show|-p|--value|Environment|ActiveState|MainPID|NRestarts|ExecMainStatus|Result) ;;
+        *) unit=$a ;;
+      esac
+    done
+    case " $* " in
+      *" NRestarts "*|*" MainPID "*)
+        printf '%s\n' "$*" >>"$DIR/show_log"
+        if [ "$unit" = "stalwart-mail" ] && [ -f "$DIR/stalwart_show_rc" ]; then
+          rc=$(cat "$DIR/stalwart_show_rc")
+          if [ "$rc" != 0 ]; then
+            exit "$rc"
+          fi
+        fi
+        result=success
+        if [ "$unit" = "surmount-management-ui" ] && [ -f "$DIR/ui_current" ]; then
+          read -r state pid restarts status result <"$DIR/ui_current"
+        elif [ "$unit" = "stalwart-mail" ] && [ -f "$DIR/stalwart_current" ]; then
+          read -r state pid restarts status result <"$DIR/stalwart_current"
+        else
+          if [ "$unit" = "stalwart-mail" ]; then
+            state=$(cat "$DIR/state.stalwart" 2>/dev/null || echo inactive)
+          elif [ "$unit" = "sshd" ]; then
+            state=$(cat "$DIR/state.sshd" 2>/dev/null || echo inactive)
+          else
+            state=inactive
+          fi
+          pid=4242
+          restarts=0
+          status=0
+          result=success
+        fi
+        if [ -z "$result" ]; then
+          result=success
+        fi
+        printf 'ActiveState=%s\nMainPID=%s\nNRestarts=%s\n' "$state" "$pid" "$restarts"
+        if [ "$status" = "-" ]; then
+          printf 'ExecMainStatus=\n'
+        else
+          printf 'ExecMainStatus=%s\n' "$status"
+        fi
+        case " $* " in
+          *" Result "*)
+            if [ "$result" != "missing" ]; then
+              printf 'Result=%s\n' "$result"
+            fi
+            ;;
+        esac
+        exit 0
+        ;;
+    esac
     exit 0
     ;;
   *) exit 0 ;;
@@ -213,6 +323,10 @@ exit "$rc"
         c.env("SURMOUNT_SMOKE_CURL", self.bin.join("curl"));
         c.env("SURMOUNT_SMOKE_READLINK", self.bin.join("readlink"));
         c.env("SURMOUNT_SMOKE_SS", self.bin.join("ss"));
+        // Short sample window for hermetic tests. A caller in `extra`
+        // overrides these. Production stays on the 30000 ms default.
+        c.env("SURMOUNT_SMOKE_UNIT_WAIT_MS", "400");
+        c.env("SURMOUNT_SMOKE_UNIT_POLL_MS", "20");
         for (k, v) in extra {
             c.env(*k, *v);
         }
@@ -653,4 +767,487 @@ fn skip_pem_and_listen() {
     assert!(out.status.success(), "{s}");
     assert!(s.contains("PASS: tls pem check skipped"), "{s}");
     assert!(s.contains("PASS: listen check skipped"), "{s}");
+}
+
+/// The checker must not treat the first `activating` read as fail=1.
+/// The fake stays `activating` on poll 1 and becomes `active` on poll 2.
+#[test]
+fn activating_is_not_an_immediate_failure_when_the_unit_becomes_active() {
+    let f = Fakes::new();
+    f.reset_day1();
+    fs::write(f.bin.join("state.stalwart"), "activating\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_after"), "2\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_to"), "active\n").unwrap();
+    let out = f.run(&[
+        ("SURMOUNT_SMOKE_UNIT_POLL_MS", "20"),
+        ("SURMOUNT_SMOKE_UNIT_WAIT_MS", "5000"),
+    ]);
+    let s = combined(&out);
+    assert!(
+        out.status.success(),
+        "activating must be polled until active, not fail=1 on the first read: {s}"
+    );
+    assert!(s.contains("PASS: unit stalwart-mail is active"), "{s}");
+    assert!(!s.contains("FAIL: unit stalwart-mail is not active"), "{s}");
+    let polls = fs::read_to_string(f.bin.join("stalwart_polls")).unwrap_or_default();
+    assert!(
+        polls.trim().parse::<u32>().unwrap_or(0) >= 2,
+        "the checker must read is-active more than once while activating: {polls}"
+    );
+}
+
+/// A unit that leaves `activating` for `failed` is still a failure.
+#[test]
+fn activating_that_becomes_failed_is_still_a_failure() {
+    let f = Fakes::new();
+    f.reset_day1();
+    fs::write(f.bin.join("state.stalwart"), "activating\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_after"), "2\n").unwrap();
+    fs::write(f.bin.join("stalwart_flip_to"), "failed\n").unwrap();
+    let out = f.run(&[
+        ("SURMOUNT_SMOKE_UNIT_POLL_MS", "20"),
+        ("SURMOUNT_SMOKE_UNIT_WAIT_MS", "5000"),
+    ]);
+    let s = combined(&out);
+    assert!(!out.status.success(), "{s}");
+    assert!(
+        s.contains("FAIL: unit stalwart-mail is not active (is-active=failed)"),
+        "a unit that leaves activating for failed must stay a failure: {s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+fn crash_window() -> [(&'static str, &'static str); 2] {
+    [
+        ("SURMOUNT_SMOKE_UNIT_POLL_MS", "20"),
+        ("SURMOUNT_SMOKE_UNIT_WAIT_MS", "400"),
+    ]
+}
+
+fn write_stalwart_samples(f: &Fakes, body: &str) {
+    fs::write(f.bin.join("stalwart_samples"), body).unwrap();
+}
+
+/// The first sample is active. The next sample still reports active, and
+/// the main process exit status is 1. One active read must not pass.
+#[test]
+fn crash_loop_active_then_exit_1_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nactive 100 0 1\n");
+    let env = crash_window();
+    let out = f.run(&env);
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "active then exit 1 must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail did not stay active (exit 1)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+/// The first sample is active. The next sample is failed.
+#[test]
+fn crash_loop_active_then_failed_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nfailed 0 0 1\n");
+    let env = crash_window();
+    let out = f.run(&env);
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "active then failed must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail is not active (is-active=failed)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+/// is-active stays active while NRestarts goes from 0 to 1.
+#[test]
+fn crash_loop_nrestarts_increase_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nactive 100 1 0\n");
+    let env = crash_window();
+    let out = f.run(&env);
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "NRestarts increase during the sample window must fail smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail did not stay active (NRestarts increased)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+/// is-active stays active and NRestarts stays 0, but the main PID changes.
+#[test]
+fn crash_loop_main_pid_change_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nactive 200 0 0\n");
+    let env = crash_window();
+    let out = f.run(&env);
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "a new main PID during the sample window must fail smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail did not stay active (main PID changed)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+/// Active, same main PID, same NRestarts, across more than one sample.
+#[test]
+fn crash_loop_stable_same_pid_and_nrestarts_passes() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nactive 100 0 0\n");
+    let env = crash_window();
+    let out = f.run(&env);
+    let s = combined(&out);
+    assert!(
+        out.status.success(),
+        "active with the same main PID and the same NRestarts must pass: {s}"
+    );
+    assert!(s.contains("PASS: unit stalwart-mail is active"), "{s}");
+    let polls = fs::read_to_string(f.bin.join("stalwart_polls")).unwrap_or_default();
+    assert!(
+        polls.trim().parse::<u32>().unwrap_or(0) >= 2,
+        "a single active sample is not a pass: {polls}"
+    );
+    let show = fs::read_to_string(f.bin.join("show_log")).unwrap_or_default();
+    let stalwart_shows = show
+        .lines()
+        .filter(|line| line.contains("stalwart-mail") && line.contains("NRestarts"))
+        .count();
+    assert!(
+        stalwart_shows >= 2,
+        "the checker must read NRestarts more than once: {show}"
+    );
+}
+
+/// `failed` and `inactive` fail on the first read. They are not polled.
+#[test]
+fn crash_loop_failed_and_inactive_fail_immediately() {
+    let env = crash_window();
+
+    let failed = Fakes::new();
+    failed.reset_day1();
+    fs::write(failed.bin.join("state.stalwart"), "failed\n").unwrap();
+    let out = failed.run(&env);
+    let s = combined(&out);
+    assert!(!out.status.success(), "{s}");
+    assert!(
+        s.contains("FAIL: unit stalwart-mail is not active (is-active=failed)"),
+        "{s}"
+    );
+    let polls = fs::read_to_string(failed.bin.join("stalwart_polls")).unwrap_or_default();
+    assert_eq!(
+        polls.trim(),
+        "1",
+        "failed must not be polled through the sample window: {polls}"
+    );
+
+    let inactive = Fakes::new();
+    inactive.reset_day1();
+    fs::write(inactive.bin.join("state.stalwart"), "inactive\n").unwrap();
+    let out = inactive.run(&env);
+    let s = combined(&out);
+    assert!(!out.status.success(), "{s}");
+    assert!(
+        s.contains("FAIL: unit stalwart-mail is not active (is-active=inactive)"),
+        "{s}"
+    );
+    let polls = fs::read_to_string(inactive.bin.join("stalwart_polls")).unwrap_or_default();
+    assert_eq!(
+        polls.trim(),
+        "1",
+        "inactive must fail on the first read: {polls}"
+    );
+}
+
+fn write_ui_samples(f: &Fakes, body: &str) {
+    fs::write(f.bin.join("ui_samples"), body).unwrap();
+}
+
+/// ExecMainStatus 2 is a failure. Only status 1 used to fail.
+#[test]
+fn crash_loop_nonzero_exec_main_status_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nactive 100 0 2\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "ExecMainStatus 2 must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail did not stay active (exit 2)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+/// NRestarts that is not a number must fail. It must not be ignored.
+#[test]
+fn crash_loop_unparsed_nrestarts_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nactive 100 nope 0\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "unparsed NRestarts must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail did not stay active (NRestarts did not parse)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+/// ExecMainStatus that is not a number is an unparsed show, not a pass.
+#[test]
+fn crash_loop_unparsed_exec_main_status_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0\nactive 100 0 bogus\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "unparsed ExecMainStatus must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail did not stay active (systemctl show unparsed)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+fn stalwart_lines(text: &str) -> String {
+    text.lines()
+        .filter(|line| line.contains("stalwart-mail"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A later sample fails when systemd Result= is not success.
+/// ExecMainStatus 0 does not excuse exit-code, timeout, signal,
+/// core-dump, watchdog, or oom-kill. An empty ExecMainStatus does not
+/// excuse timeout, signal, or oom-kill. A missing Result= field fails
+/// the sample. Result=success with ExecMainStatus 0 does not fail by itself.
+#[test]
+fn systemd_result_other_than_success_fails_the_sample() {
+    // result token, ExecMainStatus token, expected failure text.
+    // Exec token "-" is an empty ExecMainStatus field.
+    // Result token "missing" omits the Result= field.
+    let bad = [
+        ("exit-code", "0", "Result exit-code"),
+        ("timeout", "0", "Result timeout"),
+        ("timeout", "-", "Result timeout"),
+        ("signal", "0", "Result signal"),
+        ("signal", "-", "Result signal"),
+        ("core-dump", "0", "Result core-dump"),
+        ("watchdog", "0", "Result watchdog"),
+        ("oom-kill", "0", "Result oom-kill"),
+        ("oom-kill", "-", "Result oom-kill"),
+        ("missing", "0", "Result missing"),
+    ];
+    let mut misses = Vec::new();
+    for (result, exec_status, expect) in bad {
+        let f = Fakes::new();
+        f.reset_day1();
+        let body = format!("active 100 0 0\nactive 100 0 {exec_status} {result}\n");
+        write_stalwart_samples(&f, &body);
+        let out = f.run(&crash_window());
+        let s = combined(&out);
+        let show = fs::read_to_string(f.bin.join("show_log")).unwrap_or_default();
+        let mut why = Vec::new();
+        if out.status.success() {
+            why.push("smoke exited 0");
+        }
+        let fail_line = format!("FAIL: unit stalwart-mail did not stay active ({expect})");
+        if !s.contains(&fail_line) {
+            why.push("missing failure line");
+        }
+        if s.contains("PASS: unit stalwart-mail is active") {
+            why.push("stalwart passed");
+        }
+        if !show.contains("Result") {
+            why.push("show was not asked for Result");
+        }
+        if !why.is_empty() {
+            misses.push(format!(
+                "Result={result} ExecMainStatus token {exec_status} ({}):\n{}",
+                why.join(", "),
+                stalwart_lines(&s)
+            ));
+        }
+    }
+
+    let f = Fakes::new();
+    f.reset_day1();
+    write_stalwart_samples(&f, "active 100 0 0 success\nactive 100 0 0 success\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    let show = fs::read_to_string(f.bin.join("show_log")).unwrap_or_default();
+    let mut why = Vec::new();
+    if !out.status.success() {
+        why.push("smoke exited non-zero");
+    }
+    if !s.contains("PASS: unit stalwart-mail is active") {
+        why.push("missing pass line");
+    }
+    if s.contains("did not stay active (Result") {
+        why.push("Result=success failed the sample");
+    }
+    if !show.contains("Result") {
+        why.push("show was not asked for Result");
+    }
+    if !why.is_empty() {
+        misses.push(format!(
+            "Result=success ExecMainStatus 0 ({}):\n{}",
+            why.join(", "),
+            stalwart_lines(&s)
+        ));
+    }
+
+    assert!(
+        misses.is_empty(),
+        "systemd Result= sample contract missed:\n{}",
+        misses.join("\n---\n")
+    );
+}
+
+/// A non-zero systemctl show must not count as a stable active unit.
+#[test]
+fn systemctl_show_failure_is_not_stable() {
+    let f = Fakes::new();
+    f.reset_day1();
+    fs::write(f.bin.join("stalwart_show_rc"), "1\n").unwrap();
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "failed systemctl show must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit stalwart-mail did not stay active (systemctl show failed)"),
+        "{s}"
+    );
+    assert!(!s.contains("PASS: unit stalwart-mail is active"), "{s}");
+}
+
+/// The UI unit uses the same window. One active sample, then exit 1, fails.
+#[test]
+fn ui_active_once_then_exit_1_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_ui_samples(&f, "active 100 0 0\nactive 100 0 1\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "UI active then exit 1 must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit surmount-management-ui did not stay active (exit 1)"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("PASS: unit surmount-management-ui is active"),
+        "{s}"
+    );
+}
+
+/// The UI unit fails when NRestarts increases during the window.
+#[test]
+fn ui_nrestarts_increase_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_ui_samples(&f, "active 100 0 0\nactive 100 1 0\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "UI NRestarts increase must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit surmount-management-ui did not stay active (NRestarts increased)"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("PASS: unit surmount-management-ui is active"),
+        "{s}"
+    );
+}
+
+/// The UI unit fails when the main PID changes during the window.
+#[test]
+fn ui_main_pid_change_fails_smoke() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_ui_samples(&f, "active 100 0 0\nactive 200 0 0\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        !out.status.success(),
+        "UI main PID change must fail post-switch smoke: {s}"
+    );
+    assert!(
+        s.contains("FAIL: unit surmount-management-ui did not stay active (main PID changed)"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("PASS: unit surmount-management-ui is active"),
+        "{s}"
+    );
+}
+
+/// Active UI with the same PID and NRestarts must be sampled more than once.
+#[test]
+fn ui_stable_window_reads_more_than_once() {
+    let f = Fakes::new();
+    f.reset_day1();
+    write_ui_samples(&f, "active 100 0 0\nactive 100 0 0\n");
+    let out = f.run(&crash_window());
+    let s = combined(&out);
+    assert!(
+        out.status.success(),
+        "stable UI must pass the sample window: {s}"
+    );
+    assert!(
+        s.contains("PASS: unit surmount-management-ui is active"),
+        "{s}"
+    );
+    let polls = fs::read_to_string(f.bin.join("ui_polls")).unwrap_or_default();
+    assert!(
+        polls.trim().parse::<u32>().unwrap_or(0) >= 2,
+        "a single active UI sample is not a pass: {polls}"
+    );
+    let show = fs::read_to_string(f.bin.join("show_log")).unwrap_or_default();
+    let ui_shows = show
+        .lines()
+        .filter(|line| line.contains("surmount-management-ui") && line.contains("NRestarts"))
+        .count();
+    assert!(
+        ui_shows >= 2,
+        "the UI checker must read NRestarts more than once: {show}"
+    );
 }

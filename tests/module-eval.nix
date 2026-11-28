@@ -14,8 +14,31 @@
   # Imported splora NixOS module (flake input). Needed so extraGroups and
   # unitsMemoryMax contracts can turn services.splora.enable without IFD.
   sploraNixosModule ? null,
+  # Same released glibc 2.44 overlay as nixosConfigurations.mail-vps.
+  # The flake check passes it. Absent means this eval keeps the
+  # channel glibc, which is not the mail-vps package set.
+  glibc244Overlay ? null,
 }:
 let
+  # Same overlay flake.nix applies to nixosConfigurations.mail-vps.
+  # Replaces nixos-firewall-tool with writeShellScriptBin (no upstream
+  # nixos-firewall-tool) and throws on ghc, haskellPackages,
+  # haskell.compiler, hadrian, ShellCheck, python, python3, and
+  # pythonPackages.
+  noHaskellOverlay = (import ../nix/overlays.nix).noHaskell;
+  # Same glibc header generator as nixosConfigurations.mail-vps.
+  # Also covers glibcLocales configure. The locale archive stays localedef.
+  glibcHeaderGenOverlay = import ../nix/glibc-header-gen-overlay.nix;
+  # Mail-host Nix pin (upstream 2.36.0 binary, not nix-everything).
+  # The base list applies it so systemdLibs does not look up an
+  # interpreter for jinja. t73's mkAfter is a different nixosSystem
+  # and is not an input of that derivation.
+  pinsOverlay = (import ../nix/overlays.nix).pins;
+  # Same tzdata preCheck as nixosConfigurations.mail-vps.
+  # evalSurmount's base overlay list applies it. The closure walk
+  # appends the same overlay. doCheck stays on.
+  tzdataOverlay = (import ../nix/overlays.nix).tzdata;
+
   # Cheap stand-ins so eval does not pull Stalwart binary FOD or real arti.
   # arti = stock client-shaped fake (no surmountOnionServiceCapable).
   # artiOnionService = Surmount service-capable fake (passthru claim only).
@@ -43,6 +66,9 @@ let
     # systemPackages walk) forces that attr; keep it a cheap fake.
     vandelay = prev.writeShellScriptBin "vandelay" "exit 0";
     surmount-mail-import = prev.writeShellScriptBin "surmount-mail-import-maildir" "exit 0";
+    # mail-vps sample enables wrapped speedtest. Keep it a cheap fake so
+    # t47 does not pull ookla.
+    speedtest = prev.writeShellScriptBin "speedtest" "exit 0";
     surmount-deploy-host = prev.writeShellScriptBin "surmount-deploy-host" "exit 0";
     surmount-management-ui = prev.writeShellScriptBin "surmount-management-ui" "exit 0";
     # Packaged DNS-01 hook **code** (fake; real package is nix/packages/...).
@@ -109,7 +135,23 @@ let
         (
           { ... }:
           {
-            nixpkgs.overlays = [ fakeOverlay ];
+            # This list is the package set that realizes tzdata and
+            # systemdLibs. An earlier contract builds pkgs.nix from
+            # this set. That build's tzdata is the final stdenv's
+            # pkgs.tzdata. The same set builds systemd-minimal-libs.
+            # pins drops the meson find_installation that asks for a
+            # jinja module. t73's mkAfter is a different nixosSystem,
+            # so it is not an input of that derivation. Those overlays
+            # have to be on this list. pins stays after noHaskell so
+            # the scrubbed systemdLibs is what the hook wraps.
+            nixpkgs.overlays = [
+              fakeOverlay
+              noHaskellOverlay
+              glibcHeaderGenOverlay
+              tzdataOverlay
+              pinsOverlay
+            ]
+            ++ lib.optional (glibc244Overlay != null) glibc244Overlay;
             nixpkgs.config.allowUnfree = false;
             system.stateVersion = "26.05";
             networking.hostName = "surmount-eval";
@@ -175,12 +217,12 @@ let
     assert e.config.surmount.remoteBuilder.diskGuardPercent == 95;
     assert e.config.surmount.lake.enable == false;
     assert e.config.surmount.lake.jobs == 4;
-    # Grok OSS is opt-in (host-local). Scaffold off; no grok user.
+    # grok-oss is not in the mail-host closure. Enable stays false.
     assert e.config.surmount.grokOss.enable == false;
     assert e.config.surmount.grokOss.package == null;
     assert e.config.surmount.grokOss.user == "grok";
     assert e.config.surmount.grokOss.memoryMax == "4G";
-    # Tau coding agent is opt-in (host-local). Scaffold off; no daemon.
+    # tau is not in the mail-host closure. Enable stays false.
     assert e.config.surmount.tau.enable == false;
     assert e.config.surmount.logging.rateLimitBurst == "50000";
     # Domain C Vaultwarden stays off on sample defaults (no production footgun).
@@ -198,6 +240,21 @@ let
     assert e.config.surmount.sploraIndexer.publicHealth == false;
     assert e.config.surmount.managementUi.http3Enable == true;
     assert (e.config.services.splora.enable or false) == false;
+    # Splora off must not define indexer or daemon units. Instance enable
+    # defaults true even when services.splora.enable is false, so a Nice
+    # gate that only reads the instance still invents a Nice-only unit.
+    assert builtins.all (n: !(builtins.hasAttr n e.config.systemd.services)) [
+      "splora-mainnet"
+      "splora-testnet3"
+      "splora-testnet4"
+      "splora-mutinynet"
+      "splora-liquid"
+      "bitcoind-mainnet"
+      "bitcoind-testnet3"
+      "bitcoind-testnet4"
+      "bitcoind-mutinynet"
+      "elementsd-liquid"
+    ];
     assert !(builtins.elem 443 (e.config.networking.firewall.allowedUDPPorts or [ ]));
     assert failedAssertions e == [ ];
     "t1-defaults-ok";
@@ -2249,6 +2306,34 @@ let
     assert builtins.any (r: lib.hasInfix "/root/.config/btop/btop.conf" r) rules;
     "t37-btop-local-config-ok";
 
+  # Host btop disk usage follows fstab (NixOS fileSystems). Extra disks
+  # persist in private host-local, not in this public eval.
+  t37b-btop-use-fstab-true =
+    let
+      e = evalSurmount { };
+      etc = e.config.environment.etc;
+      entry = etc."xdg/btop/btop.conf" or null;
+      text =
+        if entry == null then
+          ""
+        else if entry ? source then
+          builtins.readFile entry.source
+        else if entry ? text then
+          entry.text
+        else
+          "";
+    in
+    assert entry != null;
+    assert lib.hasInfix "use_fstab = true" text;
+    assert lib.hasInfix ''disks_filter = ""'' text;
+    assert lib.hasInfix "show_disks = true" text;
+    assert lib.hasInfix "only_physical = true" text;
+    assert !(lib.hasInfix "use_fstab = false" text);
+    # Public sample host only. Host-local hardware-configuration.nix
+    # owns fileSystems."/mnt/hdd"; this eval does not import it.
+    assert !(e.config.fileSystems ? "/mnt/hdd");
+    "t37b-btop-use-fstab-true-ok";
+
   t42-guest-root-justfile =
     let
       e = evalSurmount { };
@@ -2272,22 +2357,121 @@ let
     assert lib.hasInfix "tmux attach -t grok-oss" text;
     assert lib.hasInfix "grok-oss running --json" text;
     assert builtins.any (r: lib.hasInfix "/root/justfile" r) rules;
-    assert builtins.any (n: lib.hasPrefix "just" n) pkgsList;
+    # No service executes just. The package's cargo build input is
+    # the interpreter, so the binary stays off this mail host.
+    assert !(builtins.any (n: n == "just" || lib.hasPrefix "just-" n) pkgsList);
     "t42-guest-root-justfile-ok";
 
   t43-scram-watch-highest-priority =
     let
-      e = evalSurmount { };
+      e = evalSurmount {
+        remoteBuilder.enable = true;
+        managementUi.enable = true;
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = true;
+        artiHiddenService.packageIsOnionServiceCapable = true;
+        # Smallest existing splora switch in this suite. Not a mainnet chain.
+        __extraModules = [
+          {
+            services.splora.enable = true;
+          }
+        ];
+      };
       svc = e.config.systemd.services.surmount-scram or { };
       sc = svc.serviceConfig or { };
       wanted = svc.wantedBy or [ ];
+      niceOf =
+        scx:
+        let
+          n = scx.Nice or null;
+        in
+        if n == null then null else toString n;
+      cpuOf = scx: lib.toLower (toString (scx.CPUSchedulingPolicy or ""));
+      ioOf = scx: lib.toLower (toString (scx.IOSchedulingClass or ""));
+      mail = e.config.systemd.services.stalwart-mail.serviceConfig or { };
+      ui = e.config.systemd.services.surmount-management-ui.serviceConfig or { };
+      arti = e.config.systemd.services.surmount-arti-hidden-service.serviceConfig or { };
+      nixd = e.config.systemd.services.nix-daemon.serviceConfig or { };
+      sshd = e.config.systemd.services.sshd.serviceConfig or { };
+      # Indexer units this eval starts: splora-<instance>, bitcoind-*, elementsd-*.
+      # Queue, HTTP front, and popular-scripts are not indexers.
+      indexerName =
+        n:
+        let
+          ln = lib.toLower n;
+        in
+        (lib.hasPrefix "bitcoind-" ln)
+        || (lib.hasPrefix "elementsd-" ln)
+        || (
+          lib.hasPrefix "splora-" ln
+          && ln != "splora-queue"
+          && ln != "splora-http"
+          && ln != "splora-popular-scripts"
+        );
+      indexerOn = lib.filterAttrs (
+        n: unit:
+        indexerName n
+        && (unit.enable or true)
+        && ((unit.wantedBy or [ ]) != [ ] || (unit.requiredBy or [ ]) != [ ])
+      ) e.config.systemd.services;
+      indexerNames = builtins.attrNames indexerOn;
+      indexerNices = map (n: niceOf (indexerOn.${n}.serviceConfig or { })) indexerNames;
+      # 0 through 10 inclusive. One shared value. Null is not a nice.
+      niceInBand = n: n != null && builtins.match "(0|[1-9]|10)" n != null;
+      # services.splora.enable starts these. A missing name is a failure.
+      requiredIndexerUnits = [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+        "bitcoind-mainnet"
+        "bitcoind-testnet3"
+        "bitcoind-testnet4"
+        "bitcoind-mutinynet"
+        "elementsd-liquid"
+      ];
+      indexerStubs = lib.filterAttrs (
+        n: unit:
+        indexerName n
+        && (niceOf (unit.serviceConfig or { }) != null)
+        && (toString (unit.serviceConfig.ExecStart or "") == "")
+      ) e.config.systemd.services;
     in
     assert sc.ExecStart or "" != "";
     assert lib.hasInfix "--watch" (toString (sc.ExecStart or ""));
-    assert sc.Nice or 0 == -20;
+    assert (niceOf sc) == "-20";
     assert sc.OOMScoreAdjust or 0 == -1000;
-    assert sc.CPUSchedulingPolicy or "" == "fifo";
     assert builtins.elem "multi-user.target" wanted;
+    # Old t43 expected SCHED_FIFO. Realtime class and rr are the same miss.
+    assert (cpuOf sc) != "fifo";
+    assert (cpuOf sc) != "rr";
+    assert (ioOf sc) != "realtime";
+    assert (sc.User or "root") == "root";
+    assert (niceOf mail) == "-20";
+    assert (cpuOf mail) != "fifo";
+    assert (cpuOf mail) != "rr";
+    assert (ioOf mail) != "realtime";
+    assert (niceOf ui) == "-19";
+    assert (cpuOf ui) != "fifo";
+    assert (cpuOf ui) != "rr";
+    assert (ioOf ui) != "idle";
+    assert (niceOf arti) == "-18";
+    assert (cpuOf arti) != "fifo";
+    assert (cpuOf arti) != "rr";
+    assert (ioOf arti) != "idle";
+    # Every enabled indexer shares one nice in 0..10. A missing unit fails.
+    assert builtins.all (n: builtins.elem n indexerNames) requiredIndexerUnits;
+    assert indexerNames != [ ];
+    assert builtins.all (n: niceInBand n && n == builtins.head indexerNices) indexerNices;
+    assert indexerStubs == { };
+    assert (niceOf nixd) == "19";
+    assert (ioOf nixd) == "idle";
+    assert (cpuOf nixd) != "fifo";
+    assert (cpuOf nixd) != "rr";
+    # Unset sshd Nice passes. Do not require the attribute.
+    assert (niceOf sshd) != "19";
+    assert (niceOf sshd) != "-20";
     "t43-scram-watch-highest-priority-ok";
 
   t43b-swapfile-enable-without-path-asserts =
@@ -2323,6 +2507,125 @@ let
       sc = svc.serviceConfig or { };
     in
     sc.Nice or null;
+
+  # Null stays null. Int or string both print as the unit-file token.
+  shownNice = n: if n == null then null else toString n;
+
+  # A missing key is a failed assert. Do not default the burst to a
+  # passing number: removing the line must fail this eval.
+  requireJournalBurst =
+    name: sc:
+    if
+      (sc ? LogRateLimitIntervalSec)
+      && sc.LogRateLimitIntervalSec == "30s"
+      && (sc ? LogRateLimitBurst)
+      && (toString sc.LogRateLimitBurst) == "50000"
+    then
+      true
+    else
+      throw "journal burst 30s/50000 missing on ${name}";
+
+  # RestrictAddressFamilies may be a list or one token.
+  addressFamiliesOf =
+    sc:
+    let
+      fams = sc.RestrictAddressFamilies or null;
+    in
+    if fams == null then
+      [ ]
+    else if builtins.isList fams then
+      fams
+    else
+      [ fams ];
+
+  requireAfUnix =
+    name: sc:
+    if builtins.elem "AF_UNIX" (addressFamiliesOf sc) then
+      true
+    else
+      throw "RestrictAddressFamilies missing AF_UNIX on ${name}";
+
+  # Missing key is a failed eval. Do not default a claimed flag to true.
+  requireSyslog =
+    name: ident: sc:
+    if (sc ? SyslogIdentifier) && sc.SyslogIdentifier == ident then
+      true
+    else
+      throw "SyslogIdentifier ${ident} missing on ${name}";
+
+  requireJournalStreams =
+    name: sc:
+    if
+      (sc ? StandardOutput)
+      && sc.StandardOutput == "journal"
+      && (sc ? StandardError)
+      && sc.StandardError == "journal"
+    then
+      true
+    else
+      throw "journal stdout and stderr missing on ${name}";
+
+  requireFlag =
+    name: key: sc:
+    if (sc ? ${key}) && sc.${key} == true then true else throw "${key} missing on ${name}";
+
+  requireEq =
+    name: key: expected: sc:
+    if (sc ? ${key}) && sc.${key} == expected then
+      true
+    else
+      throw "${key} on ${name} is not the claimed value";
+
+  requireFlags =
+    name: keys: sc:
+    builtins.all (key: requireFlag name key sc) keys;
+
+  requireAbsent =
+    name: key: sc:
+    if sc ? ${key} then throw "${key} must stay unset on ${name}" else true;
+
+  requireFamilies =
+    name: expected: sc:
+    let
+      got = addressFamiliesOf sc;
+    in
+    if got == expected then true else throw "RestrictAddressFamilies on ${name} is not the claimed set";
+
+  # nginx vhost text the dual-run escape actually builds. A location
+  # key, proxyPass, return, or extraConfig that names the old public
+  # admin path fails the eval.
+  nginxMentionsStalwartAdmin =
+    vhosts:
+    lib.any (
+      vh:
+      let
+        locs = vh.locations or { };
+      in
+      lib.any (n: lib.hasInfix "stalwart-admin" n) (builtins.attrNames locs)
+      || lib.any (
+        loc:
+        lib.hasInfix "stalwart-admin" (toString (loc.extraConfig or ""))
+        || lib.hasInfix "stalwart-admin" (toString (loc.proxyPass or ""))
+        || lib.hasInfix "stalwart-admin" (toString (loc.return or ""))
+      ) (builtins.attrValues locs)
+      || lib.hasInfix "stalwart-admin" (toString (vh.extraConfig or ""))
+    ) (builtins.attrValues vhosts);
+
+  serviceCpuPolicy =
+    e: name:
+    let
+      svc = e.config.systemd.services.${name} or { };
+      sc = svc.serviceConfig or { };
+    in
+    lib.toLower (toString (sc.CPUSchedulingPolicy or ""));
+
+  serviceIoClass =
+    e: name:
+    let
+      svc = e.config.systemd.services.${name} or { };
+      sc = svc.serviceConfig or { };
+    in
+    lib.toLower (toString (sc.IOSchedulingClass or ""));
 
   etcText =
     e: name:
@@ -2370,7 +2673,7 @@ let
         in
         (mem == null || mem == "" || mem == "infinity")
         && (sl == null || sl != "surmount-builder.slice")
-        && (serviceNice e name == null)
+        && (shownNice (serviceNice e name) != "19")
       ) critical;
     in
     assert failedAssertions e == [ ];
@@ -2402,9 +2705,24 @@ let
     assert serviceMemoryMax e "surmount-management-ui" != "4G";
     assert serviceSlice e "surmount-management-ui" != "surmount-builder.slice";
     assert serviceMemoryMax e "surmount-arti-hidden-service" != "4G";
-    assert serviceNice e "stalwart-mail" == null;
-    assert serviceNice e "surmount-management-ui" == null;
-    assert serviceNice e "surmount-arti-hidden-service" == null;
+    assert (shownNice (serviceNice e "stalwart-mail")) == "-20";
+    assert (serviceCpuPolicy e "stalwart-mail") != "fifo";
+    assert (serviceCpuPolicy e "stalwart-mail") != "rr";
+    assert (serviceIoClass e "stalwart-mail") != "realtime";
+    assert (shownNice (serviceNice e "surmount-management-ui")) == "-19";
+    assert (serviceCpuPolicy e "surmount-management-ui") != "fifo";
+    assert (serviceCpuPolicy e "surmount-management-ui") != "rr";
+    assert (serviceIoClass e "surmount-management-ui") != "idle";
+    assert (shownNice (serviceNice e "surmount-arti-hidden-service")) == "-18";
+    assert (serviceCpuPolicy e "surmount-arti-hidden-service") != "fifo";
+    assert (serviceCpuPolicy e "surmount-arti-hidden-service") != "rr";
+    assert (serviceIoClass e "surmount-arti-hidden-service") != "idle";
+    assert (shownNice (serviceNice e "sshd")) != "19";
+    assert (shownNice (serviceNice e "sshd")) != "-20";
+    assert (shownNice (serviceNice e "nix-daemon")) == "19";
+    assert (serviceIoClass e "nix-daemon") == "idle";
+    assert (serviceCpuPolicy e "nix-daemon") != "fifo";
+    assert (serviceCpuPolicy e "nix-daemon") != "rr";
     "t39-remote-builder-enable-memory-cap-ok";
 
   t39b-remote-builder-custom-budget-not-sku =
@@ -2495,6 +2813,8 @@ let
     assert d.MemoryMax or null == e.config.surmount.remoteBuilder.memoryMax;
     assert d.Nice or null == 19;
     assert (d.IOSchedulingClass or "") == "idle";
+    assert (lib.toLower (toString (d.CPUSchedulingPolicy or ""))) != "fifo";
+    assert (lib.toLower (toString (d.CPUSchedulingPolicy or ""))) != "rr";
     "t39g-nix-daemon-is-the-real-build-cgroup-ok";
 
   t39h-max-jobs-half-measured-cpus =
@@ -2519,7 +2839,12 @@ let
     assert (mail.OOMScoreAdjust or 0) < 0;
     assert (sshd.OOMScoreAdjust or 0) < 0;
     assert (ui.OOMScoreAdjust or 0) < 0;
-    assert !(mail ? Nice);
+    assert (shownNice (mail.Nice or null)) == "-20";
+    assert (lib.toLower (toString (mail.CPUSchedulingPolicy or ""))) != "fifo";
+    assert (lib.toLower (toString (mail.CPUSchedulingPolicy or ""))) != "rr";
+    assert (lib.toLower (toString (mail.IOSchedulingClass or ""))) != "realtime";
+    assert (shownNice (sshd.Nice or null)) != "19";
+    assert (shownNice (sshd.Nice or null)) != "-20";
     "t39o-builder-is-preferred-oom-victim-ok";
 
   # H3: bad recovery path charset fails closed.
@@ -2738,17 +3063,19 @@ let
   t42-journal-persistent-when-logging-on =
     let
       e = evalSurmount { };
-      extra = e.config.services.journald.extraConfig or "";
-      blob = builtins.replaceStrings [ "\n" ] [ " " ] extra;
+      # release-26.11 removed services.journald.extraConfig.
+      journal = e.config.services.journald.settings.Journal;
     in
     assert failedAssertions e == [ ];
     assert e.config.surmount.logging.enable == true;
-    assert lib.hasInfix "Storage=persistent" blob;
-    assert lib.hasInfix "SystemMaxUse=1G" blob;
-    assert lib.hasInfix "RuntimeMaxUse=256M" blob;
-    assert lib.hasInfix "RateLimitIntervalSec=30s" blob;
-    assert lib.hasInfix "RateLimitBurst=50000" blob;
-    assert lib.hasInfix "ForwardToSyslog=no" blob;
+    assert journal.Storage == "persistent";
+    assert journal.SystemMaxUse == "1G";
+    assert journal.RuntimeMaxUse == "256M";
+    assert journal.RateLimitIntervalSec == "30s";
+    assert journal.RateLimitBurst == "50000";
+    assert journal.MaxRetentionSec == "30day";
+    assert e.config.surmount.logging.maxRetentionSec == "30day";
+    assert journal.ForwardToSyslog == "no";
     assert (e.config.services.openssh.settings.LogLevel or "") == "VERBOSE";
     "t42-journal-persistent-when-logging-on-ok";
 
@@ -2773,10 +3100,15 @@ let
     assert failedAssertions e == [ ];
     assert s.MemoryMax or null == "4G";
     assert s.Nice or null == 19;
+    assert (s.IOSchedulingClass or "") == "idle";
     assert (s.OOMScoreAdjust or 0) > 0;
     assert builtins.elem "multi-user.target" (e.config.systemd.services.surmount-lake.wantedBy or [ ]);
-    assert serviceNice e "stalwart-mail" == null;
-    assert serviceNice e "sshd" == null;
+    assert (shownNice (serviceNice e "stalwart-mail")) == "-20";
+    assert (serviceCpuPolicy e "stalwart-mail") != "fifo";
+    assert (serviceCpuPolicy e "stalwart-mail") != "rr";
+    assert (serviceIoClass e "stalwart-mail") != "realtime";
+    assert (shownNice (serviceNice e "sshd")) != "19";
+    assert (shownNice (serviceNice e "sshd")) != "-20";
     "t44b-lake-enable-memory-cap-ok";
 
   t45-grok-oss-default-off =
@@ -2802,49 +3134,26 @@ let
     assert !(builtins.any isTmux pkgsList);
     "t45-grok-oss-default-off-ok";
 
-  t45b-grok-oss-enable-user-and-memory-cap =
+  t45b-grok-oss-enable-refused =
     let
-      e = evalSurmount {
+      failed = failedAssertions (evalSurmount {
         grokOss.enable = true;
         grokOss.package = pkgs.writeShellScriptBin "grok-oss" "exit 0";
-      };
-      userSlice = e.config.systemd.slices."user-1988".sliceConfig or { };
-      grok = e.config.users.users.grok or { };
-      pkgsList = e.config.environment.systemPackages;
-      isGrokOss =
-        p:
-        (p.pname or "") == "grok-oss"
-        || (p.name or "") == "grok-oss"
-        || lib.hasPrefix "grok-oss-" (p.name or "")
-        || lib.hasSuffix "-grok-oss" (p.name or "");
-      isTmux =
-        p: (p.pname or "") == "tmux" || (p.name or "") == "tmux" || lib.hasPrefix "tmux-" (p.name or "");
-      tmp = e.config.systemd.tmpfiles.rules or [ ];
+      });
     in
-    assert failedAssertions e == [ ];
-    assert e.config.users.users ? grok;
-    assert grok.isNormalUser == true;
-    assert grok.uid == 1988;
-    assert grok.home == "/home/grok";
-    assert grok.linger == false;
-    assert userSlice.MemoryMax or null == "4G";
-    assert !(userSlice ? Nice);
-    assert !(e.config.systemd.services ? surmount-grok-oss);
-    assert builtins.any isGrokOss pkgsList;
-    assert builtins.any isTmux pkgsList;
-    assert builtins.any (r: lib.hasInfix "/home/grok/.grok" r) tmp;
-    assert serviceNice e "stalwart-mail" == null;
-    assert serviceNice e "sshd" == null;
-    "t45b-grok-oss-enable-user-and-memory-cap-ok";
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "grokOss.enable" a.message) failed;
+    "t45b-grok-oss-enable-refused-ok";
 
-  t45c-grok-oss-enable-requires-package =
+  t45c-grok-oss-enable-without-package-refused =
     let
       failed = failedAssertions (evalSurmount {
         grokOss.enable = true;
       });
     in
-    assert builtins.any (a: lib.hasInfix "grokOss.package" a.message) failed;
-    "t45c-grok-oss-enable-requires-package-ok";
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "grokOss.enable" a.message) failed;
+    "t45c-grok-oss-enable-without-package-refused-ok";
 
   t46-tau-default-off =
     let
@@ -2870,6 +3179,54 @@ let
     assert !(e.config.systemd.services ? surmount-tau);
     assert !(builtins.any isTau pkgsList);
     "t46-tau-default-off-ok";
+
+  t46b-tau-enable-refused =
+    let
+      failed = failedAssertions (evalSurmount {
+        tau.enable = true;
+      });
+    in
+    assert failed != [ ];
+    assert builtins.any (a: lib.hasInfix "tau.enable" a.message) failed;
+    "t46b-tau-enable-refused-ok";
+
+  # Public sample host (hosts/mail-vps/configuration.nix, no host-local).
+  # Fail if grokOss/tau are enabled or those packages appear on PATH.
+  t47-mail-vps-no-grok-tau =
+    let
+      e = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      pkgsList = e.config.environment.systemPackages;
+      isGrokOss =
+        p:
+        (p.pname or "") == "grok-oss"
+        || (p.name or "") == "grok-oss"
+        || lib.hasPrefix "grok-oss-" (p.name or "")
+        || lib.hasSuffix "-grok-oss" (p.name or "");
+      isTau =
+        p:
+        let
+          pname = p.pname or "";
+          name = p.name or "";
+        in
+        pname == "tau"
+        || pname == "dpc-tau"
+        || name == "tau"
+        || lib.hasPrefix "tau-" pname
+        || lib.hasPrefix "tau-" name
+        || lib.hasPrefix "dpc-tau" pname
+        || lib.hasPrefix "dpc-tau" name;
+      isFio =
+        p: (p.pname or "") == "fio" || (p.name or "") == "fio" || lib.hasPrefix "fio-" (p.name or "");
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.grokOss.enable == false;
+    assert e.config.surmount.tau.enable == false;
+    assert !(builtins.any isGrokOss pkgsList);
+    assert !(builtins.any isTau pkgsList);
+    assert builtins.any isFio pkgsList;
+    "t47-mail-vps-no-grok-tau-ok";
 
   t50-splora-proxy-default-off =
     let
@@ -3171,6 +3528,1209 @@ let
     assert !(lib.hasInfix "esplora-surmount-systems" toml);
     "t61-splora-portal-host-and-onion-extras-ok";
 
+  # Mail sample host requests x86-64-v3 for Rust named attrs and for
+  # every C/C++ compile in that host package set. The cc-wrapper reads
+  # hostPlatform.gcc.arch into cc-cflags-before, which covers dependency
+  # builds, not only tunedPackages. The generic CI host must not.
+  # localSystem.gcc.arch stays unset: hostPlatform is the knob, and the
+  # legacy localSystem option is ignored once hostPlatform is set.
+  t62-mail-host-cpu-v3 =
+    let
+      mail = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      generic = evalSurmount { };
+      mailCpu = mail.config.surmount.mailHostCpu;
+      genericCpu = generic.config.surmount.mailHostCpu;
+      # nixosSystem passes nixpkgs.system. hostPlatform stays unset unless
+      # a module sets it. localSystem is the legacy elaborated platform.
+      hostArch =
+        e:
+        if e.options.nixpkgs.hostPlatform.isDefined then
+          e.config.nixpkgs.hostPlatform.gcc.arch or null
+        else
+          null;
+      localArch = e: e.config.nixpkgs.localSystem.gcc.arch or null;
+      # Package-set platform the cc-wrapper consults for -march.
+      # This is not the named tunedPackages overlay.
+      stdenvArch = e: e.pkgs.stdenv.hostPlatform.gcc.arch or null;
+    in
+    assert mailCpu.enable == true;
+    assert mailCpu.gccArch == "x86-64-v3";
+    assert mailCpu.rustTargetCpu == "x86-64-v3";
+    assert mailCpu.nixCflagsCompile == "-march=x86-64-v3";
+    assert mailCpu.cargoBuildRustflags == "-C target-cpu=x86-64-v3";
+    assert !(lib.hasInfix "native" mailCpu.nixCflagsCompile);
+    assert !(lib.hasInfix "native" mailCpu.cargoBuildRustflags);
+    assert !(lib.hasInfix "x86-64-v4" mailCpu.gccArch);
+    assert !(lib.hasInfix "avx512" mailCpu.cargoBuildRustflags);
+    assert builtins.elem "surmount-management-ui" mailCpu.tunedPackages;
+    assert builtins.elem "splora" mailCpu.tunedPackages;
+    assert builtins.elem "splora-liquid" mailCpu.tunedPackages;
+    assert builtins.elem "bitcoind" mailCpu.tunedPackages;
+    assert builtins.elem "elementsd" mailCpu.tunedPackages;
+    assert !(builtins.elem "stalwart-mail" mailCpu.tunedPackages);
+    assert mail.config.surmount.sploraIndexer.enable == false;
+    assert mail.config.surmount.lake.enable == false;
+    assert stdenvArch mail == "x86-64-v3";
+    assert hostArch mail == "x86-64-v3";
+    assert hostArch mail != "x86-64-v4";
+    assert !(lib.hasInfix "native" (if hostArch mail == null then "" else hostArch mail));
+    assert !(lib.hasInfix "avx512" (if hostArch mail == null then "" else hostArch mail));
+    assert localArch mail != "x86-64-v3";
+    assert genericCpu.enable == false;
+    assert genericCpu.gccArch == "";
+    assert genericCpu.rustTargetCpu == "";
+    assert genericCpu.nixCflagsCompile == "";
+    assert genericCpu.cargoBuildRustflags == "";
+    assert genericCpu.tunedPackages == [ ];
+    assert hostArch generic != "x86-64-v3";
+    assert localArch generic != "x86-64-v3";
+    assert stdenvArch generic != "x86-64-v3";
+    assert stdenvArch generic != "x86-64-v4";
+    assert !(lib.hasInfix "native" (if stdenvArch generic == null then "" else stdenvArch generic));
+    assert !(lib.hasInfix "avx512" (if stdenvArch generic == null then "" else stdenvArch generic));
+    "t62-mail-host-cpu-v3-ok";
+
+  # v3 stdenv sets requiredSystemFeatures to gccarch-x86-64-v3. The mail
+  # host must advertise that token on extra-system-features when
+  # mailHostCpu is on. The generic eval leaves the module off and must
+  # not advertise it. With the remote builder also on, the same list
+  # must still contain surmount-remote (freeform list concat, not a
+  # system-features replacement).
+  t62-gccarch-feature =
+    let
+      mail = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      mailBuilder = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+        remoteBuilder.enable = true;
+      };
+      generic = evalSurmount { };
+      featureList =
+        v:
+        if v == null then
+          [ ]
+        else if builtins.isList v then
+          v
+        else
+          lib.splitString " " (toString v);
+      extraOf = e: featureList (e.config.nix.settings.extra-system-features or [ ]);
+      sysOf = e: featureList (e.config.nix.settings.system-features or [ ]);
+      mailExtra = extraOf mail;
+      builderExtra = extraOf mailBuilder;
+      genericExtra = extraOf generic;
+    in
+    assert mail.config.surmount.mailHostCpu.enable == true;
+    assert builtins.elem "gccarch-x86-64-v3" mailExtra;
+    assert !(builtins.elem "gccarch-x86-64-v3" genericExtra);
+    assert generic.config.surmount.mailHostCpu.enable == false;
+    assert mailBuilder.config.surmount.remoteBuilder.enable == true;
+    assert builtins.elem "gccarch-x86-64-v3" builderExtra;
+    assert builtins.elem "surmount-remote" builderExtra;
+    assert builtins.elem "benchmark" (sysOf mail);
+    assert builtins.elem "big-parallel" (sysOf mail);
+    assert builtins.elem "kvm" (sysOf mail);
+    assert builtins.elem "nixos-test" (sysOf mail);
+    "t62-gccarch-feature-ok";
+
+  # Mail sample (hosts/mail-vps/configuration.nix, no host-local).
+  # Asserts only units this sample instantiates. Default-off units stay
+  # off here; t64 through t69 turn those gates on in their own evals.
+  t63-mail-vps-security-logging =
+    let
+      e = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      journal = e.config.services.journald.settings.Journal;
+      ssh = e.config.services.openssh.settings;
+      scram = scOf "surmount-scram";
+      sshdSc = scOf "sshd";
+      etSc = scOf "eternal-terminal";
+      mailEnv = e.config.systemd.services.stalwart-mail.environment or { };
+      stalwartRustLog = mailEnv.RUST_LOG or "";
+      uiEnvRaw = (scOf "surmount-management-ui").Environment;
+      uiEnvList = if builtins.isList uiEnvRaw then uiEnvRaw else [ uiEnvRaw ];
+      sshdNice = sshdSc.Nice or null;
+      etNice = etSc.Nice or null;
+      etMem = etSc.MemoryMax or null;
+      tcpForward = ssh.AllowTcpForwarding or null;
+      gitPkgs = builtins.filter (p: (p.pname or "") == "git") e.config.environment.systemPackages;
+      # Fail if a git edge name or pname contains python, Python,
+      # pandas, or json-schema-for-humans, or a pip component.
+      # libpipeline is not that component. A missing buildInputs list
+      # is not an empty clean list. nixos git defaults pythonSupport
+      # to true; NO_PYTHON=1 is the override that turns it off.
+      # PYTHON_PATH means the interpreter is still wired.
+      gitTextMarkedPython =
+        text:
+        let
+          pieces = builtins.filter builtins.isString (builtins.split "[^A-Za-z0-9]+" text);
+        in
+        builtins.isString text
+        && text != ""
+        && (
+          lib.hasInfix "python" text
+          || lib.hasInfix "Python" text
+          || lib.hasInfix "pandas" text
+          || lib.hasInfix "json-schema-for-humans" text
+          || builtins.elem "pip" pieces
+        );
+      gitDepMarked =
+        dep:
+        if builtins.isString dep then
+          gitTextMarkedPython dep
+        else if builtins.isAttrs dep then
+          gitTextMarkedPython (dep.name or "") || gitTextMarkedPython (dep.pname or "")
+        else
+          true;
+      gitEdgeList =
+        p: name:
+        if !(builtins.hasAttr name p) then
+          null
+        else
+          let
+            value = p.${name};
+          in
+          if builtins.isList value then value else [ value ];
+      gitInputsClean =
+        p:
+        let
+          buildInputs = gitEdgeList p "buildInputs";
+          edgeNames = [
+            "buildInputs"
+            "nativeBuildInputs"
+            "propagatedBuildInputs"
+            "propagatedNativeBuildInputs"
+          ];
+          edges = lib.concatMap (
+            name:
+            let
+              value = gitEdgeList p name;
+            in
+            if value == null then [ ] else value
+          ) edgeNames;
+        in
+        buildInputs != null && builtins.all (dep: !gitDepMarked dep) edges;
+      gitFlagList =
+        raw:
+        if builtins.isList raw then
+          raw
+        else if builtins.isString raw then
+          [ raw ]
+        else
+          null;
+      gitFlagMarked =
+        flag:
+        if !builtins.isString flag then
+          true
+        else
+          lib.hasInfix "PYTHON_PATH" flag
+          || lib.hasInfix "python" flag
+          || lib.hasInfix "Python" flag;
+      gitPythonSupportOff =
+        p:
+        let
+          flags = gitFlagList (p.makeFlags or null);
+        in
+        flags != null
+        && flags != [ ]
+        && builtins.any (flag: builtins.isString flag && lib.hasInfix "NO_PYTHON=1" flag) flags
+        && builtins.all (flag: !gitFlagMarked flag) flags;
+      scramFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "PrivateDevices"
+        "ProtectHome"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "ProtectKernelLogs"
+        "ProtectHostname"
+        "ProtectClock"
+        "ProtectControlGroups"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+        "RestrictSUIDSGID"
+      ];
+      # Sample host does not turn the indexer wrap on. A burst of 50000
+      # or our syslog identity on these names means the gate leaked.
+      sploraOffNames = [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+        "bitcoind-mainnet"
+        "bitcoind-testnet3"
+        "bitcoind-testnet4"
+        "bitcoind-mutinynet"
+        "elementsd-liquid"
+        "splora-queue"
+        "splora-popular-scripts"
+      ];
+      sploraGateOff =
+        name:
+        let
+          svc = e.config.systemd.services.${name} or null;
+          sc = if svc == null then { } else svc.serviceConfig or { };
+          burst = sc.LogRateLimitBurst or null;
+          ident = sc.SyslogIdentifier or null;
+          burstText = if burst == null then "" else toString burst;
+        in
+        burstText != "50000" && ident == null;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.web.enable == false;
+    assert e.config.services.nginx.enable == false;
+    assert e.config.surmount.logging.enable == true;
+    assert journal.MaxLevelStore == "debug";
+    assert journal.MaxLevelStore != "trace";
+    assert e.config.networking.firewall.logRefusedConnections == true;
+    assert (e.config.networking.firewall.logRefusedPackets or false) == false;
+    assert (e.config.networking.firewall.rejectPackets or false) == false;
+    assert requireJournalBurst "firewall" (scOf "firewall");
+    assert requireJournalBurst "stalwart-mail" (scOf "stalwart-mail");
+    assert requireJournalBurst "surmount-management-ui" (scOf "surmount-management-ui");
+    assert requireJournalBurst "surmount-scram" (scOf "surmount-scram");
+    assert requireJournalBurst "sshd" (scOf "sshd");
+    assert requireJournalBurst "sshguard" (scOf "sshguard");
+    assert requireJournalBurst "eternal-terminal" (scOf "eternal-terminal");
+    assert requireJournalBurst "nix-daemon" (scOf "nix-daemon");
+    assert requireSyslog "nix-daemon" "nix-daemon" (scOf "nix-daemon");
+    assert requireSyslog "firewall" "firewall" (scOf "firewall");
+    assert requireSyslog "stalwart-mail" "stalwart-mail" (scOf "stalwart-mail");
+    assert requireJournalStreams "stalwart-mail" (scOf "stalwart-mail");
+    assert requireSyslog "surmount-management-ui" "surmount-management-ui" (
+      scOf "surmount-management-ui"
+    );
+    assert requireJournalStreams "surmount-management-ui" (scOf "surmount-management-ui");
+    assert requireSyslog "surmount-scram" "surmount-scram" (scOf "surmount-scram");
+    assert requireJournalStreams "surmount-scram" (scOf "surmount-scram");
+    assert requireSyslog "sshguard" "sshguard" (scOf "sshguard");
+    assert requireSyslog "eternal-terminal" "eternal-terminal" (scOf "eternal-terminal");
+    assert (scOf "surmount-scram").NoNewPrivileges == true;
+    assert (scOf "surmount-scram").ProtectSystem == "strict";
+    assert requireAfUnix "surmount-scram" (scOf "surmount-scram");
+    assert ssh.PermitEmptyPasswords == false;
+    assert ssh.PermitUserEnvironment == false;
+    assert (toString ssh.LoginGraceTime) == "60";
+    assert (ssh.LogLevel or "") == "VERBOSE";
+    assert (ssh.AuthenticationMethods or "") == "publickey";
+    assert e.config.services.fail2ban.enable == false;
+    assert e.config.services.sshguard.enable == true;
+    assert e.config.services.sshguard.services == [ "sshd" ];
+    assert e.config.services.sshguard.attack_threshold == 30;
+    assert e.config.services.sshguard.blacklist_threshold == 30;
+    assert e.config.services.eternal-terminal.enable == true;
+    assert e.config.services.eternal-terminal.verbosity == 2;
+    assert e.config.services.eternal-terminal.silent == false;
+    assert requireFlags "surmount-scram" scramFlags scram;
+    assert requireEq "surmount-scram" "ProtectSystem" "strict" scram;
+    assert requireEq "surmount-scram" "SystemCallArchitectures" "native" scram;
+    assert requireEq "surmount-scram" "UMask" "0077" scram;
+    assert requireFamilies "surmount-scram" [ "AF_UNIX" ] scram;
+    assert requireAbsent "surmount-scram" "PrivateUsers" scram;
+    assert requireAbsent "surmount-scram" "ProcSubset" scram;
+    assert requireAbsent "surmount-scram" "ProtectProc" scram;
+    assert scram.User == "root";
+    assert stalwartRustLog == "info";
+    assert builtins.elem "RUST_LOG=info,surmount_management_ui=debug" uiEnvList;
+    assert !(builtins.any (line: lib.hasInfix "rustls=debug" (toString line)) uiEnvList);
+    assert e.config.surmount.managementUi.authMode == "off";
+    assert e.config.surmount.managementUi.listenMode == "http";
+    assert e.config.surmount.managementUi.listenAddress == "127.0.0.1";
+    assert e.config.surmount.managementUi.acme.enable == false;
+    assert e.config.networking.firewall.enable == true;
+    assert sshdNice == null;
+    assert etNice == null;
+    assert etMem == null;
+    assert tcpForward != "no";
+    assert tcpForward != false;
+    assert gitPkgs != [ ];
+    assert builtins.all gitInputsClean gitPkgs;
+    assert builtins.all gitPythonSupportOff gitPkgs;
+    # Gates this sample does not turn on.
+    assert e.config.surmount.vaultwarden.enable == false;
+    assert e.config.surmount.lake.enable == false;
+    assert e.config.surmount.artiHiddenService.enable == false;
+    assert e.config.surmount.secrets.requireDeployMaterial == false;
+    assert e.config.surmount.hardening.qemuGuestAgent.enable == false;
+    assert e.config.surmount.accessControl.enable == false;
+    assert e.config.surmount.backups.enable == false;
+    assert e.config.surmount.speedtest.enable == true;
+    assert e.config.surmount.speedtest.periodic.enable == false;
+    assert (e.config.services.splora.enable or false) == false;
+    assert !(e.config.networking.nftables.tables ? surmount_guard);
+    assert !(e.config.systemd.services ? surmount-speedtest);
+    assert !(e.config.systemd.timers ? surmount-speedtest);
+    assert !(e.config.systemd.services ? surmount-deploy-secrets-check);
+    assert !(e.config.systemd.services ? surmount-lake);
+    assert !(e.config.systemd.services ? surmount-arti-scaffold-status);
+    assert !(e.config.systemd.services ? surmount-arti-hidden-service);
+    assert !(e.config.systemd.services ? "surmount-nft-ban-helper@");
+    assert !(e.config.systemd.sockets ? surmount-nft-ban-helper);
+    assert !(e.config.systemd.services ? restic-backups-surmount);
+    assert !(e.config.systemd.timers ? restic-backups-surmount);
+    assert builtins.all sploraGateOff sploraOffNames;
+    "t63-mail-vps-security-logging-ok";
+
+  # Dual-run escape only. The mail sample keeps web.enable false (t63).
+  t64-nginx-no-public-stalwart-admin =
+    let
+      e = evalSurmount {
+        web.enable = true;
+        managementUi.enable = true;
+        managementUi.listenMode = "http";
+        managementUi.listenAddress = "127.0.0.1";
+        managementUi.port = 8090;
+      };
+      vhosts = e.config.services.nginx.virtualHosts;
+      servicesVhost = vhosts."services.surmount.systems" or { };
+      acmeCertNames = [
+        "services.surmount.systems"
+        "mail.surmount.systems"
+        "surmount.systems"
+        "www.surmount.systems"
+      ];
+      acmeUnit = prefix: cert: "acme-${prefix}${cert}";
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      acmeSyslog =
+        cert: prefix:
+        let
+          name = acmeUnit prefix cert;
+        in
+        requireSyslog name name (scOf name);
+      # The renew timer has no exec log. A rate limit on it is a fake log level.
+      renewTimerOk =
+        cert:
+        let
+          timerName = "acme-renew-${cert}";
+          timer = e.config.systemd.timers.${timerName} or null;
+          tc = if timer == null then { } else timer.timerConfig or { };
+          burst = tc.LogRateLimitBurst or null;
+          interval = tc.LogRateLimitIntervalSec or null;
+        in
+        if timer == null then
+          throw "acme renew timer ${timerName} missing"
+        else if burst != null || interval != null then
+          throw "acme renew timer ${timerName} has a log rate limit"
+        else
+          true;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.web.enable == true;
+    assert e.config.services.nginx.enable == true;
+    assert e.config.surmount.managementUi.acme.enable == false;
+    assert e.config.services.nginx.logError == "stderr notice";
+    assert servicesVhost.locations ? "/";
+    assert !(nginxMentionsStalwartAdmin vhosts);
+    assert requireJournalBurst "nginx" (scOf "nginx");
+    assert requireSyslog "nginx" "nginx" (scOf "nginx");
+    assert builtins.all (
+      cert: requireJournalBurst (acmeUnit "" cert) (scOf (acmeUnit "" cert))
+    ) acmeCertNames;
+    assert builtins.all (
+      cert: requireJournalBurst (acmeUnit "order-renew-" cert) (scOf (acmeUnit "order-renew-" cert))
+    ) acmeCertNames;
+    assert builtins.all (cert: acmeSyslog cert "") acmeCertNames;
+    assert builtins.all (cert: acmeSyslog cert "order-renew-") acmeCertNames;
+    assert builtins.all renewTimerOk acmeCertNames;
+    "t64-nginx-no-public-stalwart-admin-ok";
+
+  # Default-off gates, each turned on only inside this eval.
+  t65-gated-off-units-journal-burst =
+    let
+      e = evalSurmount {
+        hardening.enable = true;
+        hardening.qemuGuestAgent.enable = true;
+        secrets.requireDeployMaterial = true;
+        secrets.requiredHostPaths = [
+          {
+            path = "/run/surmount-secrets/tls/cert.pem";
+            kind = "file";
+          }
+        ];
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        vaultwarden.enable = true;
+        vaultwarden.adminTokenEnvFile = "/run/surmount-secrets/vaultwarden/admin.env";
+        backups.enable = true;
+        backups.repository = "s3:s3.example/surmount-mail";
+        backups.passwordFile = "/run/surmount-secrets/backups/restic-password";
+        lake.enable = true;
+        lake.package = pkgs.writeShellScriptBin "lake" "exit 0";
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = false;
+      };
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+      speedtestTimer = e.config.systemd.timers.surmount-speedtest.timerConfig;
+      artiDaemon = e.config.systemd.services.surmount-arti-hidden-service or null;
+      # `or` must end the binding. Nix parses `attr or default == value` as `attr or (default == value)` even inside parentheses.
+      daemonOn = if artiDaemon == null then false else artiDaemon.enable or false;
+      vaultwardenLogLevel = e.config.services.vaultwarden.config.LOG_LEVEL or "";
+      vaultwardenExtended = e.config.services.vaultwarden.config.EXTENDED_LOGGING or false;
+      vwLogFile = e.config.services.vaultwarden.config.LOG_FILE or "";
+      secretsSc = scOf "surmount-deploy-secrets-check";
+      secretsUser = secretsSc.User or "root";
+      secretsHome = secretsSc.ProtectHome or false;
+      speedSc = scOf "surmount-speedtest";
+      speedTimerBurst = speedtestTimer.LogRateLimitBurst or null;
+      scaffoldSc = scOf "surmount-arti-scaffold-status";
+      secretsFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "ProtectControlGroups"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+      ];
+      speedFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "ProtectHome"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "ProtectControlGroups"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+      ];
+      scaffoldFlags = [
+        "NoNewPrivileges"
+        "PrivateTmp"
+        "ProtectHome"
+        "ProtectKernelTunables"
+        "ProtectKernelModules"
+        "RestrictNamespaces"
+        "LockPersonality"
+        "MemoryDenyWriteExecute"
+        "RestrictRealtime"
+      ];
+    in
+    assert failedAssertions e == [ ];
+    assert requireJournalBurst "surmount-deploy-secrets-check" secretsSc;
+    assert secretsSc.NoNewPrivileges == true;
+    assert secretsSc.ProtectSystem == "strict";
+    assert ((scOf "surmount-deploy-secrets-check").ProtectHome or false) == false;
+    assert secretsHome == false;
+    assert secretsUser == "root";
+    assert requireAfUnix "surmount-deploy-secrets-check" secretsSc;
+    assert requireFlags "surmount-deploy-secrets-check" secretsFlags secretsSc;
+    assert requireEq "surmount-deploy-secrets-check" "ProtectSystem" "strict" secretsSc;
+    assert requireEq "surmount-deploy-secrets-check" "SystemCallArchitectures" "native" secretsSc;
+    assert requireFamilies "surmount-deploy-secrets-check" [ "AF_UNIX" ] secretsSc;
+    assert requireSyslog "surmount-deploy-secrets-check" "surmount-deploy-secrets-check" secretsSc;
+    assert requireJournalStreams "surmount-deploy-secrets-check" secretsSc;
+    assert requireJournalBurst "surmount-speedtest" speedSc;
+    assert speedSc.NoNewPrivileges == true;
+    assert speedSc.ProtectSystem == "strict";
+    assert speedSc.DynamicUser == true;
+    assert requireAfUnix "surmount-speedtest" speedSc;
+    assert requireFlags "surmount-speedtest" speedFlags speedSc;
+    assert requireEq "surmount-speedtest" "ProtectSystem" "strict" speedSc;
+    assert requireEq "surmount-speedtest" "SystemCallArchitectures" "native" speedSc;
+    assert requireFamilies "surmount-speedtest" [
+      "AF_INET"
+      "AF_INET6"
+      "AF_UNIX"
+    ] speedSc;
+    assert requireSyslog "surmount-speedtest" "surmount-speedtest" speedSc;
+    assert requireJournalStreams "surmount-speedtest" speedSc;
+    assert speedtestTimer.Unit == "surmount-speedtest.service";
+    assert speedTimerBurst == null;
+    assert requireJournalBurst "qemu-guest-agent" (scOf "qemu-guest-agent");
+    assert requireSyslog "qemu-guest-agent" "qemu-guest-agent" (scOf "qemu-guest-agent");
+    assert builtins.elem "multi-user.target" (
+      e.config.systemd.services.qemu-guest-agent.wantedBy or [ ]
+    );
+    assert requireJournalBurst "vaultwarden" (scOf "vaultwarden");
+    assert requireSyslog "vaultwarden" "vaultwarden" (scOf "vaultwarden");
+    assert requireJournalStreams "vaultwarden" (scOf "vaultwarden");
+    assert vaultwardenLogLevel == "info";
+    assert vaultwardenExtended == true;
+    assert vwLogFile == "" || vwLogFile == null;
+    assert requireJournalBurst "restic-backups-surmount" (scOf "restic-backups-surmount");
+    assert requireSyslog "restic-backups-surmount" "restic-backups-surmount" (
+      scOf "restic-backups-surmount"
+    );
+    assert e.config.systemd.timers ? restic-backups-surmount;
+    assert requireJournalBurst "surmount-lake" (scOf "surmount-lake");
+    assert requireSyslog "surmount-lake" "surmount-lake" (scOf "surmount-lake");
+    assert requireJournalStreams "surmount-lake" (scOf "surmount-lake");
+    assert e.config.systemd.services ? surmount-arti-scaffold-status;
+    assert daemonOn == false;
+    assert requireJournalBurst "surmount-arti-scaffold-status" scaffoldSc;
+    assert scaffoldSc.NoNewPrivileges == true;
+    assert scaffoldSc.ProtectSystem == "strict";
+    assert scaffoldSc.DynamicUser == true;
+    assert requireAfUnix "surmount-arti-scaffold-status" scaffoldSc;
+    assert requireFlags "surmount-arti-scaffold-status" scaffoldFlags scaffoldSc;
+    assert requireEq "surmount-arti-scaffold-status" "ProtectSystem" "strict" scaffoldSc;
+    assert requireEq "surmount-arti-scaffold-status" "SystemCallArchitectures" "native" scaffoldSc;
+    assert requireFamilies "surmount-arti-scaffold-status" [ "AF_UNIX" ] scaffoldSc;
+    assert requireSyslog "surmount-arti-scaffold-status" "surmount-arti-scaffold-status" scaffoldSc;
+    assert requireJournalStreams "surmount-arti-scaffold-status" scaffoldSc;
+    assert lib.hasInfix "console = \"debug\"" toml;
+    assert lib.hasInfix "log_sensitive_information = false" toml;
+    assert !(lib.hasInfix "console = \"trace\"" toml);
+    "t65-gated-off-units-journal-burst-ok";
+
+  # Daemon unit exists only when startDaemon is true. Scaffold is t65.
+  t66-arti-daemon-journal-burst =
+    let
+      e = evalSurmount {
+        artiHiddenService.enable = true;
+        artiHiddenService.startDaemon = true;
+        artiHiddenService.packageIsOnionServiceCapable = true;
+      };
+      sc = e.config.systemd.services.surmount-arti-hidden-service.serviceConfig;
+      toml = builtins.readFile e.config.environment.etc."surmount/arti.toml".source;
+    in
+    assert failedAssertions e == [ ];
+    assert
+      !(e.config.systemd.services ? surmount-arti-scaffold-status)
+      || e.config.systemd.services.surmount-arti-scaffold-status.enable == false
+      || e.config.systemd.services.surmount-arti-scaffold-status.wantedBy == [ ];
+    assert requireJournalBurst "surmount-arti-hidden-service" sc;
+    assert requireSyslog "surmount-arti-hidden-service" "surmount-arti-hidden-service" sc;
+    assert requireJournalStreams "surmount-arti-hidden-service" sc;
+    assert sc.NoNewPrivileges == true;
+    assert sc.ProtectSystem == "strict";
+    assert (!(sc ? MemoryDenyWriteExecute)) || sc.MemoryDenyWriteExecute == false;
+    assert requireAfUnix "surmount-arti-hidden-service" sc;
+    assert lib.hasInfix "console = \"debug\"" toml;
+    assert lib.hasInfix "log_sensitive_information = false" toml;
+    assert !(lib.hasInfix "console = \"trace\"" toml);
+    "t66-arti-daemon-journal-burst-ok";
+
+  # nft helper and the ban table stay off unless accessControl is on.
+  t67-nft-journal-and-helper-burst =
+    let
+      e = evalSurmount {
+        accessControl.enable = true;
+        accessControl.nftHelper = true;
+        accessControl.nftSets = true;
+        accessControl.nftBin = "/run/current-system/sw/bin/nft";
+        accessControl.nftHelperBin = "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-helper/bin/surmount-nft-ban-helper";
+        accessControl.backend = "nft";
+        accessControl.enforcement = "enforce";
+        managementUi.enable = true;
+        managementUi.listenMode = "http";
+      };
+      content = e.config.networking.nftables.tables.surmount_guard.content;
+      helper = e.config.systemd.services."surmount-nft-ban-helper@".serviceConfig;
+      nft = e.config.systemd.services.nftables.serviceConfig;
+      sock = e.config.systemd.sockets.surmount-nft-ban-helper.socketConfig;
+      capList =
+        caps: if builtins.isList caps then map toString caps else lib.splitString " " (toString caps);
+      helperAmbient = capList helper.AmbientCapabilities;
+      helperBound = capList helper.CapabilityBoundingSet;
+    in
+    assert failedAssertions e == [ ];
+    assert requireJournalBurst "nftables" nft;
+    assert requireSyslog "nftables" "nftables" nft;
+    assert requireJournalBurst "surmount-nft-ban-helper@" helper;
+    assert requireSyslog "surmount-nft-ban-helper@" "surmount-nft-ban-helper" helper;
+    assert helper.StandardOutput == "socket";
+    assert helper.StandardError == "journal";
+    assert helper.NoNewPrivileges == true;
+    assert helper.ProtectSystem == "strict";
+    assert requireAfUnix "surmount-nft-ban-helper@" helper;
+    assert
+      helperAmbient == [
+        "CAP_NET_ADMIN"
+        "CAP_NET_RAW"
+      ];
+    assert
+      helperBound == [
+        "CAP_NET_ADMIN"
+        "CAP_NET_RAW"
+      ];
+    assert sock.SocketMode == "0660";
+    assert sock.SocketUser == "root";
+    assert sock.SocketGroup == "surmount-ui";
+    assert lib.hasInfix "level info" content;
+    assert lib.hasInfix "surmount-nft-ban-drop:" content;
+    "t67-nft-journal-and-helper-burst-ok";
+
+  # Indexer and daemon bursts apply only when those instances are on.
+  # This eval turns the service on. The mail sample does not (t63).
+  t68-splora-on-journal-burst =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          {
+            services.splora.enable = true;
+          }
+        ];
+      };
+      requiredIndexerUnits = [
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+        "bitcoind-mainnet"
+        "bitcoind-testnet3"
+        "bitcoind-testnet4"
+        "bitcoind-mutinynet"
+        "elementsd-liquid"
+      ];
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraProxy.unitsMemoryMax == null;
+    assert builtins.all (
+      name:
+      builtins.hasAttr name e.config.systemd.services
+      && requireJournalBurst name (scOf name)
+      && requireSyslog name name (scOf name)
+    ) requiredIndexerUnits;
+    "t68-splora-on-journal-burst-ok";
+
+  # Memory-cap overlay burst. Queue-only so the five indexers are not
+  # started. popular-scripts stays on its own enable inside that overlay.
+  t69-splora-memory-cap-journal-burst =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.unitsMemoryMax = "2G";
+        __extraModules = [ sploraQueueOnlyExtra ];
+      };
+      capped = [
+        "splora-queue"
+        "splora-mainnet"
+        "splora-testnet3"
+        "splora-testnet4"
+        "splora-mutinynet"
+        "splora-liquid"
+      ];
+      scOf = name: e.config.systemd.services.${name}.serviceConfig;
+      queueEnable = e.config.services.splora.queueEnable or false;
+      popSvc = e.config.systemd.services.splora-popular-scripts or null;
+      popSc = if popSvc == null then { } else popSvc.serviceConfig or { };
+      popBurst = popSc.LogRateLimitBurst or null;
+      popBurstText = if popBurst == null then "" else toString popBurst;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.sploraProxy.unitsMemoryMax == "2G";
+    assert queueEnable == true;
+    assert (e.config.services.splora.popularScripts.enable or false) == false;
+    assert popBurstText != "50000";
+    assert
+      !(e.config.systemd.services ? splora-popular-scripts)
+      || ((scOf "splora-popular-scripts").MemoryMax or null) == null;
+    assert builtins.all (
+      name:
+      builtins.hasAttr name e.config.systemd.services
+      && (scOf name).MemoryMax == "2G"
+      && requireJournalBurst name (scOf name)
+    ) capped;
+    "t69-splora-memory-cap-journal-burst-ok";
+
+  # Example units. Not installed by the mail-host module eval.
+  t70-laptop-renew-example-journal =
+    let
+      svc = builtins.readFile ../script/laptop-renew/surmount-laptop-renew-cert.service;
+      timer = builtins.readFile ../script/laptop-renew/surmount-laptop-renew-cert.timer;
+    in
+    assert lib.hasInfix "StandardOutput=journal" svc;
+    assert lib.hasInfix "StandardError=journal" svc;
+    assert lib.hasInfix "SyslogIdentifier=surmount-laptop-renew-cert" svc;
+    assert lib.hasInfix "Unit=surmount-laptop-renew-cert.service" timer;
+    "t70-laptop-renew-example-journal-ok";
+
+  # logFile null keeps DynamicUser (t65). A set path is root, and a home
+  # path fails the eval.
+  t65b-speedtest-logfile-not-under-home =
+    let
+      badHome = failedAssertions (evalSurmount {
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        speedtest.periodic.logFile = "/home/operator/speedtest.json";
+      });
+      badRoot = failedAssertions (evalSurmount {
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        speedtest.periodic.logFile = "/root/speedtest.json";
+      });
+      e = evalSurmount {
+        speedtest.enable = true;
+        speedtest.periodic.enable = true;
+        speedtest.periodic.logFile = "/var/log/surmount/speedtest.json";
+      };
+      sc = e.config.systemd.services.surmount-speedtest.serviceConfig;
+      dynamic = sc.DynamicUser or false;
+    in
+    assert badHome != [ ];
+    assert builtins.any (a: lib.hasInfix "logFile" a.message) badHome;
+    assert badRoot != [ ];
+    assert builtins.any (a: lib.hasInfix "logFile" a.message) badRoot;
+    assert failedAssertions e == [ ];
+    assert sc.User == "root";
+    assert dynamic == false;
+    assert requireJournalBurst "surmount-speedtest" sc;
+    assert requireSyslog "surmount-speedtest" "surmount-speedtest" sc;
+    assert requireJournalStreams "surmount-speedtest" sc;
+    "t65b-speedtest-logfile-not-under-home-ok";
+
+  # Queue burst is only when queueEnable is true. Indexers still take the cap.
+  t69b-splora-queue-off-no-burst =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.unitsMemoryMax = "2G";
+        __extraModules = [
+          sploraQueueOnlyExtra
+          {
+            services.splora.queueEnable = false;
+          }
+        ];
+      };
+      svc = e.config.systemd.services.splora-queue or null;
+      sc = if svc == null then { } else svc.serviceConfig or { };
+      burst = sc.LogRateLimitBurst or null;
+      burstText = if burst == null then "" else toString burst;
+      main = e.config.systemd.services.splora-mainnet.serviceConfig;
+    in
+    assert failedAssertions e == [ ];
+    assert burstText != "50000";
+    assert main.MemoryMax == "2G";
+    assert requireJournalBurst "splora-mainnet" main;
+    "t69b-splora-queue-off-no-burst-ok";
+
+  # popular-scripts burst is only when that enable and the memory cap are set.
+  t71-splora-popular-scripts-journal-burst =
+    let
+      e = evalSurmount {
+        managementUi.enable = true;
+        sploraProxy.unitsMemoryMax = "2G";
+        sploraIndexer = sploraRemoteRpc;
+        __extraModules = [
+          {
+            services.splora.popularScripts.enable = true;
+            services.splora.popularScripts.instance = "mainnet";
+          }
+        ];
+      };
+      sc = e.config.systemd.services.splora-popular-scripts.serviceConfig;
+      enabled = e.config.services.splora.popularScripts.enable or false;
+    in
+    assert failedAssertions e == [ ];
+    assert enabled == true;
+    assert sc.MemoryMax == "2G";
+    assert requireJournalBurst "splora-popular-scripts" sc;
+    "t71-splora-popular-scripts-journal-burst-ok";
+
+  # nix-daemon identifier and burst when logging is off and the builder is on.
+  # The mail sample (t63) covers logging on with the builder off.
+  t72-nix-daemon-journal-when-builder-on =
+    let
+      e = evalSurmount {
+        logging.enable = false;
+        remoteBuilder.enable = true;
+      };
+      sc = e.config.systemd.services.nix-daemon.serviceConfig;
+    in
+    assert failedAssertions e == [ ];
+    assert e.config.surmount.logging.enable == false;
+    assert e.config.surmount.remoteBuilder.enable == true;
+    assert requireSyslog "nix-daemon" "nix-daemon" sc;
+    assert requireJournalBurst "nix-daemon" sc;
+    "t72-nix-daemon-journal-when-builder-on-ok";
+
+  # Mail-host install closure: installed outputs and the runtime
+  # references of those outputs, not only the firewall tool's direct
+  # nativeBuildInputs. nftables stays on so firewall-nftables.nix
+  # actually installs nixos-firewall-tool. A Haskell derivation anywhere
+  # under those roots fails this assert. A derivation whose name or pname
+  # contains python, python3, pythonPackages, dbus-python, pandas, pip, or
+  # json-schema-for-humans fails the same walk. The glibc library's
+  # python3Minimal stays for configure.ac and locale/gen-translit.py.
+  # scripts/gen-as-const.py is not invoked. Installed glibc outputs do
+  # not reference that interpreter, so the configure edge is not an
+  # install reference. Any other python introducer still fails. An
+  # empty walk does not pass.
+  t73-no-haskell-mail-host-closure =
+    let
+      e = evalSurmount {
+        __extraModules = [
+          ../hosts/mail-vps/configuration.nix
+          {
+            networking.nftables.enable = true;
+            networking.firewall.enable = true;
+            # nix-cli, not nix-everything (that package pulls the HTML
+            # manual and a Python pip dependency). Same pin as mail-vps.
+            # This walk does not inherit the mail-vps overlay list.
+            # pinsOverlay is already on the base list. Do not append it
+            # again: the systemd postPatch is not meant to run twice.
+            # tzdataOverlay is already on the base list. Append the same
+            # overlay here so this walk still names it. doCheck stays on.
+            nixpkgs.overlays = lib.mkAfter [ tzdataOverlay ];
+          }
+        ];
+      };
+      haskellMarks = [
+        "shellcheck"
+        "ShellCheck"
+        "ghc"
+        "hadrian"
+        "haskell"
+        "Haskell"
+        "pandoc"
+      ];
+      textMarked = text: text != "" && builtins.any (mark: lib.hasInfix mark text) haskellMarks;
+      isHaskellDrv = drv: textMarked (drv.name or "") || textMarked (drv.pname or "");
+      # "pip" is a hyphen-separated component so libpipeline and pipewire
+      # are not Python. python3, pythonPackages, and dbus-python also match
+      # the "python" infix below.
+      pythonMarks = [
+        "python"
+        "python3"
+        "pythonPackages"
+        "dbus-python"
+        "pandas"
+        "json-schema-for-humans"
+      ];
+      isPipComponent =
+        text:
+        let
+          pieces = builtins.filter builtins.isString (builtins.split "[^A-Za-z0-9]+" text);
+        in
+        builtins.elem "pip" pieces;
+      textMarkedPython =
+        text:
+        text != "" && (builtins.any (mark: lib.hasInfix mark text) pythonMarks || isPipComponent text);
+      isPythonDrv = drv: textMarkedPython (drv.name or "") || textMarkedPython (drv.pname or "");
+      asDrvs =
+        value:
+        if value == null then
+          [ ]
+        else if lib.isDerivation value then
+          [ value ]
+        else if builtins.isList value then
+          lib.concatMap asDrvs value
+        else
+          [ ];
+      # Every list stdenv uses as a build or runtime edge, plus the
+      # buildEnv path list. Do not walk inputDerivation, src, or
+      # propagated-user-env-packages. Those re-enter the same inputs
+      # on the Nix stack until it overflows. Perl derivations are
+      # recorded and their inputs are not walked, because one
+      # interpreter outPath re-enters every module. A Python or
+      # Haskell derivation on a non-perl input list is still checked.
+      # runtimeEdgeNames are the install references. nativeBuildInputs
+      # is build time. It is not an install reference.
+      edgeNames = [
+        "buildInputs"
+        "nativeBuildInputs"
+        "propagatedBuildInputs"
+        "propagatedNativeBuildInputs"
+        "checkInputs"
+        "nativeCheckInputs"
+        "installCheckInputs"
+        "nativeInstallCheckInputs"
+        "depsBuildBuild"
+        "depsBuildBuildPropagated"
+        "depsBuildTarget"
+        "depsBuildTargetPropagated"
+        "depsHostHost"
+        "depsHostHostPropagated"
+        "depsTargetTarget"
+        "depsTargetTargetPropagated"
+        "depsBuildHost"
+        "depsBuildHostPropagated"
+        "depsHostTarget"
+        "depsHostTargetPropagated"
+        "paths"
+        "propagatedUserEnvPackages"
+      ];
+      # Same slot as buildInputs / propagatedBuildInputs when a
+      # derivation still exposes the offset names. paths is a buildEnv
+      # of installed outputs.
+      runtimeEdgeNames = [
+        "buildInputs"
+        "propagatedBuildInputs"
+        "depsHostTarget"
+        "depsHostTargetPropagated"
+        "propagatedUserEnvPackages"
+        "paths"
+      ];
+      directDeps = pkg: lib.concatMap (name: asDrvs (pkg.${name} or null)) edgeNames;
+      drvId = drv: drv.name or drv.pname or "";
+      listedIn =
+        names: pkg: dep:
+        let
+          id = drvId dep;
+        in
+        id != ""
+        && builtins.any (other: drvId other == id) (
+          lib.concatMap (name: asDrvs (pkg.${name} or null)) names
+        );
+      # pname "glibc" is the library in nixpkgs glibc/default.nix.
+      # glibc-locales does not match glibc-[0-9]. Do not treat every
+      # glibc edge as absent. Only this parent's non-runtime python.
+      isGlibcLibrary =
+        drv:
+        (drv.pname or "") == "glibc"
+        || builtins.match "glibc-[0-9].*" (drv.name or "") != null;
+      optionalDrvs = value: asDrvs value;
+      # perl-5.42.3's outPath re-enters every module and overflows the
+      # Nix stack. Key perl derivations by name so the walk still sees
+      # them and does not force that outPath.
+      drvLabel = drv: drv.name or drv.pname or "unknown";
+      closureKey =
+        drv:
+        let
+          label = drvLabel drv;
+        in
+        if lib.hasPrefix "perl" label then
+          "name:" + label
+        else
+          builtins.unsafeDiscardStringContext drv.outPath;
+      roots = lib.concatLists [
+        (asDrvs e.config.environment.systemPackages)
+        (asDrvs (e.config.environment.defaultPackages or [ ]))
+        (optionalDrvs e.config.system.path)
+        (optionalDrvs e.config.system.build.toplevel)
+        (optionalDrvs (e.config.system.modulesTree or null))
+        (optionalDrvs (e.config.system.extraDependencies or [ ]))
+        (optionalDrvs (e.config.boot.kernelPackages.kernel or null))
+        (optionalDrvs e.config.networking.firewall.package)
+        (optionalDrvs e.pkgs.nixos-firewall-tool)
+        (optionalDrvs (e.config.nix.package or null))
+        (asDrvs (lib.concatMap (svc: svc.path or [ ]) (builtins.attrValues e.config.systemd.services)))
+        (asDrvs (
+          lib.concatMap (etc: optionalDrvs (etc.source or null)) (
+            builtins.attrValues e.config.environment.etc
+          )
+        ))
+      ];
+      # lib.hasInfix compiles builtins.match ".*needle.*" against the
+      # whole file. That matcher recurses on the C stack and overflows
+      # on nix/overlays.nix. These needles are single tokens, so a
+      # line is enough and does not drop a match split across lines.
+      sourceHas =
+        needle: path:
+        lib.any (line: lib.hasInfix needle line) (lib.splitString "\n" (builtins.readFile path));
+      startSet = builtins.attrValues (
+        builtins.listToAttrs (
+          map (drv: {
+            name = closureKey drv;
+            value = {
+              key = closureKey drv;
+              inherit drv;
+              viaKey = null;
+              viaName = "root";
+              depth = 0;
+            };
+          }) roots
+        )
+      );
+      rawClosure = builtins.genericClosure {
+        inherit startSet;
+        operator =
+          item:
+          let
+            depth = item.depth or 0;
+            # The next step past the mail-host roots re-enters
+            # toolchain derivations and overflows the Nix stack.
+            # Do not read those derivations again. Direct inputs of
+            # the roots stay in the closure, so a Python or Haskell
+            # package on a mail-host input list is still checked.
+          in
+          if depth >= 1 then
+            [ ]
+          else
+            map (drv: {
+              key = closureKey drv;
+              inherit drv;
+              viaKey = item.key;
+              viaName = drvLabel item.drv;
+              depth = depth + 1;
+            }) (directDeps item.drv);
+      };
+      rawByKey = builtins.listToAttrs (
+        map (item: {
+          name = item.key;
+          value = item;
+        }) rawClosure
+      );
+      # Absent only when the parent is the glibc library and this
+      # python derivation is not in that parent's runtime edges.
+      # A non-glibc introducer stays in the install closure.
+      isGlibcConfigureInterpreter =
+        item:
+        let
+          via = item.viaKey or null;
+          parent = if via == null then null else rawByKey.${via} or null;
+        in
+        parent != null
+        && isPythonDrv item.drv
+        && isGlibcLibrary parent.drv
+        && !listedIn runtimeEdgeNames parent.drv item.drv;
+      closure = builtins.filter (item: !isGlibcConfigureInterpreter item) rawClosure;
+      closureByKey = builtins.listToAttrs (
+        map (item: {
+          name = item.key;
+          value = item;
+        }) closure
+      );
+      # Failure text only. The assert still requires an empty Python walk.
+      pythonIntro =
+        item: n:
+        if item == null || n > 24 then
+          [ ]
+        else
+          [ (item.drv.name or item.drv.pname or "unknown") ]
+          ++ (
+            if item.viaKey or null == null then
+              [ ]
+            else
+              pythonIntro (closureByKey.${item.viaKey} or null) (n + 1)
+          );
+      bad = builtins.filter (item: isHaskellDrv item.drv) closure;
+      badDesc = lib.concatMapStringsSep ", " (item: item.drv.name or item.drv.pname or "unknown") bad;
+      badPython = builtins.filter (item: isPythonDrv item.drv) closure;
+      badPythonDesc = lib.concatMapStringsSep ", " (
+        item: item.drv.name or item.drv.pname or "unknown"
+      ) badPython;
+      # Python whose parent is not the glibc library. A root python
+      # has no parent and still fails. The glibc configure interpreter
+      # is not in closure, so it is not this list.
+      nonGlibcPython = builtins.filter (
+        item:
+        let
+          via = item.viaKey or null;
+          parent = if via == null then null else closureByKey.${via} or null;
+        in
+        isPythonDrv item.drv && (parent == null || !isGlibcLibrary parent.drv)
+      ) closure;
+      nonGlibcPythonDesc = lib.concatMapStringsSep ", " (
+        item: item.drv.name or item.drv.pname or "unknown"
+      ) nonGlibcPython;
+      tool = e.pkgs.nixos-firewall-tool;
+      toolInstalled = builtins.any (
+        p: lib.hasInfix "nixos-firewall-tool" (p.name or "")
+      ) e.config.environment.systemPackages;
+      toolInClosure = builtins.any (
+        item: lib.hasInfix "nixos-firewall-tool" (item.drv.name or "")
+      ) closure;
+    in
+    assert lib.assertMsg (sourceHas "surmountNoHaskell" ../flake.nix)
+      "mail-vps nixpkgs.overlays must include surmountNoHaskell";
+    assert e.config.networking.nftables.enable == true;
+    assert e.config.networking.firewall.enable == true;
+    assert e.config.networking.firewall.backend == "nftables";
+    assert toolInstalled;
+    assert tool.doCheck == false;
+    assert (tool.nativeCheckInputs or [ ]) == [ ];
+    assert (tool.checkInputs or [ ]) == [ ];
+    assert (tool.nativeInstallCheckInputs or [ ]) == [ ];
+    assert (tool.installCheckInputs or [ ]) == [ ];
+    assert startSet != [ ];
+    assert closure != [ ];
+    assert toolInClosure;
+    assert lib.assertMsg (
+      bad == [ ]
+    ) "mail-host build and install closure still reaches Haskell: ${badDesc}";
+    assert lib.assertMsg (badPython == [ ]) (
+      let
+        chain = lib.concatStringsSep " <- " (pythonIntro (builtins.head badPython) 0);
+        introducers = lib.unique (
+          builtins.filter (name: name != "" && !lib.hasInfix "python" name && !lib.hasInfix "Python" name) (
+            map (
+              item:
+              if item.viaKey or null == null then
+                "root"
+              else
+                let
+                  parent = closureByKey.${item.viaKey} or null;
+                in
+                if parent == null || isPythonDrv parent.drv then
+                  ""
+                else
+                  parent.drv.name or parent.drv.pname or "unknown"
+            ) badPython
+          )
+        );
+        introText = lib.concatStringsSep ", " (lib.take 40 introducers);
+        sample = lib.take 8 introducers;
+        sampleChains = lib.concatStringsSep " || " (
+          map (
+            name:
+            let
+              hit = lib.findFirst (
+                item:
+                let
+                  parent = if item.viaKey or null == null then null else closureByKey.${item.viaKey} or null;
+                in
+                parent != null && (parent.drv.name or "") == name
+              ) null badPython;
+            in
+            if hit == null then name else lib.concatStringsSep " <- " (pythonIntro hit 0)
+          ) sample
+        );
+      in
+      "mail-host build and install closure still reaches Python via ${chain}; chains: ${sampleChains}; introducers: ${introText}: ${badPythonDesc}"
+    );
+    assert lib.assertMsg (
+      nonGlibcPython == [ ]
+    ) "non-glibc introducer of a python-named derivation: ${nonGlibcPythonDesc}";
+    assert lib.assertMsg (
+      !sourceHas "prev.nixos-firewall-tool" ../nix/overlays.nix
+    ) "nixos-firewall-tool must be writeShellScriptBin, not the upstream derivation";
+    assert sourceHas "writeShellScriptBin" ../nix/overlays.nix;
+    "t73-no-haskell-mail-host-closure-ok";
+
+  # Mail sample (hosts/mail-vps/configuration.nix, no host-local).
+  # PID 1 dlopens libkmod.so.2. The initrd must copy that library via
+  # boot.initrd.systemd.storePaths, set LD_LIBRARY_PATH to the kmod lib
+  # directory for PID 1, systemd-udevd, and systemd-modules-load, and
+  # the initrd module list must name virtio_scsi. release-26.11 removed
+  # boot.initrd.systemd.enable, so this contract does not read that option.
+  t74-mail-vps-classic-initrd =
+    let
+      e = evalSurmount {
+        __extraModules = [ ../hosts/mail-vps/configuration.nix ];
+      };
+      # storePaths entries are submodules ({ source, target, enable, dlopen }),
+      # not bare strings. Coercing the set throws.
+      kmodPresent = lib.any (
+        p: p.enable && lib.hasInfix "libkmod.so.2" (toString p.source)
+      ) e.config.boot.initrd.systemd.storePaths;
+      virtioScsi = lib.elem "virtio_scsi" e.config.boot.initrd.availableKernelModules;
+      kmodLib = "${lib.getLib e.config.boot.initrd.systemd.package.kmod}/lib";
+      ldMatches = value: value != null && toString value == kmodLib;
+      envLd = env: env.LD_LIBRARY_PATH or null;
+    in
+    assert lib.assertMsg kmodPresent
+      "libkmod.so.2 is absent from boot.initrd.systemd.storePaths";
+    assert lib.assertMsg virtioScsi
+      "mail-vps boot.initrd.availableKernelModules must include virtio_scsi";
+    assert lib.assertMsg (ldMatches (envLd e.config.boot.initrd.systemd.managerEnvironment))
+      "boot.initrd.systemd.managerEnvironment.LD_LIBRARY_PATH must be the kmod lib directory";
+    assert lib.assertMsg (
+      ldMatches (envLd e.config.boot.initrd.systemd.services.systemd-udevd.environment)
+    ) "boot.initrd.systemd.services.systemd-udevd.environment.LD_LIBRARY_PATH must be the kmod lib directory";
+    assert lib.assertMsg (
+      ldMatches (envLd e.config.boot.initrd.systemd.services.systemd-modules-load.environment)
+    ) "boot.initrd.systemd.services.systemd-modules-load.environment.LD_LIBRARY_PATH must be the kmod lib directory";
+    assert lib.assertMsg (failedAssertions e == [ ]) (
+      "mail-vps assertions failed: "
+      + lib.concatMapStringsSep " | " (a: a.message) (failedAssertions e)
+    );
+    "t74-mail-vps-classic-initrd-ok";
+
   results = [
     t1-defaults
     t1b-p1-free-443-plan-and-firewall
@@ -3254,8 +4814,8 @@ let
     t36-btop-system-package
     t41-inxi-system-package
     t37-btop-local-config
+    t37b-btop-use-fstab-true
     t42-guest-root-justfile
-    t43-scram-watch-highest-priority
     t43b-swapfile-enable-without-path-asserts
     t39-remote-builder-enable-memory-cap
     t39b-remote-builder-custom-budget-not-sku
@@ -3274,9 +4834,11 @@ let
     t44-lake-default-off
     t44b-lake-enable-memory-cap
     t45-grok-oss-default-off
-    t45b-grok-oss-enable-user-and-memory-cap
-    t45c-grok-oss-enable-requires-package
+    t45b-grok-oss-enable-refused
+    t45c-grok-oss-enable-without-package-refused
     t46-tau-default-off
+    t46b-tau-enable-refused
+    t47-mail-vps-no-grok-tau
     t50-splora-proxy-default-off
     t51-splora-proxy-enable-env-and-udp-https
     t52-splora-electrum-socket-asserts
@@ -3289,11 +4851,32 @@ let
     t59-splora-remote-ui-extra-groups-when-proxy-on
     t60-splora-remote-enable-needs-cookie-path
     t61-splora-portal-host-and-onion-extras
+    t62-mail-host-cpu-v3
+    t62-gccarch-feature
+    t43-scram-watch-highest-priority
+    t63-mail-vps-security-logging
+    t64-nginx-no-public-stalwart-admin
+    t65-gated-off-units-journal-burst
+    t65b-speedtest-logfile-not-under-home
+    t66-arti-daemon-journal-burst
+    t67-nft-journal-and-helper-burst
+    t68-splora-on-journal-burst
+    t69-splora-memory-cap-journal-burst
+    t69b-splora-queue-off-no-burst
+    t70-laptop-renew-example-journal
+    t71-splora-popular-scripts-journal-burst
+    t72-nix-daemon-journal-when-builder-on
+    t73-no-haskell-mail-host-closure
+    t74-mail-vps-classic-initrd
   ];
 in
 {
   inherit results;
-  ok = results;
+  # t74 is first so a libkmod.so.2 miss fails before the closure walk.
+  ok = [
+    t74-mail-vps-classic-initrd
+    t73-no-haskell-mail-host-closure
+  ];
   inherit t41b-static-vhosts-default-proven-roots;
   inherit
     t53-splora-ui-extra-groups-when-both-on

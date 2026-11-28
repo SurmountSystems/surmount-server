@@ -4,7 +4,11 @@ Defense-in-depth notes for the Surmount mail VPS. Design notes:
 [open-choices.md](open-choices.md). Secrets detail: [SECRETS.md](SECRETS.md).
 Data plane: [DATASTORES.md](DATASTORES.md). Ops: [OPS.md](OPS.md).
 
-**Last updated:** 2026-08-26 (Cargo.lock SHA-1/MD5 inventory: no sha1/md5
+**Last updated:** 2026-10-24 (Cargo.lock git patches for ctutils 0.4.5,
+rustls-webpki 0.103.16, webpki-root-certs 1.0.11, and i18n-config 0.4.8
+without basic-toml, because menhera 10d still stops at the unpatched
+registry versions; do not ignore those advisories; do not fetch crates.io
+to skip the cooldown). Prior 2026-08-26 (Cargo.lock SHA-1/MD5 inventory: no sha1/md5
 crates; product TLS is rustls+aws-lc-rs TLS 1.3; ring is locked as a
 rustls optional dep). Prior 2026-08-20 (extra mailbox domains get the same
 mail-auth DNS **and** the same hosted DNSSEC as the primary; leftover
@@ -65,6 +69,27 @@ RUSTSEC-2026-0173 is proc-macro-error2, not age. `instant`
 (RUSTSEC-2024-0384) left the lock with nostr 0.45 (universal-time, not
 instant).
 
+On 2026-10-24, menhera 10d still stopped at ctutils 0.4.3, rustls-webpki
+0.103.15, and webpki-root-certs 1.0.9. The lock uses git
+`[patch.crates-io]` of ctutils tag `ctutils-v0.4.5` (rev
+`88d6e90d4cfd2fc3333d00e13c99241507d2138f`) for
+[RUSTSEC-2026-0385](https://rustsec.org/advisories/RUSTSEC-2026-0385)
+(accessed: 2026-10-24), rustls-webpki tag `v/0.103.16` (rev
+`8ecdcc76f56b68fda67a6adf7976f5eed5006a4c`) for
+[RUSTSEC-2026-0382](https://rustsec.org/advisories/RUSTSEC-2026-0382)
+(accessed: 2026-10-24), and webpki-root-certs tag `v/1.0.11` (rev
+`7ebfa0b377fd0c7e0a2848f9d9b2867a4c2198cf`) for
+[RUSTSEC-2026-0383](https://rustsec.org/advisories/RUSTSEC-2026-0383)
+(accessed: 2026-10-24). i18n-config 0.4.8 on menhera still depends on
+basic-toml ([RUSTSEC-2026-0374](https://rustsec.org/advisories/RUSTSEC-2026-0374),
+accessed: 2026-10-24; unmaintained, no patched versions). The lock
+patches i18n-config to kellpossible/cargo-i18n rev
+`2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4`, still version 0.4.8, which
+uses the toml crate. Do not ignore those four advisories. Do not fetch
+crates.io to skip menhera. Drop each git line when 10d lists the
+patched registry version. The audit command does not pass --ignore. The
+ignore list was removed on 2026-11-25.
+
 On 2026-09-26 the lock replaced registry faster-hex 0.10.0 with git tag
 v0.10.1 (rev `c817979830ea5be2eafe0b0c99cb83b017ae2b8f`) for
 RUSTSEC-2026-0306. `faster_hex::hex_decode_unchecked` on x86 and x86_64,
@@ -92,10 +117,16 @@ paste or proc-macro-error. The crates run inside rustc while the UI is
 compiled. They are not in the mail server process and not in the running
 management UI process. A lockfile pin means a later crates.io upload
 does not enter the build until someone updates the lock. Do not vendor
-Leptos to clear paste. Do not ignore any other advisory.
-`checks.*.cargo-audit` passes `--ignore RUSTSEC-2024-0436` only, and it
-still passes `--deny warnings`. `RUSTSEC-2026-0173` is not in this lock,
-so that ignore is gone.
+Leptos to clear paste. The audit command does not pass --ignore. The
+ignore list was removed on 2026-11-25. paste 1.0.15, advisory
+RUSTSEC-2024-0436, has no patched release. Dependents in Cargo.lock are
+either_of 0.1.9, leptos 0.8.23, reactive_graph 0.2.16, reactive_stores
+0.4.4, and tachys 0.2.19. The ignore was not put back. heapless 0.8.0 is
+below the patched line >=0.9.4 (RUSTSEC-2026-0580). faster-hex 0.10.1
+requires heapless ^0.8 when alloc is off. nostr 0.45.7 requires
+faster-hex ^0.10. Heapless 0.9 was not forced onto that requirement. No
+ignore was added. just audit-remote has not been run since the ignore
+was removed. Do not claim a new exit code.
 proc-macro-error3 stays because i18n-embed-fl 0.10.1 uses it. See
 `.cargo/audit.toml` and
 [research/cargo-audit-2026-08-26.md](research/cargo-audit-2026-08-26.md).
@@ -125,7 +156,7 @@ See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
 and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
 (accessed: 2026-10-10).
 
-On 2026-10-18, `cargo update -p paste -p leptos -p either_of -p reactive_graph -p reactive_stores -p tachys` on the menhera-cooldown index locked 0 packages. `paste` stayed 1.0.15. `proc-macro-error2` is not in `Cargo.lock`. The locked advisory for RUSTSEC-2024-0436 has `patched = []`. The locked advisory for RUSTSEC-2026-0173 has `patched = []` and names `proc-macro-error2`. cargo-audit 0.22.1 with `--deny warnings` and no ignore, against that advisory database and this lock, exited 1 and reported only RUSTSEC-2024-0436. The same command with `--ignore RUSTSEC-2024-0436` is what `checks.*.cargo-audit` runs. A `[patch.crates-io]` of paste to pastey 0.2.3 was rejected as the same source, and a path patch of package `pastey` version 1.0.15 was not used in the crate graph. Leptos 0.8.22 and 0.9.0-rc0 still depend on `paste` 1.0. Do not vendor Leptos to clear paste.
+On 2026-10-18, `cargo update -p paste -p leptos -p either_of -p reactive_graph -p reactive_stores -p tachys` on the menhera-cooldown index locked 0 packages. `paste` stayed 1.0.15. `proc-macro-error2` is not in `Cargo.lock`. The locked advisory for RUSTSEC-2024-0436 has `patched = []`. The locked advisory for RUSTSEC-2026-0173 has `patched = []` and names `proc-macro-error2`. cargo-audit 0.22.1 with `--deny warnings` and no ignore, against that advisory database and this lock, exited 1 and reported only RUSTSEC-2024-0436. On that date, `checks.*.cargo-audit` ran the same command with `--ignore RUSTSEC-2024-0436`. The audit command does not pass --ignore. The ignore list was removed on 2026-11-25. A `[patch.crates-io]` of paste to pastey 0.2.3 was rejected as the same source, and a path patch of package `pastey` version 1.0.15 was not used in the crate graph. Leptos 0.8.22 and 0.9.0-rc0 still depend on `paste` 1.0. Do not vendor Leptos to clear paste.
 See [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436)
 and [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173)
 (accessed: 2026-10-18).
@@ -303,14 +334,14 @@ Q-AUTH-1 still open. Report: `.agents/reports/impl-auth-live-b4-switch.md`.
   OIDC provider/client. That is **not** the same as Nostr.
 - **Does not** natively verify Nostr npub signatures unless we build a bridge.
 
-### Mailbox password hashing (Stalwart 0.16.24)
+### Mailbox password hashing
 
 The management UI does **not** hash mailbox passwords in the browser or in
 Axum. `POST /api/v1/accounts/password` sends the plaintext secret only over
 the already-authenticated operator session to loopback Stalwart
 (`x:Account/set` `credentials.0` `@type Password`). The engine hashes.
 
-Stalwart 0.16.24 (this repo pin in `nix/packages/stalwart-mail.nix`) uses
+Stalwart tag v0.16.24 (source re-checked 2026-10-03; the living pin in `nix/packages/stalwart-mail.nix` is **1.0.2** as of 2026-11-03) uses
 `Authentication.passwordHashAlgorithm`. The enum default is **Argon2id**.
 Source (tag `v0.16.24`, re-checked 2026-10-03):
 

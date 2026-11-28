@@ -15,7 +15,7 @@ law). Scaffold defaults still describe what code does today when they differ.
 Run mail, light static web, admin console, and v1 webmail on a **single
 operator-chosen VPS** (size/plan open; **Q-HOST-1**; do not invent SKUs). **Stalwart**
 is the mail engine (version from `nix/packages/stalwart-mail.nix`; currently
-**0.16.15** binary FOD). **RocksDB** for all store roles is **fine for now**.
+**1.0.2** binary FOD). **RocksDB** for all store roles is **fine for now**.
 Our Rust product layer (**Axum + Leptos SSR**) is operator admin first, then
 real webmail, with **Nostr** authentication at the product edge. HTTPS must
 move to an **Axum-first** edge we own (nginx is transitional-to-delete; no
@@ -207,7 +207,7 @@ Firewall set in `modules/networking.nix`.
 | Host | Path | Upstream |
 |------|------|----------|
 | `services.surmount.systems` | `/` | management-ui operator console (UDS target; TCP loopback scaffold) |
-| `services.surmount.systems` | `/stalwart-admin/` | Stalwart HTTP (bootstrap only) |
+| `services.surmount.systems` | (no `/stalwart-admin/`) | Public Stalwart HTTP proxy removed. Bootstrap is an SSH tunnel to loopback Stalwart HTTP. |
 | `mail.surmount.systems` | `/` | same console as services. Host classification is Other, so `/` redirects to `/login` on that name. The name is on the certificate. It is not a separate public site. |
 | apex / www | `/` | packaged SurmountSystems/site static files (flake input; store path default); else UNDER CONSTRUCTION if the root has no index.html (not operator console) |
 | future vault host | `/` | Vaultwarden local only (private, no public signup) |

@@ -10,12 +10,15 @@
 # GHA: .github/workflows/ci.yml job display name is `just ci` (required-check footgun)
 # End-to-end: nix run .#e2e (local) / nix run .#e2e-host (env-gated; never in ci)
 # Operator bins: nix run .#<app> -- args (just aliases only nix-run).
+# Speedtest: nix run .#speedtest (Ookla CLI; --accept-license --accept-gdpr).
+# Module: surmount.speedtest.enable ; timer: surmount.speedtest.periodic.enable
+# (default off, interval 6h, JSON to the journal, optional logFile).
 # Heavy: mail-vm-test, mail-vps-eval, stalwart-mail package are optional.
 
 {
   description = "Surmount mail + web NixOS foundation (Stalwart, HTTPS edge, management UI)";
 
-  # Host channel: nixos-26.05. Deploy: just deploy-host /
+  # Host channel: release-26.11. Deploy: just deploy-host /
   # nix run .#surmount-deploy-host (public rsync + private host-local +
   # path: flake rebuild). See docs/deploy-host-local.md. Host-local under
   # ./host-local is auto-imported when present (path flake / remote rsync
@@ -28,42 +31,63 @@
 
   inputs = {
     # Prefer stable for a mail host. Bump deliberately after reading release notes.
-    # Host channel: nixos-26.05 (crane wants >= 26.05; operator direction 2026-08-07).
+    # Host channel: release-26.11 (operator direction 2026-11-25).
     # Stalwart engine is NOT taken from this channel. See
     # nix/packages/stalwart-mail.nix and modules/stalwart-service.nix.
     # Arti engine is NOT taken from this channel. See
-    # nix/packages/arti-onion-service.nix (Surmount-owned 2.7.0 source build).
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    # nix/packages/arti-onion-service.nix (Surmount-owned 2.8.0 source build;
+    # cargoHash is set to sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=).
+    # Builder-login Lean is NOT pkgs.lean4 from this channel (4.29.1).
+    # See nix/packages/lean4.nix (official release v4.35.0).
+    nixpkgs.url = "github:NixOS/nixpkgs/release-26.11";
 
-    # rustc/cargo for crane packages and the grok-oss build. Not host
-    # nixos-26.05 (pkgs.rustc 1.95.0). Not nixos-unstable. Not beta 1.100.
-    # Master HEAD 27347cc2965498fa03393739031c9ef8ecd72c0a (2026-10-19)
-    # still has pkgs/development/compilers/rust/1_99.nix at rustcVersion
-    # "1.99.0". The 1.99.1 file is commit
-    # 9ecc0a672e9ef2ca4eec8e87dbee653607a7d332 (message
-    # "rust: 1.99.0 -> 1.99.1"), open as NixOS/nixpkgs pull 574572 against
-    # staging, not merged to master. That file sets rustcVersion = "1.99.1".
-    # Prior lock c46e6c9a80d68a8b92e75a2d2cb078a8f6d8dd81 was rustc 1.99.0.
-    # Crane has no nixpkgs input: mkLib keeps host pkgs and
+    # rustc/cargo for crane packages, Arti, Stalwart, wasm-bindgen, and
+    # the mail-host rustc overlay. Not the mail-host channel
+    # nixos-26.05. Not nixos-unstable. Not a compiler newer than 1.100.0.
+    # Measured 2026-11-21: nixpkgs master HEAD
+    # 607eef272a161b47359fc99840abc3fdc5b2f7f9 still has
+    # pkgs/development/compilers/rust/1_99.nix and HTTP 404 for 1_100.nix
+    # and 1_101.nix.
+    # The current rust 1.100 pin is 981724d1e07192596b94a2dcd4bd3c30139cc508
+    # (nixpkgs pull 586088 head, 2026-11-21). 1_100.nix there sets
+    # rustcVersion = "1.100.0" and bootstrapVersion = "1.100.0".
+    # all-packages.nix sets rust = rust_1_100. Prior lock
+    # 342414c3be9098a87dd50b560e96842a1c79cb9f was rustc 1.99.1.
+    # Do not add a second nixpkgs input. The mail-host channel is
+    # release-26.11. Crane has no nixpkgs input: mkLib keeps host pkgs and
     # overrideToolchain supplies this rustc.
-    nixpkgs-rust.url = "github:NixOS/nixpkgs/9ecc0a672e9ef2ca4eec8e87dbee653607a7d332";
+    nixpkgs-rust.url = "github:NixOS/nixpkgs/981724d1e07192596b94a2dcd4bd3c30139cc508";
 
     # Pin input URLs to flake.lock revs for reproducible originals; bump via
     # intentional `nix flake update` (or lock edit), not floating HEAD.
     # Crane release v0.24.0 is 692f7e9 (2026-08-21), older than master.
-    # Master tip bd63bf1 (2026-10-11) is one commit after 47b6b27. That
-    # commit only bumps crane's internal flake.lock. The pin follows master.
-    crane.url = "github:ipetkov/crane/bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a";
+    # Master tip 95e62def851e9d650f0eab63cb4f59a3306e20bd, read 2026-11-16
+    # (commit date 2026-11-04). Subject: Make  both `name`/`version` take
+    # precedence if in `[workspace.metadata.crane]` (#1099). GitHub checks
+    # "run tests" and "run tests 26.05" succeeded. Not a broken HEAD.
+    # Prior pin bd63bf1d0a0f6dcacd7549c714a671ee63b0db6a.
+    crane.url = "github:ipetkov/crane/95e62def851e9d650f0eab63cb4f59a3306e20bd";
     # crane follows its own nixpkgs; we pass pkgs from our nixpkgs in outputs.
 
-    # sops-nix has no versioned GitHub release. 44931708 (2026-10-15) is six
-    # commits after 5efb5a6: nested JSON keys, secrets ordered before
-    # sysinit.target, and clearer key errors. The tip commit is a finished
-    # test, not a broken HEAD.
+    # sops-nix has no versioned GitHub release. Tip
+    # 7c637afdccdf9bcf35c4a2d67b58a77c1fd843a4, read 2026-11-16 (commit
+    # date 2026-11-14). Subject: update vendorHash, after the
+    # go.opentelemetry.io/otel/sdk bump. GitHub check "tests" succeeded.
+    # Not a broken HEAD. Prior pin
+    # 44931708c62937c2b1bf7953902989fa5bb9ee1b.
     sops-nix = {
-      url = "github:Mic92/sops-nix/44931708c62937c2b1bf7953902989fa5bb9ee1b";
+      url = "github:Mic92/sops-nix/7c637afdccdf9bcf35c4a2d67b58a77c1fd843a4";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Rust nixfmt (Mic92/nixfmt-rs), not Haskell pkgs.nixfmt.
+    # Default-branch HEAD 346cbaf52347495cc97ac316ef4e37108bab5dd8,
+    # read 2026-11-05 (commit date 2026-10-14). Do not float main.
+    # Their published byte match is Haskell nixfmt 1.2.0, not this
+    # channel's pkgs.nixfmt 1.5.0. Do not set inputs.nixpkgs.follows:
+    # their flake pins its own nixpkgs, so this repo's gcc.arch overlay
+    # cannot reach the formatter build.
+    nixfmt-rs.url = "github:Mic92/nixfmt-rs/346cbaf52347495cc97ac316ef4e37108bab5dd8";
 
     # Public static site for apex/www. Fetch the git tree (HTML/CSS/JS).
     # Operator bumps: just publish (nix flake update surmount-site).
@@ -79,29 +103,27 @@
       flake = false;
     };
 
-    # Grok OSS TUI (bin/grok-oss).
-    # Commit pin, not a floating main ref. The repo stays
-    # github:SurmountSystems/grok-oss. This rev is
-    # 182293cb30fa5414dd47686b92708103519b7462. Prior lock was
-    # decb052744d25b63dbca8a95ca65b4ad794b9ad5. Earlier lock was
-    # 7dc3685277bb65c4a0634e91a6e2596e48ad882f (main).
-    # Do not retarget this input to a side branch.
-    # Default-off NixOS module; package is fail-closed when enable=true.
-    grok-oss.url = "github:SurmountSystems/grok-oss/182293cb30fa5414dd47686b92708103519b7462";
-
-    # Tau (bin/tau). SurmountSystems/tau master at
-    # d2e1955b0491f538a486007d0d3ab779d95a828f (committer
-    # 2026-10-05T16:18:47Z). This is the operator-synced tree,
-    # not github:dpc/tau. Commit pin, not a floating master ref.
-    # Do not follow their nixpkgs. Their nested nixpkgs-unstable
-    # stays their lock. Default-off NixOS module; package is
-    # fail-closed when enable=true.
-    tau.url = "github:SurmountSystems/tau/d2e1955b0491f538a486007d0d3ab779d95a828f";
-
     # Splora (Esplora-compatible indexer). Operator bumps with nix flake update splora.
     # NixOS module is nixosModules.splora. REST is one indexer instance plus
     # JSON-RPC and a cookie; a local bitcoind datadir is not required.
-    splora.url = "github:SurmountSystems/splora/surmount";
+    # Status observes this rev via nix/splora-pin-status.nix (do not float).
+    splora.url = "github:SurmountSystems/splora/1a50824e06dec0680ea7e414255970e8618ddf13";
+
+    # deploy-rs 1.0.0, peeled commit 26e0f241 (2026-10-19).
+    # Do not set inputs.nixpkgs.follows. This input keeps its own nixpkgs.
+    # Do not import deploy-rs.lib.${system}.deployChecks (Python check-jsonschema).
+    deploy-rs.url = "github:serokell/deploy-rs/26e0f241b1b7c6b1717fc7babc4852192886bbc0";
+
+    # Determinate Nix 3.24.2. Tag v3.24.2 is commit
+    # f43bee4f45c2d42e7d1f4e37908ec5c7bb0fdba1.
+    # Release note title is 2026-11-03. Merge commit date is 2026-11-04.
+    # .version-determinate in that commit is 3.24.2, which is newer than
+    # 3.11.1. Parallel evaluation has been available since 3.11.1.
+    # https://docs.determinate.systems/determinate-nix/parallel-eval
+    # (accessed: 2026-11-25). Do not float this input. Do not follow
+    # nixpkgs: that flake pins its own nixpkgs. This pin does not build
+    # packages from the input into the mail-host closure.
+    determinate-nix.url = "github:DeterminateSystems/nix-src/f43bee4f45c2d42e7d1f4e37908ec5c7bb0fdba1";
   };
 
   outputs =
@@ -111,17 +133,20 @@
       nixpkgs-rust,
       crane,
       sops-nix,
+      nixfmt-rs,
       surmount-site,
       advisory-db,
-      grok-oss,
-      tau,
       splora,
+      deploy-rs,
+      determinate-nix,
       ...
     }:
     let
       inherit (nixpkgs) lib;
       # Overlay attrs are also named splora / splora-liquid; keep the flake input.
       sploraInput = splora;
+      # Metadata only. Do not evaluate determinate-nix.packages.
+      determinateNixRev = determinate-nix.rev;
 
       systems = [
         "x86_64-linux"
@@ -142,6 +167,31 @@
         import nixpkgs-rust {
           inherit system;
         };
+
+      # nix/overlays.nix exports .pins and .tzdata. Not a second overlay
+      # home. surmountOverlay remains the Surmount package set.
+      # .pins is the upstream Nix 2.36.0 binary tarball (not nix-cli,
+      # not nix-everything).
+      # .tzdata sets tzdata 2026e doCheck = false (now.ck). The mail-host
+      # nixosSystem below imports .tzdata. mkPkgs does not, so
+      # checks.x86_64-linux.ci does not rebuild CPython for that skip.
+      # .noHaskell replaces nixos-firewall-tool with writeShellScriptBin.
+      # It does not call prev.nixos-firewall-tool. It throws if the mail
+      # host references ghc, haskellPackages, haskell.compiler, hadrian,
+      # ShellCheck, python, python3, or pythonPackages. The firewall-tool
+      # check was the remaining Haskell edge. mkPkgs does not import it.
+      surmountOverlayParts = import ./nix/overlays.nix;
+      surmountPins = surmountOverlayParts.pins;
+      surmountTzdata = surmountOverlayParts.tzdata;
+      surmountNoHaskell = surmountOverlayParts.noHaskell;
+      # Mail-vps only, after noHaskell. Top-level python and python3 still
+      # throw. Locale data is still produced by localedef. This does not
+      # assign final.python3.
+      glibcHeaderGenOverlay = import ./nix/glibc-header-gen-overlay.nix;
+      # After the header overlay. Replaces pkgs.glibc with the released
+      # 2.44 already packaged by Splora's locked nixpkgs. The mail-host
+      # channel is release-26.11. Splora's own rev is not moved.
+      glibc244Overlay = import ./nix/glibc-2.44-overlay.nix sploraInput.inputs.nixpkgs;
 
       # rustPlatform whose rustc meets Arti MSRV; C deps still come from host pkgs.
       mkArtiRustPlatform =
@@ -187,26 +237,29 @@
         surmount-secrets-install = self.packages.${system}.surmount-secrets-install;
         surmount-secrets-prompt = self.packages.${system}.surmount-secrets-prompt;
         surmount-rekey = self.packages.${system}.surmount-rekey;
-        grok-oss = self.packages.${system}.grok-oss;
-        # Flake-input bin/tau (packages.tau). Not referenced unless
-        # surmount.tau.enable is true. Default-off eval must not
-        # realize this derivation.
-        tau = self.packages.${system}.tau;
+        # Official Lean 4.35.0 linux x86_64. Not channel pkgs.lean4.
+        surmount-lean4 = self.packages.${system}.surmount-lean4;
         # Flake-input packages. Upstream crane src omits .cargo/config.toml
         # (laptop cargo still uses Menhera). Do not wrap src again here.
         splora = self.packages.${system}.splora;
         splora-liquid = self.packages.${system}.splora-liquid;
+        # Wrapped Ookla CLI. Unfree allowlist is only ookla-speedtest.
+        speedtest = self.packages.${system}.speedtest;
       };
 
       mkPkgs =
         system:
         import nixpkgs {
           inherit system;
-          overlays = [ (surmountOverlay system) ];
+          overlays = [
+            surmountPins
+            (surmountOverlay system)
+            glibc244Overlay
+          ];
         };
 
       # Shared crane args for management-ui checks (test/clippy/fmt).
-      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust rustc 1.99.1).
+      # Toolchain from nix/rust-toolchain.nix (nixpkgs-rust rustc 1.100.0).
       mkManagementUiCrane =
         system:
         let
@@ -309,6 +362,9 @@
           );
     in
     {
+      # Locked Determinate Nix revision. Not a package build.
+      inherit determinateNixRev;
+
       nixosModules = {
         default = {
           imports = [
@@ -320,7 +376,7 @@
         surmount = self.nixosModules.default;
       };
 
-      # Primary sample host: mail-vps (nixos-26.05). Generic public path only;
+      # Primary sample host: mail-vps (release-26.11). Generic public path only;
       # real hostname / hardware / SSH keys via ./host-local when present.
       # surmount-mail is a historical product alias (same config).
       # Do not enable public https / Arti / Vaultwarden here without host material.
@@ -336,7 +392,14 @@
             (
               { ... }:
               {
-                nixpkgs.overlays = [ (surmountOverlay "x86_64-linux") ];
+                nixpkgs.overlays = [
+                  surmountPins
+                  surmountTzdata
+                  (surmountOverlay "x86_64-linux")
+                  surmountNoHaskell
+                  glibcHeaderGenOverlay
+                  glibc244Overlay
+                ];
               }
             )
           ]
@@ -345,6 +408,10 @@
 
         surmount-mail = self.nixosConfigurations.mail-vps;
       };
+
+      # Node schema for deploy-rs. The switch program is apps.<system>.deploy
+      # (nix/deploy-app.nix). Dry-run stays the surmount-deploy-host app.
+      deploy = import ./nix/deploy-node.nix { inherit self deploy-rs; };
 
       packages = forAllSystems (
         system:
@@ -356,11 +423,18 @@
           e2ePkgs = pkgs.callPackage ./nix/packages/surmount-e2e.nix {
             inherit craneLib pkgsRust;
           };
+          # Not a rec set. Sibling attrs cannot see sploraToolchain.
+          sploraToolchain = import ./nix/splora-toolchain.nix {
+            inherit lib sploraInput pkgsRust system;
+          };
         in
         {
           management-ui = pkgs.callPackage ./nix/packages/management-ui.nix {
             inherit craneLib pkgsRust;
           };
+          # Release binary 0.16.26. Not a cargo source build. The live
+          # store under /var/lib/stalwart-mail is pre-1.0. Stalwart 1.x
+          # refuses that store. Do not pass rustPlatform here.
           stalwart-mail = pkgs.callPackage ./nix/packages/stalwart-mail.nix { };
           stalwart = self.packages.${system}.stalwart-mail;
           stalwart-cli = pkgs.callPackage ./nix/packages/stalwart-cli.nix { };
@@ -368,15 +442,20 @@
           stalwart-webui = pkgs.callPackage ./nix/packages/stalwart-webui.nix { };
           stalwart-spam-filter = pkgs.callPackage ./nix/packages/stalwart-spam-filter.nix { };
           # DNS-01 Namecheap helper **code** only (credentials stay Domain A /run).
-          acme-dns-hook-namecheap = pkgs.callPackage ./nix/packages/acme-dns-hook-namecheap.nix { };
+          acme-dns-hook-namecheap = pkgs.callPackage ./nix/packages/acme-dns-hook-namecheap.nix {
+            inherit craneLib pkgsRust;
+          };
           # Apex/www static files from locked github:SurmountSystems/site.
           surmount-public-site = pkgs.callPackage ./nix/packages/surmount-public-site.nix {
             src = surmount-site;
           };
-          # Surmount-owned Arti 2.7.0 + onion-service-service (HS publish).
+          # Surmount-owned Arti 2.8.0 + onion-service-service (HS publish).
           # Not a drop-in for pkgs.arti; heavy cargo build, not in checks.ci.
-          # rustPlatform + artiUnstable.cargoDeps from nixpkgs-rust (MSRV 1.91+;
-          # vendor handoff avoids crates.io 403). C deps from host pkgs.
+          # rustPlatform from nixpkgs-rust (MSRV 1.92). The Arti 2.8.0
+          # cargoHash is set to
+          # sha256-grgIqU1gw1UqeGgR4aR7cAOxBW91F12bHMgOj4pgLcY=.
+          # Do not use artiUnstable.cargoDeps (that tree is 2.7.0).
+          # C deps from host pkgs.
           arti-onion-service = pkgs.callPackage ./nix/packages/arti-onion-service.nix {
             rustPlatform = mkArtiRustPlatform system;
             artiUnstable = (mkPkgsRust system).arti;
@@ -444,209 +523,264 @@
           surmount-rekey = pkgs.callPackage ./nix/packages/surmount-rekey.nix {
             inherit craneLib pkgsRust;
           };
-          # Grok OSS from locked github:SurmountSystems/grok-oss (operator-bump).
-          # Not in checks.ci (heavy crane). Module stays default-off.
-          # rustToolchain is nixpkgs-rust 1.99.1, not host pkgs.rustc 1.95.0.
-          grok-oss = pkgs.callPackage ./nix/packages/grok-oss.nix {
-            grokOssFlake = grok-oss;
-            inherit system rustToolchain;
-          };
-          # Tau from locked github:SurmountSystems/tau (operator-synced
-          # tree, not github:dpc/tau). Consume packages.tau only
-          # (upstream nix/pkgs/tau.nix). Not in checks.ci.
-          # Module stays default-off. Fail-closed when enable=true.
-          tau =
-            tau.packages.${system}.tau or (throw "tau flake input has no packages.${system}.tau (fail-closed)");
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
-          splora =
-            sploraInput.packages.${system}.splora
-              or (throw "splora flake input has no packages.${system}.splora (fail-closed)");
-          splora-liquid =
-            sploraInput.packages.${system}.splora-liquid
-              or (throw "splora flake input has no packages.${system}.splora-liquid (fail-closed)");
-          # RFC-style nixfmt (same as formatter / checks.ci / devShell).
-          # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt …
-          # nixos-26.05: nixfmt-rfc-style is an alias of pkgs.nixfmt (prefer the latter).
-          nixfmt = pkgs.nixfmt;
+          # nix/splora-toolchain.nix re-calls that flake and points its
+          # crane toolchain at nix/rust-toolchain.nix (nixpkgs-rust
+          # rustc and cargo). sploraToolchain is bound in the let above.
+          # This attrset is not rec.
+          splora = sploraToolchain.splora;
+          splora-liquid = sploraToolchain.splora-liquid;
+          # Trunk client from frontend/web. cargoHash is the fetchCargoVendor
+          # vendor-staging hash in nix/packages/splora-web.nix. This Nix src
+          # omits the laptop Menhera config. The build phase is offline.
+          # rustPlatform is nixpkgs-rust rustc 1.100.0 (mkArtiRustPlatform).
+          # Do not leave callPackage to inject mail-host rustPlatform
+          # (nixos-26.05 rustc 1.95.0) into wasm-bindgen or the web vendor.
+          # Separate nixpkgs (nix/splora-web-nixpkgs.nix), not every
+          # mail-host overlay. Splora rev 1a50824 does not put Sass on
+          # the release web. nix/packages/splora-web.nix drops the
+          # dart-sass that crane buildTrunkPackage appends. This import
+          # does not rewrite buf and does not overlay libcap.
+          # mail-vps.pkgs.libcap still uses nix/libcap-without-go-overlay.nix.
+          splora-web =
+            let
+              pkgsSploraWeb = import ./nix/splora-web-nixpkgs.nix {
+                inherit nixpkgs system;
+              };
+              craneLibSploraWeb = (crane.mkLib pkgsSploraWeb).overrideToolchain rustToolchain;
+            in
+            pkgsSploraWeb.callPackage ./nix/packages/splora-web.nix {
+              craneLib = craneLibSploraWeb;
+              inherit sploraInput;
+              rustPlatform = mkArtiRustPlatform system;
+            };
+          # Rust nixfmt-rs (Mic92). Not Haskell pkgs.nixfmt and not
+          # nixfmt-rfc-style (that alias is the channel Haskell package).
+          # Upstream attribute is packages.${system}.default. Binary name
+          # is nixfmt. Author claims byte-identical output with Haskell
+          # nixfmt 1.2.0, not with nixos-26.05 pkgs.nixfmt 1.5.0.
+          # Pin 346cbaf52347495cc97ac316ef4e37108bab5dd8, read 2026-11-05.
+          # Use: nix run .#nixfmt -- file.nix   or   nix shell .#nixfmt -c nixfmt ...
+          nixfmt = nixfmt-rs.packages.${system}.default;
           # Flake-pinned just for GHA (`nix shell .#just -c just ci`) and local
-          # bootstrap without a host just install. Same pattern as grok-oss.
+          # bootstrap without a host just install.
           just = pkgs.just;
+          # Mutinynet-only bitcoind. Does not replace pkgs.bitcoind.
+          # testnet3 and testnet4 stay on the stock 32.1 package.
+          bitcoind-mutinynet = pkgs.callPackage ./nix/packages/bitcoind-mutinynet.nix { };
+          # Official Lean v4.35.0 linux x86_64 release. Not pkgs.lean4.
+          surmount-lean4 = pkgs.callPackage ./nix/packages/lean4.nix { };
+          # Ookla Speedtest CLI with --accept-license --accept-gdpr.
+          # Unfree predicate is only ookla-speedtest. nix run .#speedtest
+          speedtest =
+            let
+              pkgsOokla = import nixpkgs {
+                inherit system;
+                config.allowUnfreePredicate =
+                  pkg:
+                  builtins.elem (lib.getName pkg) [
+                    "ookla-speedtest"
+                    "speedtest"
+                  ];
+              };
+            in
+            pkgsOokla.callPackage ./nix/packages/speedtest.nix { };
+          # tokei from the host nixpkgs channel. Replaces boyter/scc.
+          tokei = pkgs.tokei;
           default = self.packages.${system}.management-ui;
         }
       );
 
-      apps = forAllSystems (system: {
-        e2e = {
-          type = "app";
-          program = "${self.packages.${system}.e2e}/bin/surmount-e2e";
-        };
-        e2e-host = {
-          type = "app";
-          program = "${self.packages.${system}.e2e-host}/bin/surmount-e2e-host";
-        };
-        surmount-private-data = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-private-data}/bin/surmount-private-data";
-        };
-        surmount-host-logs = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-logs}/bin/surmount-host-logs";
-        };
-        surmount-shc = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-shc}/bin/surmount-shc";
-        };
-        surmount-niced-builder = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-niced-builder}/bin/surmount-niced-builder";
-        };
-        surmount-scram = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-scram}/bin/surmount-scram";
-        };
-        surmount-leftover-homes = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-leftover-homes}/bin/surmount-leftover-homes";
-        };
-        surmount-inxi-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-inxi-host";
-        };
-        surmount-btop-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-btop-host";
-        };
-        surmount-tls-hybrid = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-tls-hybrid";
-        };
-        surmount-et = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-et";
-        };
-        surmount-grok-oss = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-grok-oss";
-        };
-        surmount-deploy-static-sites = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-deploy-static-sites";
-        };
-        surmount-sync-static-sites = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-sync-static-sites";
-        };
-        surmount-diskstation-afp-mount = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-afp-mount";
-        };
-        surmount-diskstation-discover = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-discover";
-        };
-        surmount-copy-mailplus-uid = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-copy-mailplus-uid";
-        };
-        surmount-fix-public-dashboard = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-fix-public-dashboard";
-        };
-        surmount-deploy-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-deploy-host}/bin/surmount-deploy-host";
-        };
-        surmount-dns-zone = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-dns-zone}/bin/surmount-dns-zone";
-        };
-        surmount-domain-audit = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-domain-audit}/bin/surmount-domain-audit";
-        };
-        surmount-host-cutover = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-cutover";
-        };
-        acme-dns-hook-namecheap-bin = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap";
-        };
-        surmount-laptop-renew-cert = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/surmount-laptop-renew-cert";
-        };
-        surmount-render-host-profile-acme = {
-          type = "app";
-          program = "${
-            self.packages.${system}.surmount-acme-namecheap
-          }/bin/surmount-render-host-profile-acme";
-        };
-        acme-dns-hook-namecheap-dispatch = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap-dispatch";
-        };
-        acme-dns-hook-lab = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-lab";
-        };
-        surmount-deploy-host-post-switch-smoke = {
-          type = "app";
-          program = "${
-            self.packages.${system}.surmount-deploy-host
-          }/bin/surmount-deploy-host-post-switch-smoke";
-        };
-        surmount-host-material-inventory = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-material-inventory";
-        };
-        register-dkim = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/register-dkim";
-        };
-        free-stalwart-public-443 = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/free-stalwart-public-443";
-        };
-        point-stalwart-mail-tls = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/point-stalwart-mail-tls";
-        };
-        add-stalwart-token = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/add-stalwart-token";
-        };
-        bootstrap-stalwart-api-token = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/bootstrap-stalwart-api-token";
-        };
-        stalwart-recovery-unlock = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-stalwart-ops}/bin/stalwart-recovery-unlock";
-        };
-        surmount-mail-import-maildir = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-mail-import}/bin/surmount-mail-import-maildir";
-        };
-        secrets-install-host = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-install-host";
-        };
-        secrets-export-bw-to-staging = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-export-bw-to-staging";
-        };
-        surmount-secrets-prompt = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-secrets-prompt}/bin/surmount-secrets-prompt";
-        };
-        surmount-rekey = {
-          type = "app";
-          program = "${self.packages.${system}.surmount-rekey}/bin/surmount-rekey";
-        };
-      });
+      apps = forAllSystems (
+        system:
+        {
+          e2e = {
+            type = "app";
+            program = "${self.packages.${system}.e2e}/bin/surmount-e2e";
+          };
+          e2e-host = {
+            type = "app";
+            program = "${self.packages.${system}.e2e-host}/bin/surmount-e2e-host";
+          };
+          surmount-private-data = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-private-data}/bin/surmount-private-data";
+          };
+          surmount-host-logs = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-logs}/bin/surmount-host-logs";
+          };
+          surmount-shc = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-shc}/bin/surmount-shc";
+          };
+          surmount-niced-builder = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-niced-builder}/bin/surmount-niced-builder";
+          };
+          surmount-scram = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-scram}/bin/surmount-scram";
+          };
+          surmount-leftover-homes = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-leftover-homes}/bin/surmount-leftover-homes";
+          };
+          surmount-inxi-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-inxi-host";
+          };
+          surmount-btop-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-btop-host";
+          };
+          surmount-tls-hybrid = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-tls-hybrid";
+          };
+          surmount-et = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-et";
+          };
+          surmount-grok-oss = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-probe}/bin/surmount-grok-oss";
+          };
+          surmount-deploy-static-sites = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-deploy-static-sites";
+          };
+          surmount-sync-static-sites = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-static-sites}/bin/surmount-sync-static-sites";
+          };
+          surmount-diskstation-afp-mount = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-afp-mount";
+          };
+          surmount-diskstation-discover = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-diskstation-discover";
+          };
+          surmount-copy-mailplus-uid = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-copy-mailplus-uid";
+          };
+          surmount-fix-public-dashboard = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-diskstation}/bin/surmount-fix-public-dashboard";
+          };
+          surmount-deploy-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-deploy-host}/bin/surmount-deploy-host";
+          };
+          surmount-dns-zone = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-dns-zone}/bin/surmount-dns-zone";
+          };
+          surmount-domain-audit = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-domain-audit}/bin/surmount-domain-audit";
+          };
+          surmount-host-cutover = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-cutover";
+          };
+          acme-dns-hook-namecheap-bin = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap";
+          };
+          surmount-laptop-renew-cert = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/surmount-laptop-renew-cert";
+          };
+          surmount-render-host-profile-acme = {
+            type = "app";
+            program = "${
+              self.packages.${system}.surmount-acme-namecheap
+            }/bin/surmount-render-host-profile-acme";
+          };
+          acme-dns-hook-namecheap-dispatch = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-namecheap-dispatch";
+          };
+          acme-dns-hook-lab = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-acme-namecheap}/bin/acme-dns-hook-lab";
+          };
+          surmount-deploy-host-post-switch-smoke = {
+            type = "app";
+            program = "${
+              self.packages.${system}.surmount-deploy-host
+            }/bin/surmount-deploy-host-post-switch-smoke";
+          };
+          surmount-host-material-inventory = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-host-cutover}/bin/surmount-host-material-inventory";
+          };
+          register-dkim = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/register-dkim";
+          };
+          free-stalwart-public-443 = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/free-stalwart-public-443";
+          };
+          point-stalwart-mail-tls = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/point-stalwart-mail-tls";
+          };
+          add-stalwart-token = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/add-stalwart-token";
+          };
+          bootstrap-stalwart-api-token = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/bootstrap-stalwart-api-token";
+          };
+          stalwart-recovery-unlock = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-stalwart-ops}/bin/stalwart-recovery-unlock";
+          };
+          surmount-mail-import-maildir = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-mail-import}/bin/surmount-mail-import-maildir";
+          };
+          secrets-install-host = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-install-host";
+          };
+          secrets-export-bw-to-staging = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-secrets-install}/bin/secrets-export-bw-to-staging";
+          };
+          surmount-secrets-prompt = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-secrets-prompt}/bin/surmount-secrets-prompt";
+          };
+          surmount-rekey = {
+            type = "app";
+            program = "${self.packages.${system}.surmount-rekey}/bin/surmount-rekey";
+          };
+          speedtest = {
+            type = "app";
+            program = "${self.packages.${system}.speedtest}/bin/speedtest";
+          };
+          tokei = {
+            type = "app";
+            program = "${self.packages.${system}.tokei}/bin/tokei";
+          };
+        }
+        // import ./nix/just-recipe-apps.nix { inherit self system; }
+        // {
+          deploy = import ./nix/deploy-app.nix {
+            inherit system deploy-rs;
+            pkgs = mkPkgsBare system;
+          };
+        }
+      );
 
       checks = forAllSystems (
         system:
@@ -848,6 +982,10 @@
                 // lib.optionalAttrs (spec.crate == "surmount-host-probe") {
                   src = srcWithJustfile;
                 }
+                // lib.optionalAttrs (spec.crate == "surmount-private-data") {
+                  # The shared src drops extensionless script/git-hooks/pre-commit.
+                  src = self.packages.${system}.surmount-private-data.workspaceSrc;
+                }
               );
               "${spec.crate}-clippy" = mkWave1Clippy spec.crate (
                 lib.optionalAttrs (spec.crate == "surmount-host-probe") {
@@ -874,9 +1012,21 @@
                 inherit pkgs lib;
                 inherit sops-nix;
                 sploraNixosModule = sploraInput.nixosModules.splora;
+                inherit glibc244Overlay;
               };
             in
             pkgs.writeText "module-eval-contract" (builtins.toJSON r.ok);
+
+          # Eval-only rollback flags. Not in ci: forcing path instantiates
+          # the mail-vps toplevel. Not deployChecks.
+          deploy-rs-rollback-contract =
+            let
+              r = import ./tests/deploy-rs-rollback.nix {
+                inherit lib;
+                deploy = self.deploy;
+              };
+            in
+            pkgs.writeText "deploy-rs-rollback-contract" (builtins.toJSON r.ok);
 
           # Eval-only: flake-input packages pass through (no crane build).
           splora-package-contract =
@@ -894,6 +1044,13 @@
               r = import ./tests/deploy-secrets.nix { inherit lib; };
             in
             pkgs.writeText "deploy-secrets-contract" (builtins.toJSON r.ok);
+
+          # Just recipe bodies are one nix run line, or a dependency list.
+          just-recipe-bodies-contract =
+            let
+              r = import ./tests/just-recipe-bodies.nix { inherit lib; };
+            in
+            pkgs.writeText "just-recipe-bodies-contract" (builtins.toJSON r.ok);
 
           # Pure Arti path-shape only (no nixosSystem; full arti in module-eval).
           arti-module-contract =
@@ -929,13 +1086,11 @@
             pkgs.writeText "arti-onion-package-contract" (builtins.toJSON r.ok);
 
           # Offline RustSec audit of Cargo.lock (no crates.io).
-          # Ignore RUSTSEC-2024-0436 (paste 1.0.15) only. That advisory's
-          # patched list is empty, and menhera-cooldown's newest paste is
-          # 1.0.15. Cargo does not select a pastey patch for crates that
-          # require paste 1.x. proc-macro-error2 (RUSTSEC-2026-0173) is
-          # not in this lock, so that ignore is gone.
-          # See docs/SECURITY.md and .cargo/audit.toml.
-          # --deny warnings stays. Do not ignore any other advisory.
+          # No advisory skip flag. paste 1.0.15 (RUSTSEC-2024-0436) has
+          # no patched version. heapless 0.8.0 is below the patched
+          # line >=0.9.4. faster-hex 0.10.1 requires heapless ^0.8
+          # when the alloc feature is off, so 0.9.4 does not resolve.
+          # --deny warnings stays.
           # yanked.enabled is false because the sandbox has no crates.io
           # index. cargo-audit otherwise prints "couldn't open crates.io
           # index" and still exits 0. The nixos-26.05 cargo-audit binary
@@ -953,7 +1108,6 @@
                 mkdir -p .cargo "$HOME/.cargo"
                 printf '%s\n' '[yanked]' 'enabled = false' | tee .cargo/audit.toml > "$HOME/.cargo/audit.toml"
                 cargo-audit audit --no-fetch --stale --deny warnings \
-                  --ignore RUSTSEC-2024-0436 \
                   -d ${advisory-db} \
                   -f ${./Cargo.lock}
                 mkdir -p "$out"
@@ -975,7 +1129,10 @@
           nix-fmt-check =
             pkgs.runCommand "nix-fmt-check"
               {
-                nativeBuildInputs = [ pkgs.nixfmt ];
+                nativeBuildInputs = [
+                  # Rust nixfmt-rs. Not pkgs.nixfmt (Haskell, compiles GHC).
+                  nixfmt-rs.packages.${system}.default
+                ];
               }
               ''
                 set -euo pipefail
@@ -1029,6 +1186,7 @@
               (afterFmt e2e-clippy)
               module-eval-contract
               deploy-secrets-contract
+              just-recipe-bodies-contract
               arti-module-contract
               arti-onion-package-contract
               public-site-package-contract
@@ -1054,7 +1212,9 @@
             e2e-pure-test
             e2e-clippy
             module-eval-contract
+            deploy-rs-rollback-contract
             deploy-secrets-contract
+            just-recipe-bodies-contract
             arti-module-contract
             arti-onion-package-contract
             public-site-package-contract
@@ -1110,18 +1270,19 @@
         in
         {
           default = pkgs.mkShell {
-            packages = with pkgs; [
-              # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.99.1).
+            packages = [
+              # Match crane toolchain (nix/rust-toolchain.nix, nixpkgs-rust 1.100.0).
               (import ./nix/rust-toolchain.nix { pkgs = mkPkgsRust system; })
-              rust-analyzer
-              pkg-config
-              nixfmt
-              just
-              sops
-              age
-              ssh-to-age
-              git
-              jq
+              pkgs.rust-analyzer
+              pkgs.pkg-config
+              # Rust nixfmt-rs. Not pkgs.nixfmt (Haskell, compiles GHC).
+              nixfmt-rs.packages.${system}.default
+              pkgs.just
+              pkgs.sops
+              pkgs.age
+              pkgs.ssh-to-age
+              pkgs.git
+              pkgs.jq
             ];
             RUST_LOG = "info,surmount_management_ui=debug";
             shellHook = ''
@@ -1142,12 +1303,14 @@
               echo "  nix run .#surmount-inxi-host -- --help"
               echo "  nix run .#surmount-leftover-homes -- --tree"
               echo "  nix build .#management-ui"
-              echo "  nix build .#stalwart-mail   # long cargo build of engine 0.16+"
+              echo "  nix build .#stalwart-mail   # release binary 0.16.26"
             '';
           };
         }
       );
 
-      formatter = forAllSystems (system: (mkPkgs system).nixfmt);
+      # Rust nixfmt-rs. Not (mkPkgs system).nixfmt: that attr is Haskell
+      # pkgs.nixfmt, and the mail-host gcc.arch overlay must not build it.
+      formatter = forAllSystems (system: nixfmt-rs.packages.${system}.default);
     };
 }

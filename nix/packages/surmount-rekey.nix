@@ -1,5 +1,6 @@
 # Hermetic crane build of crates/surmount-rekey (just rekey).
-# age crate (rage library) plus gpg on PATH. Not writeShellApplication.
+# X25519 age identity (x25519-dalek + bech32) plus gpg on PATH.
+# Not the age crate. Not writeShellApplication.
 #
 # Call as: pkgs.callPackage ./surmount-rekey.nix { inherit craneLib; }
 

@@ -1,0 +1,9 @@
+--- a/nix-meson-build-support/common/meson.build
++++ b/nix-meson-build-support/common/meson.build
+@@ -120,6 +120,3 @@
+ 
+ subdir('assert-fail')
+ subdir('asan-options')
+-if not meson.is_subproject()
+-  subdir('clang-tidy')
+-endif

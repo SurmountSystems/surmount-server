@@ -137,6 +137,26 @@ in
           Type = "oneshot";
           RemainAfterExit = true;
           ExecStart = "${failLoudScript}";
+          # Root so a mode 0600 host file is visible. ProtectHome stays off
+          # so a required path under a home directory is not a false miss.
+          # The script prints the path kind, never file contents.
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          ProtectKernelTunables = true;
+          ProtectKernelModules = true;
+          ProtectControlGroups = true;
+          RestrictNamespaces = true;
+          LockPersonality = true;
+          MemoryDenyWriteExecute = true;
+          RestrictRealtime = true;
+          RestrictAddressFamilies = [ "AF_UNIX" ];
+          SystemCallArchitectures = "native";
+          SyslogIdentifier = "surmount-deploy-secrets-check";
+          StandardOutput = "journal";
+          StandardError = "journal";
+          LogRateLimitIntervalSec = "30s";
+          LogRateLimitBurst = 50000;
         };
       };
     })

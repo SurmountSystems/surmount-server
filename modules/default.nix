@@ -15,6 +15,8 @@
     # stalwart.nix; owns services.stalwart). Before mail.nix.
     ./stalwart-service.nix
     ./mail.nix
+    # Cutover gate. Default off. Does not set the Stalwart data directory.
+    ./stalwart-store-migrate.nix
     ./web.nix
     ./management-ui.nix
     # One remote JSON-RPC Splora indexer (wraps imported services.splora).
@@ -42,5 +44,13 @@
     ./grok-oss.nix
     # Optional Tau coding agent: default off, no daemon, no extensions.
     ./tau.nix
+    # Wrapped Ookla Speedtest CLI. Mail host enables the package; timer stays off.
+    ./speedtest.nix
+    # Flexible I/O tester (fio) for operator HDD sequential vs random probes.
+    ./perf-tools.nix
+    # Mail-host source builds: x86-64-v3. Default off (CI / generic).
+    ./mail-host-cpu.nix
+    ./mail-host-rust-cpu.nix
+    ./systemd-mount-namespace-off.nix
   ];
 }

@@ -14,7 +14,15 @@ Post-switch smoke (intended to run on the NixOS host after nixos-rebuild).
 Checks:
   - current system generation (report /run/current-system)
   - systemctl is-active: sshd, stalwart-mail, surmount-management-ui
-  - if UI inactive: systemctl start surmount-management-ui
+    (`activating` is polled until active, failed, or inactive; bound
+    SURMOUNT_SMOKE_UNIT_WAIT_MS, default 30000). `failed` and `inactive`
+    fail on the first read. A unit that becomes active passes only when
+    it stays active for that same bound, with the same main PID and the
+    same NRestarts. Any non-zero main-process exit status, a failed or
+    unparsed systemctl show, an NRestarts value that does not parse, or
+    a higher NRestarts, fails the smoke. One active sample is not a pass.
+    surmount-management-ui uses that same window. If it is inactive,
+    smoke starts it and then requires the same window.
   - curl loopback /health (day-1 default http://127.0.0.1:8090/health;
     port may follow SURMOUNT_LISTEN when it is a loopback/bind-all host:port.
     When SURMOUNT_LISTEN_MODE=https and the listen port is 443, curl
@@ -195,62 +203,82 @@ fn check_generation(readlink: &str, c: &mut Counters) {
     c.fail_line("generation: cannot resolve /run/current-system or profiles/system");
 }
 
-fn is_active(systemctl: &str, unit: &str) -> String {
-    let out = Command::new(systemctl).args(["is-active", unit]).output();
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(_) => String::new(),
+fn check_unit_active(systemctl: &str, unit: &str, c: &mut Counters) {
+    match crate::smoke_unit_wait::wait_until_settled(systemctl, unit) {
+        crate::smoke_unit_wait::UnitVerdict::Active => {
+            c.pass(&format!("unit {unit} is active"));
+        }
+        crate::smoke_unit_wait::UnitVerdict::NotActive { state } => {
+            let shown = if state.is_empty() {
+                "unknown"
+            } else {
+                state.as_str()
+            };
+            c.fail_line(&format!("unit {unit} is not active (is-active={shown})"));
+        }
+        crate::smoke_unit_wait::UnitVerdict::Unstable { reason } => {
+            c.fail_line(&format!("unit {unit} did not stay active ({reason})"));
+        }
     }
 }
 
-fn check_unit_active(systemctl: &str, unit: &str, c: &mut Counters) {
-    let st = is_active(systemctl, unit);
-    if st == "active" {
-        c.pass(&format!("unit {unit} is active"));
-    } else {
-        let shown = if st.is_empty() {
-            "unknown"
-        } else {
-            st.as_str()
-        };
-        c.fail_line(&format!("unit {unit} is not active (is-active={shown})"));
-    }
+fn ui_start_candidate(state: &str) -> bool {
+    matches!(state, "" | "inactive" | "failed" | "unknown")
+}
+
+fn shown_state(state: &str) -> &str {
+    if state.is_empty() { "unknown" } else { state }
 }
 
 fn check_ui(systemctl: &str, c: &mut Counters) {
-    let st = is_active(systemctl, "surmount-management-ui");
-    if st == "active" {
-        c.pass("unit surmount-management-ui is active");
-        return;
-    }
-    let shown = if st.is_empty() {
-        "unknown"
-    } else {
-        st.as_str()
-    };
-    c.note(&format!(
-        "unit surmount-management-ui is not active (is-active={shown}); attempting start"
-    ));
-    let start = Command::new(systemctl)
-        .args(["start", "surmount-management-ui"])
-        .status();
-    match start {
-        Ok(s) if s.success() => {
-            let st2 = is_active(systemctl, "surmount-management-ui");
-            if st2 == "active" {
-                c.pass("unit surmount-management-ui started and is active");
-            } else {
-                let shown = if st2.is_empty() {
-                    "unknown"
-                } else {
-                    st2.as_str()
-                };
+    match crate::smoke_unit_wait::wait_until_settled(systemctl, "surmount-management-ui") {
+        crate::smoke_unit_wait::UnitVerdict::Active => {
+            c.pass("unit surmount-management-ui is active");
+        }
+        crate::smoke_unit_wait::UnitVerdict::Unstable { reason } => {
+            c.fail_line(&format!(
+                "unit surmount-management-ui did not stay active ({reason})"
+            ));
+        }
+        crate::smoke_unit_wait::UnitVerdict::NotActive { state } => {
+            let shown = shown_state(&state);
+            if !ui_start_candidate(&state) {
                 c.fail_line(&format!(
-                    "unit surmount-management-ui start returned 0 but is-active={shown}"
+                    "unit surmount-management-ui is not active (is-active={shown})"
                 ));
+                return;
+            }
+            c.note(&format!(
+                "unit surmount-management-ui is not active (is-active={shown}); attempting start"
+            ));
+            let start = Command::new(systemctl)
+                .args(["start", "surmount-management-ui"])
+                .status();
+            match start {
+                Ok(s) if s.success() => {
+                    match crate::smoke_unit_wait::wait_until_settled(
+                        systemctl,
+                        "surmount-management-ui",
+                    ) {
+                        crate::smoke_unit_wait::UnitVerdict::Active => {
+                            c.pass("unit surmount-management-ui started and is active");
+                        }
+                        crate::smoke_unit_wait::UnitVerdict::NotActive { state } => {
+                            let shown = shown_state(&state);
+                            c.fail_line(&format!(
+                                "unit surmount-management-ui start returned 0 but is-active={shown}"
+                            ));
+                        }
+                        crate::smoke_unit_wait::UnitVerdict::Unstable { reason } => {
+                            c.fail_line(&format!(
+                                "unit surmount-management-ui did not stay active ({reason})"
+                            ));
+                        }
+                    }
+                }
+                _ => c.fail_line("unit surmount-management-ui systemctl start failed"),
             }
         }
-        _ => c.fail_line("unit surmount-management-ui systemctl start failed"),
     }
 }
 

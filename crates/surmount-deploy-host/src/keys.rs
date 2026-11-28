@@ -1,5 +1,6 @@
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
+use std::os::unix::fs::chown;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -13,6 +14,115 @@ const KEY_TYPES: &[&str] = &[
     "sk-ssh-ed25519@openssh.com",
     "sk-ecdsa-sha2-nistp256@openssh.com",
 ];
+
+/// Open one host-local key file.
+///
+/// nix run is a user namespace (`uid_map` `0 0 1` on this host): uid 0
+/// there is host uid 0, CapEff can be full, and a mode 600 file owned by
+/// an unmapped uid is still EACCES. When this process is that host uid 0,
+/// chown the file to uid 0, leave the group and mode alone, and open once
+/// more. Do not chown when namespace uid 0 is some other host uid.
+fn open_key_file(path: &Path) -> Result<fs::File, ToolError> {
+    match fs::File::open(path) {
+        Ok(file) => Ok(file),
+        Err(err) if access_denied(&err) && euid_is_root() => {
+            if !ns_uid_zero_is_host_root() {
+                return Err(key_file_context(
+                    path,
+                    &format!("open: {err}; not chowned: ns uid 0 is not host uid 0"),
+                ));
+            }
+            match chown(path, Some(0), None) {
+                Ok(()) => match fs::File::open(path) {
+                    Ok(file) => Ok(file),
+                    Err(retry) => Err(key_file_context(
+                        path,
+                        &format!("open: {err}; chown: ok; open_after: {retry}"),
+                    )),
+                },
+                Err(chown_err) => Err(key_file_context(
+                    path,
+                    &format!("open: {err}; chown: {chown_err}"),
+                )),
+            }
+        }
+        Err(err) => Err(ToolError::fail(format!(
+            "host-local key file {}: {err}",
+            path.display()
+        ))),
+    }
+}
+
+fn access_denied(err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::PermissionDenied || err.raw_os_error() == Some(13)
+}
+
+fn euid_is_root() -> bool {
+    proc_uids().1 == Some(0)
+}
+
+fn ns_uid_zero_is_host_root() -> bool {
+    match host_uid_for_ns_uid_zero() {
+        Some(host) => host == 0,
+        None => true,
+    }
+}
+
+fn host_uid_for_ns_uid_zero() -> Option<u32> {
+    let text = fs::read_to_string("/proc/self/uid_map").ok()?;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let ns: u32 = parts.next()?.parse().ok()?;
+        let host: u32 = parts.next()?.parse().ok()?;
+        let count: u32 = parts.next()?.parse().ok()?;
+        if ns == 0 && count > 0 {
+            return Some(host);
+        }
+    }
+    None
+}
+
+fn proc_uids() -> (Option<u32>, Option<u32>) {
+    let Some(rest) = proc_status_field("Uid") else {
+        return (None, None);
+    };
+    let mut parts = rest.split_whitespace();
+    let real = parts.next().and_then(|s| s.parse().ok());
+    let eff = parts.next().and_then(|s| s.parse().ok());
+    (real, eff)
+}
+
+fn proc_status_field(name: &str) -> Option<String> {
+    let text = fs::read_to_string("/proc/self/status").ok()?;
+    let prefix = format!("{name}:");
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix(&prefix) {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+fn key_file_context(path: &Path, detail: &str) -> ToolError {
+    let (uid, euid) = proc_uids();
+    let uid = fmt_opt_u32(uid);
+    let euid = fmt_opt_u32(euid);
+    let cap = proc_status_field("CapEff").unwrap_or_else(|| "unread".to_string());
+    let map = fs::read_to_string("/proc/self/uid_map")
+        .map(|text| text.trim().to_string())
+        .unwrap_or_else(|err| format!("unread: {err}"));
+    ToolError::fail(format!(
+        "host-local key file {}: {detail}; uid={uid}; euid={euid}; CapEff={cap}; uid_map={map}",
+        path.display()
+    ))
+}
+
+fn fmt_opt_u32(value: Option<u32>) -> String {
+    match value {
+        Some(n) => n.to_string(),
+        None => "unread".to_string(),
+    }
+}
 
 /// Count non-empty, non-comment lines that look like real SSH public keys.
 pub fn count_authorized_key_lines(dir: &Path) -> Result<usize, ToolError> {
@@ -38,9 +148,11 @@ pub fn count_authorized_key_lines(dir: &Path) -> Result<usize, ToolError> {
     files.dedup();
     let mut n = 0usize;
     for f in files {
-        let fh = fs::File::open(&f)?;
+        let fh = open_key_file(&f)?;
         for line in BufReader::new(fh).lines() {
-            let line = line?;
+            let line = line.map_err(|e| {
+                ToolError::fail(format!("host-local key file {}: {}", f.display(), e))
+            })?;
             let line = line.trim_start();
             if line.is_empty() || line.starts_with('#') {
                 continue;

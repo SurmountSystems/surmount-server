@@ -76,8 +76,12 @@ fn secrets_stub() -> PathBuf {
     write_exec(
         &dir,
         "secrets-install-host",
-        "#!/bin/sh\necho secrets-install-host \"$@\"\nexit 0\n",
+        "#!/bin/sh\nprintf ran > \"$(dirname \"$0\")/ran\"\necho secrets-install-host \"$@\"\nexit 0\n",
     )
+}
+
+fn secrets_stub_ran(stub: &Path) -> bool {
+    stub.parent().unwrap().join("ran").is_file()
 }
 
 #[test]
@@ -87,6 +91,11 @@ fn help_exits_0_and_mentions_dry_run() {
     let s = combined(&out);
     assert!(s.contains("--dry-run"), "{s}");
     assert!(s.contains("--install-secrets"), "{s}");
+    assert!(s.contains("nix build"), "{s}");
+    assert!(!s.contains("nixos-rebuild"), "{s}");
+    assert!(!s.contains("python"), "{s}");
+    assert!(!s.contains("do not rsync"), "{s}");
+    assert!(!s.contains("Print planned commands"), "{s}");
 }
 
 #[test]
@@ -107,36 +116,37 @@ fn option_shaped_target_rejected() {
 }
 
 #[test]
-fn dry_run_good_host_local_prints_rebuild_and_smoke() {
-    let out = cmd()
+fn dry_run_good_host_local_builds_and_does_not_switch() {
+    let (mut c, ssh_log_path, rsync_log_path) = hermetic_cmd();
+    let out = c
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
         .arg(good_hl())
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
+    let rsync_log = fs::read_to_string(&rsync_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("nixos-rebuild") && s.contains("mail-vps"), "{s}");
-    assert!(s.contains("path:") && s.contains("#mail-vps"), "{s}");
-    assert!(s.contains("host-local"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
     assert!(
-        s.contains("secrets.yaml") || s.contains(".agekey") || s.contains("secrets/"),
-        "{s}"
+        rsync_log.lines().filter(|line| !line.is_empty()).count() >= 2,
+        "dry-run must rsync the public tree and host-local: {rsync_log}"
     );
-    let low = s.to_ascii_lowercase();
+    assert!(
+        rsync_log.contains("secrets.yaml")
+            || rsync_log.contains(".agekey")
+            || rsync_log.contains("secrets/"),
+        "{rsync_log}"
+    );
+    assert!(rsync_log.contains("host-local"), "{rsync_log}");
+    assert!(rsync_log.contains("example.test"), "{rsync_log}");
     assert!(
         !s.contains("does not mention authorizedKeys"),
         "known-name layout auto-wires keys and must not warn: {s}"
     );
-    assert!(
-        low.contains("post-switch smoke") || s.contains("deploy-host-post-switch-smoke"),
-        "{s}"
-    );
-    assert!(
-        low.contains("systemctl is-active") || low.contains("surmount-management-ui"),
-        "{s}"
-    );
-    assert!(low.contains("health") || low.contains("loopback"), "{s}");
+    assert!(!s.to_ascii_lowercase().contains("post-switch smoke"), "{s}");
+    assert!(!ssh_log.contains("post-switch-smoke"), "{ssh_log}");
 }
 
 #[test]
@@ -144,7 +154,8 @@ fn root_target_dry_run_mentions_laptop_identity() {
     let home = temp_dir("ssh-home");
     fs::create_dir_all(home.join(".ssh")).unwrap();
     fs::write(home.join(".ssh/id_ed25519"), "synthetic-not-a-real-key\n").unwrap();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("HOME", &home)
         .args(["--dry-run", "--target", "root@example.test"])
         .arg("--host-local")
@@ -152,12 +163,11 @@ fn root_target_dry_run_mentions_laptop_identity() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("id_ed25519"), "{s}");
-    assert!(
-        s.contains("keepalives") || s.contains("SURMOUNT_DEPLOY_SSH_IDENTITY"),
-        "{s}"
-    );
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(ssh_log.contains("id_ed25519"), "{ssh_log}");
+    assert!(ssh_log.contains("ServerAliveInterval=30"), "{ssh_log}");
 }
 
 #[test]
@@ -233,18 +243,51 @@ fn refuse_host_local_into_hosts_and_secrets_paths() {
 
 #[test]
 fn default_dry_run_does_not_plan_secrets_install() {
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
         .arg(good_hl())
         .output()
         .unwrap();
-    assert!(out.status.success());
-    let s = combined(&out).to_ascii_lowercase();
+    let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
+    assert!(out.status.success(), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    let low = s.to_ascii_lowercase();
     assert!(
-        !s.contains("secrets-install-host") && !s.contains("would run secrets-install"),
+        !low.contains("secrets-install-host") && !low.contains("would run secrets-install"),
         "{s}"
     );
+}
+
+#[test]
+fn dry_run_build_failure_does_not_switch_or_run_smoke() {
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
+        .env("SURMOUNT_TEST_REBUILD_EXIT", "1")
+        .args(["--dry-run", "--target", "example.test"])
+        .arg("--host-local")
+        .arg(good_hl())
+        .output()
+        .unwrap();
+    let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
+    assert!(!out.status.success(), "{s}");
+    assert_one_bash_s(&ssh_log);
+    assert!(!ssh_log.contains("nixos-rebuild"), "{ssh_log}");
+    assert!(!ssh_log.contains("python"), "{ssh_log}");
+    assert!(!ssh_log.contains("switch-to-configuration"), "{ssh_log}");
+    assert!(
+        !ssh_log.contains("/nix/var/nix/profiles/system"),
+        "{ssh_log}"
+    );
+    assert!(!ssh_log.contains("post-switch-smoke"), "{ssh_log}");
+    assert!(s.contains("nix build failed"), "{s}");
+    assert!(s.contains("the running generation was not switched"), "{s}");
+    assert!(!s.contains("deploy-host: nix build finished"), "{s}");
+    assert!(!s.contains("nixos-rebuild"), "{s}");
+    assert!(!s.to_ascii_lowercase().contains("post-switch smoke"), "{s}");
 }
 
 #[test]
@@ -355,7 +398,8 @@ fn plant_stage() -> PathBuf {
 fn opt_in_dry_run_plans_bridge_without_payload() {
     let stub = secrets_stub();
     let stg = plant_stage();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
@@ -372,8 +416,9 @@ fn opt_in_dry_run_plans_bridge_without_payload() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("secrets-install-host"), "{s}");
+    assert!(s.contains("would run secrets-install-host"), "{s}");
     assert!(s.contains("--from-staging"), "{s}");
     assert!(s.contains("mail-lab"), "{s}");
     assert!(s.contains("example.test"), "{s}");
@@ -381,7 +426,8 @@ fn opt_in_dry_run_plans_bridge_without_payload() {
         s.contains("--require-kind") && s.contains("tls-cert"),
         "{s}"
     );
-    assert!(s.contains("nixos-rebuild"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
     assert!(!s.contains(PLANTED), "{s}");
 }
 
@@ -389,7 +435,8 @@ fn opt_in_dry_run_plans_bridge_without_payload() {
 fn env_install_secrets_plans_bridge() {
     let stub = secrets_stub();
     let stg = plant_stage();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
         .env("SURMOUNT_DEPLOY_INSTALL_SECRETS", "1")
         .env("SURMOUNT_SECRETS_STAGING", &stg)
@@ -400,15 +447,19 @@ fn env_install_secrets_plans_bridge() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("secrets-install-host"), "{s}");
+    assert!(s.contains("would run secrets-install-host"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
     assert!(!s.contains(PLANTED));
 }
 
 #[test]
 fn secret_service_only_plans_without_staging() {
     let stub = secrets_stub();
-    let out = cmd()
+    let (mut c, ssh_log_path, _) = hermetic_cmd();
+    let out = c
         .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
         .args(["--dry-run", "--target", "example.test"])
         .arg("--host-local")
@@ -422,11 +473,13 @@ fn secret_service_only_plans_without_staging() {
         .output()
         .unwrap();
     let s = combined(&out);
+    let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
     assert!(out.status.success(), "{s}");
-    assert!(s.contains("secrets-install-host"), "{s}");
+    assert!(s.contains("would run secrets-install-host"), "{s}");
     assert!(s.contains("--from-secret-service"), "{s}");
     assert!(!s.contains("--from-staging"), "{s}");
-    assert!(s.contains("nixos-rebuild"), "{s}");
+    assert_dry_run_builds(&ssh_log, &s);
+    assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
 }
 
 #[test]
@@ -477,7 +530,8 @@ fn vaultwarden_admin_and_namecheap_allowlisted() {
     let stub = secrets_stub();
     let stg = plant_stage();
     for kind in ["vaultwarden-admin", "namecheap-api"] {
-        let out = cmd()
+        let (mut c, ssh_log_path, _) = hermetic_cmd();
+        let out = c
             .env("SURMOUNT_DEPLOY_SECRETS_INSTALL", &stub)
             .args(["--dry-run", "--target", "example.test"])
             .arg("--host-local")
@@ -494,9 +548,12 @@ fn vaultwarden_admin_and_namecheap_allowlisted() {
             .output()
             .unwrap();
         let s = combined(&out);
+        let ssh_log = fs::read_to_string(&ssh_log_path).unwrap_or_default();
         assert!(out.status.success(), "{kind}: {s}");
-        assert!(s.contains("secrets-install-host"), "{s}");
+        assert!(s.contains("would run secrets-install-host"), "{s}");
         assert!(s.contains("--require-kind") && s.contains(kind), "{s}");
+        assert_dry_run_builds(&ssh_log, &s);
+        assert!(!secrets_stub_ran(&stub), "dry-run must not install secrets");
         assert!(!s.contains(PLANTED), "{s}");
     }
 }
@@ -513,8 +570,9 @@ last=""
 for a in "$@"; do
   last=$a
 done
+# Last argument -s is the bash -s argv. The POSIX script is not an argument.
 case "$last" in
-  *nixos-rebuild*)
+  -s)
     exit "${SURMOUNT_TEST_REBUILD_EXIT:-0}"
     ;;
   *post-switch-smoke*|*surmount-deploy-host-post-switch-smoke*)
@@ -531,6 +589,58 @@ esac
 
 fn lines_containing(log: &str, needle: &str) -> usize {
     log.lines().filter(|line| line.contains(needle)).count()
+}
+
+/// Fake rsync plus the fake ssh, so a dry-run test does not touch the network.
+fn hermetic_cmd() -> (Command, PathBuf, PathBuf) {
+    let dir = temp_dir("hermetic");
+    let (ssh, ssh_log) = fake_ssh(&dir);
+    let rsync_log = dir.join("rsync.log");
+    write_exec(
+        &dir,
+        "rsync",
+        "#!/bin/sh\nlog=\"$SURMOUNT_TEST_RSYNC_LOG\"\nprintf '%s\\n' \"$*\" >> \"$log\"\nexit 0\n",
+    );
+    let mut c = cmd();
+    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+    c.env("PATH", format!("{}:{path}", dir.display()));
+    c.env("SURMOUNT_DEPLOY_SSH", &ssh);
+    c.env("SURMOUNT_TEST_SSH_LOG", &ssh_log);
+    c.env("SURMOUNT_TEST_RSYNC_LOG", &rsync_log);
+    (c, ssh_log, rsync_log)
+}
+
+/// Remote argv for the build and the switch. The POSIX script is not an
+/// argument, so the ssh log does not carry that script text.
+const BASH_S_ARGV: &str = "/run/current-system/sw/bin/bash -s";
+
+fn assert_one_bash_s(log: &str) {
+    assert!(log.contains(BASH_S_ARGV), "{log}");
+    assert_eq!(lines_containing(log, BASH_S_ARGV), 1, "{log}");
+    assert!(!log.contains("fish"), "{log}");
+    assert!(!log.contains("set deploy_host_gccarch_feature"), "{log}");
+}
+
+fn assert_dry_run_builds(ssh_log: &str, out: &str) {
+    assert_one_bash_s(ssh_log);
+    assert!(!ssh_log.contains("nixos-rebuild"), "{ssh_log}");
+    assert!(!ssh_log.contains("python"), "{ssh_log}");
+    assert!(!ssh_log.contains("switch-to-configuration"), "{ssh_log}");
+    assert!(
+        !ssh_log.contains("/nix/var/nix/profiles/system"),
+        "{ssh_log}"
+    );
+    assert!(!ssh_log.contains("post-switch-smoke"), "{ssh_log}");
+    assert!(
+        !ssh_log.contains("surmount-deploy-host-post-switch-smoke"),
+        "{ssh_log}"
+    );
+    assert!(
+        out.contains("deploy-host: nix build finished; the running generation was not switched"),
+        "{out}"
+    );
+    assert!(!out.contains("nixos-rebuild"), "{out}");
+    assert!(!out.contains("switch-to-configuration"), "{out}");
 }
 
 fn deploy_with_fake_ssh(rebuild_exit: &str, smoke_exit: &str) -> (Output, String) {
@@ -560,7 +670,9 @@ fn switch_ssh_drop_does_not_start_a_second_switch() {
     assert!(!out.status.success(), "{s}");
     assert!(s.contains("connection failed"), "{s}");
     assert!(s.contains("not starting a second switch"), "{s}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 0, "{log}");
 }
 
@@ -569,9 +681,12 @@ fn rebuild_exit_runs_smoke_once_and_is_not_a_connection_failure() {
     let (out, log) = deploy_with_fake_ssh("1", "0");
     let s = combined(&out);
     assert!(!out.status.success(), "{s}");
-    assert!(s.contains("nixos-rebuild failed"), "{s}");
+    assert!(s.contains("nix build failed"), "{s}");
+    assert!(!s.contains("nixos-rebuild"), "{s}");
     assert!(!s.contains("connection failed"), "{s}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 1, "{log}");
 }
 
@@ -580,8 +695,44 @@ fn finished_rebuild_runs_smoke_and_can_succeed() {
     let (out, log) = deploy_with_fake_ssh("0", "0");
     let s = combined(&out);
     assert!(out.status.success(), "{s}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert!(!log.contains("nixos-rebuild"), "{log}");
+    assert!(!log.contains("python"), "{log}");
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 1, "{log}");
+}
+
+/// Root on surmount-1 logs in with fish. Fish cannot parse
+/// `if ...; then ...; fi`. The remote smoke command must be an explicit
+/// `bash -c` so the login shell is not the parser. A bare if is the
+/// failure. `bash -s` stays the switch script, not this command.
+#[test]
+fn post_switch_smoke_remote_command_is_explicit_bash_not_a_bare_if() {
+    let (out, log) = deploy_with_fake_ssh("0", "0");
+    let s = combined(&out);
+    assert!(out.status.success(), "{s}");
+    let smoke_lines: Vec<&str> = log
+        .lines()
+        .filter(|line| line.contains("surmount-deploy-host-post-switch-smoke"))
+        .collect();
+    assert_eq!(
+        smoke_lines.len(),
+        1,
+        "expected one remote smoke command: {log}"
+    );
+    let line = smoke_lines[0];
+    let if_at = line
+        .find("if command -v")
+        .expect("smoke command contains if");
+    let before = &line[..if_at];
+    assert!(
+        before.contains("/run/current-system/sw/bin/bash -c"),
+        "bare if/fi is parsed by the login shell; invoke bash -c before the if: {line}"
+    );
+    assert!(
+        !line.contains("/run/current-system/sw/bin/bash -s"),
+        "do not send the smoke command as bash -s: {line}"
+    );
 }
 
 #[test]
@@ -591,13 +742,16 @@ fn smoke_ssh_drop_does_not_start_a_second_switch() {
     assert!(!out.status.success(), "{s}");
     assert!(s.contains("connection failed"), "{s}");
     assert!(s.contains("not starting a second switch"), "{s}");
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert_eq!(lines_containing(&log, "post-switch-smoke"), 3, "{log}");
 }
 
 /// Fake ssh that records whether the booted generation moved.
-/// nixos-rebuild prints `synthetic-rebuild-error: switch exit 1` on stderr
-/// and `synthetic-built-generation:` / `synthetic-booted-generation:` on stdout.
+/// The last argument `-s` is the bash invocation of the switch. That arm
+/// prints `synthetic-rebuild-error: switch exit 1` on stderr and
+/// `synthetic-built-generation:` / `synthetic-booted-generation:` on stdout.
 /// A later `readlink` or `surmount-test-booted-generation` prints the booted number.
 fn fake_ssh_generation(dir: &Path) -> (PathBuf, PathBuf) {
     let log = dir.join("ssh.log");
@@ -612,8 +766,9 @@ last=""
 for a in "$@"; do
   last=$a
 done
+# Last argument -s is the bash -s argv. The POSIX script is not an argument.
 case "$last" in
-  *nixos-rebuild*)
+  -s)
     echo "synthetic-rebuild-error: switch exit 1" >&2
     if [ "${SURMOUNT_TEST_GENERATION_CHANGED:-0}" = "1" ]; then
       printf '%s\n' 67 > "$state/booted"
@@ -644,7 +799,7 @@ esac
     (script, log)
 }
 
-fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
+fn deploy_with_generation_exit(changed: &str, rebuild_exit: &str) -> (Output, String, PathBuf) {
     let dir = temp_dir("fake-ssh-gen");
     let state = dir.join("state");
     fs::create_dir_all(&state).unwrap();
@@ -656,7 +811,7 @@ fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
         .env("SURMOUNT_TEST_SSH_LOG", &log)
         .env("SURMOUNT_TEST_GENERATION_STATE", &state)
         .env("SURMOUNT_TEST_GENERATION_CHANGED", changed)
-        .env("SURMOUNT_TEST_REBUILD_EXIT", "1")
+        .env("SURMOUNT_TEST_REBUILD_EXIT", rebuild_exit)
         .env("SURMOUNT_TEST_SMOKE_EXIT", "0")
         .args([
             "--target",
@@ -670,8 +825,12 @@ fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
     (out, logged, state)
 }
 
+fn deploy_with_generation(changed: &str) -> (Output, String, PathBuf) {
+    deploy_with_generation_exit(changed, "1")
+}
+
 #[test]
-fn smoke_exit_0_and_changed_generation_is_recipe_exit_0() {
+fn smoke_exit_0_and_changed_generation_stays_process_failure_when_switch_nonzero() {
     let (out, log, state) = deploy_with_generation("1");
     let s = combined(&out);
     let booted = fs::read_to_string(state.join("booted")).unwrap_or_default();
@@ -680,10 +839,20 @@ fn smoke_exit_0_and_changed_generation_is_recipe_exit_0() {
         "fixture must move the booted generation to 67: {booted}"
     );
     assert!(
-        out.status.success(),
-        "smoke exit 0 and a booted generation that changed to the generation the switch built must be recipe exit 0: {s}"
+        !out.status.success(),
+        "a non-zero switch must fail the process even when smoke exits 0 and the generation matches: {s}"
     );
-    assert_eq!(lines_containing(&log, "nixos-rebuild"), 1, "{log}");
+    assert!(
+        s.contains("nix build failed"),
+        "nix build failure must stay visible: {s}"
+    );
+    assert!(
+        s.contains("deploy-host: post-switch smoke exit=0"),
+        "smoke still runs after a non-zero switch: {s}"
+    );
+    assert_one_bash_s(&log);
+    assert_eq!(lines_containing(&log, "nixos-rebuild"), 0, "{log}");
+    assert!(!log.contains("python"), "{log}");
     assert!(lines_containing(&log, "post-switch-smoke") >= 1, "{log}");
 }
 
@@ -705,12 +874,46 @@ fn smoke_exit_0_and_unchanged_generation_stays_exit_1_with_rebuild_error() {
         "smoke exit 0 must stay recipe exit 1 when the booted generation did not change: {s}"
     );
     assert!(
-        s.contains("nixos-rebuild failed"),
-        "nixos-rebuild failure must stay visible: {s}"
+        s.contains("nix build failed"),
+        "nix build failure must stay visible: {s}"
     );
+    assert!(!s.contains("nixos-rebuild"), "{s}");
     assert!(
         s.contains("synthetic-rebuild-error: switch exit 1"),
-        "nixos-rebuild error text must not be swallowed: {s}"
+        "rebuild error text must not be swallowed: {s}"
     );
     assert!(!s.contains("connection failed"), "{s}");
+}
+
+/// Switch exit 4 is what nixos-rebuild returns when switch-to-configuration
+/// reports a failed unit. Smoke 0 and a matching generation must not make
+/// that process look successful.
+#[test]
+fn crash_loop_switch_exit_4_smoke_0_is_not_process_success() {
+    let (out, log, state) = deploy_with_generation_exit("1", "4");
+    let s = combined(&out);
+    let booted = fs::read_to_string(state.join("booted")).unwrap_or_default();
+    assert!(
+        booted.contains("67"),
+        "fixture must move the booted generation to 67: {booted}"
+    );
+    assert!(
+        s.contains("deploy-host: nix build exit=4"),
+        "the switch exit must stay visible: {s}"
+    );
+    assert!(
+        s.contains("deploy-host: post-switch smoke exit=0"),
+        "smoke still runs after a non-zero switch: {s}"
+    );
+    assert!(
+        !out.status.success(),
+        "switch exit 4 must fail the process even when post-switch smoke exits 0 and the generation matches: {s}"
+    );
+    assert!(
+        s.contains("nix build failed"),
+        "a non-zero switch must be reported as a failed deploy: {s}"
+    );
+    assert_one_bash_s(&log);
+    assert!(!log.contains("python"), "{log}");
+    assert!(lines_containing(&log, "post-switch-smoke") >= 1, "{log}");
 }

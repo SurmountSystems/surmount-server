@@ -14,12 +14,19 @@
 }:
 let
   cfg = config.surmount;
-  inherit (lib) mkIf mkDefault;
+  inherit (lib) mkIf mkDefault mkMerge;
 in
 {
-  config = mkIf cfg.enable {
+  # mkMerge so the eth0 unit flags stay behind the interface gate.
+  # Those flags are not set when eth0 is absent.
+  config = mkIf cfg.enable (mkMerge [
+  {
     networking.firewall = {
       enable = mkDefault true;
+      # Refused connections (not every packet) go to the kernel journal.
+      # logRefusedPackets stays off: that option is a packet debug flood.
+      # rejectPackets stays false so a scan does not get an ICMP reply.
+      logRefusedConnections = mkDefault true;
       allowedTCPPorts = [
         22 # SSH (consider restrict-to-admin nets later)
         25 # SMTP inbound
@@ -45,7 +52,27 @@ in
       # Do not claim host drop works from unit env alone.
     };
 
+    systemd.services.firewall.serviceConfig = {
+      SyslogIdentifier = "firewall";
+      LogRateLimitIntervalSec = "30s";
+      LogRateLimitBurst = 50000;
+    };
+
+    # A switch must not stop sshd. Stopping sshd.service drops SSH.
+    # restartIfChanged false skips the unit. stopIfChanged false would
+    # restart it, and that restart is not this stop list.
+    systemd.services.sshd.stopIfChanged = false;
+    systemd.services.sshd.restartIfChanged = false;
+
     # Host name stays in hosts/*/configuration.nix so NixOS VM tests
     # (nodes.<name>) can set their own without conflicts.
-  };
+  }
+  (mkIf (config.networking.interfaces ? eth0) {
+    # A switch must not stop network-addresses-eth0. Stopping that
+    # unit drops addresses. Same stopIfChanged and restartIfChanged
+    # pair as sshd. The gate is the eth0 interface.
+    systemd.services.network-addresses-eth0.stopIfChanged = false;
+    systemd.services.network-addresses-eth0.restartIfChanged = false;
+  })
+  ]);
 }
