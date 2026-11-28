@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 /// Discover the public git work tree. Env wins (tests / operator).
@@ -28,6 +29,83 @@ fn walk_for_flake(start: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// `local://` URI for `<repo>/vendor/nix-store` when the outer nix run
+/// already used that directory. The vendor recipe passes the same
+/// directory to `--store`. None means callers keep the default store.
+pub fn outer_vendor_store_uri() -> Option<String> {
+    let store = discover_repo_root().join("vendor").join("nix-store");
+    if !store.is_dir() {
+        return None;
+    }
+    let store = fs::canonicalize(&store).unwrap_or(store);
+    let uri = format!("local://{}", store.display());
+    if exe_is_under_store(&store)
+        || nix_remote_names_store(&store, &uri)
+        || exe_output_is_in_vendor_store(&store)
+    {
+        Some(uri)
+    } else {
+        None
+    }
+}
+
+fn exe_is_under_store(store: &Path) -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+    let exe = fs::canonicalize(&exe).unwrap_or(exe);
+    is_path_under_root(store, &exe)
+}
+
+/// `nix --store local://<chroot> run` bind-mounts `<chroot>/nix/store`
+/// on `/nix/store` and execs `/nix/store/<output>/...`. That logical
+/// path is not under the chroot directory. The failed dry-run's
+/// `NIX_REMOTE` was unset, so the directory check is the remaining
+/// signal: the same output still exists at `<chroot>/nix/store/<output>`.
+fn exe_output_is_in_vendor_store(store: &Path) -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+    let exe = fs::canonicalize(&exe).unwrap_or(exe);
+    logical_store_output_is_in_vendor(store, &exe)
+}
+
+fn logical_store_output_is_in_vendor(store: &Path, exe: &Path) -> bool {
+    let Some(name) = nix_store_output_name(exe) else {
+        return false;
+    };
+    store.join("nix").join("store").join(name).is_dir()
+}
+
+fn nix_store_output_name(exe: &Path) -> Option<String> {
+    let text = exe.to_string_lossy();
+    let rest = text.split("/nix/store/").nth(1)?;
+    let name = rest.split('/').next().unwrap_or("");
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '+'))
+    {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+fn nix_remote_names_store(store: &Path, uri: &str) -> bool {
+    let Ok(remote) = env::var("NIX_REMOTE") else {
+        return false;
+    };
+    let remote = remote.trim().trim_end_matches('/');
+    if remote.is_empty() {
+        return false;
+    }
+    let bare = store.to_string_lossy();
+    let bare = bare.trim_end_matches('/');
+    remote == uri.trim_end_matches('/')
+        || remote == bare
+        || remote.strip_prefix("local://") == Some(bare)
 }
 
 /// `realpath -m` shape: absolute, `.`/`..` collapsed, missing parents OK.
@@ -174,5 +252,25 @@ mod tests {
         assert!(is_path_under_root(root, Path::new("/tmp/repo")));
         assert!(is_path_under_root(root, Path::new("/tmp/repo/secret")));
         assert!(!is_path_under_root(root, Path::new("/tmp/repo-other")));
+    }
+
+    #[test]
+    fn logical_nix_store_exe_matches_vendor_output_dir() {
+        let name = "dsf5ywbr6z93cnh9ycpsmxxd84fwa43d-surmount-deploy-host";
+        let exe = PathBuf::from(format!("/nix/store/{name}/bin/surmount-deploy-host"));
+        assert_eq!(nix_store_output_name(&exe).as_deref(), Some(name));
+        assert!(nix_store_output_name(Path::new("/usr/bin/nix")).is_none());
+        let root = env::temp_dir().join(format!(
+            "surmount-vendor-store-output-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("nix").join("store").join(name)).unwrap();
+        assert!(logical_store_output_is_in_vendor(&root, &exe));
+        assert!(!logical_store_output_is_in_vendor(
+            &root,
+            Path::new("/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-other/bin/x")
+        ));
+        let _ = fs::remove_dir_all(&root);
     }
 }

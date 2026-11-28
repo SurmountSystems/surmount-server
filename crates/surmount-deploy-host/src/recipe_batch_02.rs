@@ -30,7 +30,6 @@ const BATCH: &[&str] = &[
 ];
 
 const DEPLOY_TARGET: &str = "root@surmount-1";
-const DEPLOY_HOST_LOCAL: &str = "/home/hunter/.local/share/surmount/host-local";
 
 pub fn dispatch(args: &[String]) -> Option<Result<(), ToolError>> {
     let (name, rest) = recipe_batch_01::split_invocation(args)?;
@@ -77,18 +76,33 @@ fn nix_run_package(attr: &str, args: &[String]) -> Result<(), ToolError> {
 
 fn run_deploy(dry_run: bool, args: &[String]) -> Result<(), ToolError> {
     let root = discover_repo_root();
-    let mut cmd = vec![
+    let mut cmd = Vec::new();
+    // The closure build is the later remote `nix build`. This `nix run`
+    // opens the vendor store. A root client with a non-empty
+    // build-users-group chowns that store directory. An empty group
+    // skips the chown. The build still runs as this process.
+    if dry_run {
+        if let Some(store) = crate::paths::outer_vendor_store_uri() {
+            cmd.push("--store".to_string());
+            cmd.push(store);
+            cmd.push("--option".to_string());
+            cmd.push("build-users-group".to_string());
+            cmd.push(String::new());
+        }
+    }
+    cmd.extend([
         "run".to_string(),
         ".#surmount-deploy-host".to_string(),
         "--".to_string(),
-    ];
+    ]);
     if dry_run {
         cmd.push("--dry-run".to_string());
     }
     cmd.push("--target".to_string());
     cmd.push(DEPLOY_TARGET.to_string());
     cmd.push("--host-local".to_string());
-    cmd.push(DEPLOY_HOST_LOCAL.to_string());
+    // The directory is on the machine this process is running on.
+    cmd.push(crate::machine_host_local::host_local_dir_for_this_machine().to_string());
     cmd.extend(args.iter().cloned());
     run_in(&root, "nix", &cmd)
 }

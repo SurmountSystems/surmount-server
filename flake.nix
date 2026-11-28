@@ -423,8 +423,8 @@
           e2ePkgs = pkgs.callPackage ./nix/packages/surmount-e2e.nix {
             inherit craneLib pkgsRust;
           };
-          # Not a rec set. Sibling attrs cannot see sploraRust100.
-          sploraRust100 = import ./nix/splora-rust-1.100.nix {
+          # Not a rec set. Sibling attrs cannot see sploraToolchain.
+          sploraToolchain = import ./nix/splora-toolchain.nix {
             inherit lib sploraInput pkgsRust system;
           };
         in
@@ -526,15 +526,12 @@
           # Flake-input splora packages. Upstream crane omits
           # .cargo/config.toml from src and builds --offline --locked.
           # Not in checks.ci: the real package is a rocksdb crane build.
-          # mkPkgs inside splora rev 1a50824 hardcodes rust-bin 1.100.0
-          # and takes no toolchain argument. That input's rust-overlay
-          # has no stable 1.100.0 manifest.
-          # nix/splora-rust-1.100.nix re-calls that flake and puts
-          # nixpkgs-rust rustc 1.100.0 and cargo 1.100.0 on
-          # rust-bin.stable."1.100.0".default, the attribute Splora reads.
-          # sploraRust100 is bound in the let above. This attrset is not rec.
-          splora = sploraRust100.splora;
-          splora-liquid = sploraRust100.splora-liquid;
+          # nix/splora-toolchain.nix re-calls that flake and points its
+          # crane toolchain at nix/rust-toolchain.nix (nixpkgs-rust
+          # rustc and cargo). sploraToolchain is bound in the let above.
+          # This attrset is not rec.
+          splora = sploraToolchain.splora;
+          splora-liquid = sploraToolchain.splora-liquid;
           # Trunk client from frontend/web. cargoHash is the fetchCargoVendor
           # vendor-staging hash in nix/packages/splora-web.nix. This Nix src
           # omits the laptop Menhera config. The build phase is offline.

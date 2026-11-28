@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use crate::args::{DeployOpts, Mode, USAGE, validate_secrets_kind};
 use crate::error::ToolError;
 use crate::keys::check_host_local;
+use crate::local_on_target::{self, ExecHere, LOCAL_SHELL};
 use crate::paths::{
     assert_safe_token, discover_repo_root, is_path_under_root, is_public_product_path, realpath_m,
     shell_quote,
@@ -23,6 +24,8 @@ const RSYNC_EXCLUDES: &[&str] = &[
     "crates/target/",
     "--exclude",
     "target/",
+    "--exclude",
+    "vendor/",
     "--exclude",
     "host-local/",
     "--exclude",
@@ -209,18 +212,22 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
         }
     }
 
+    let hostname = local_on_target::current_hostname();
+    let here = ExecHere {
+        hostname: &hostname,
+        euid: local_on_target::current_euid(),
+    };
     if !opts.skip_sync {
-        ssh_run(
-            &opts.target,
-            &format!("mkdir -p {}", shell_quote(&opts.remote_dir)),
-        )?;
-        rsync_remote(
-            &["-az", "--delete"],
-            RSYNC_EXCLUDES,
-            &repo_root,
-            &opts.target,
-            &opts.remote_dir,
-        )?;
+        if let Some(argv) = tree_rsync_argv(&repo_root, &opts.target, &opts.remote_dir, here) {
+            ssh_run(
+                &opts.target,
+                &format!("mkdir -p {}", shell_quote(&opts.remote_dir)),
+            )?;
+            run_tree_rsync(
+                &argv,
+                local_on_target::rsync_invokes_ssh(&opts.target, here),
+            )?;
+        }
     }
 
     if opts.host_local.is_some() && !opts.skip_host_local_check {
@@ -278,18 +285,16 @@ fn run_deploy(opts: DeployOpts) -> Result<(), ToolError> {
         }
     }
 
-    let rebuild_flake_ref = format!("path:{}#{}", opts.remote_dir, opts.flake_attr);
+    let checkout = repo_root.to_string_lossy();
+    let build_dir = local_on_target::nix_build_dir(&checkout, &opts.remote_dir, &opts.target, here);
+    let rebuild_flake_ref = format!("path:{build_dir}#{}", opts.flake_attr);
     if opts.dry_run {
         // Build only. Do not switch, do not touch the system profile,
         // and do not run post-switch smoke.
         let build_remote_cmd = build_remote_command(&rebuild_flake_ref);
         let (finish, _build_stdout) = ssh_captured_bash_script(&opts.target, &build_remote_cmd);
         let build_rc = build_outcome(finish)?;
-        if build_rc != 0 {
-            return Err(ToolError::fail(format!(
-                "nix build failed (exit {build_rc}); the running generation was not switched"
-            )));
-        }
+        nix_build_exit(build_rc)?;
         println!("deploy-host: nix build finished; the running generation was not switched");
         let _ = io::stdout().flush();
         return Ok(());
@@ -419,8 +424,7 @@ fn ssh_bin() -> String {
 
 /// True when the operator asked for a root login (rebuild needs root, not nixbuilder).
 fn target_user_is_root(target: &str) -> bool {
-    let t = target.trim();
-    t == "root" || t.starts_with("root@")
+    local_on_target::target_user_is_root(target)
 }
 
 fn operator_ssh_identity(target: &str) -> Option<PathBuf> {
@@ -476,7 +480,7 @@ const SSH_ATTEMPTS: u32 = 3;
 /// NixOS system bash. sshd runs root's login shell (`fish -c <remote argv>`).
 /// A bare `name=value` in that argv is a fish syntax error before
 /// the system build. The POSIX script stays on stdin of `bash -s`.
-const REMOTE_BASH: &str = "/run/current-system/sw/bin/bash";
+const REMOTE_BASH: &str = LOCAL_SHELL;
 
 /// Remote argv fish can parse. The gccarch assignment is not in this argv.
 fn posix_script_remote_argv() -> &'static [&'static str] {
@@ -525,10 +529,31 @@ printf '%s\n' "deploy-host: nix config show max-jobs=$deploy_host_show_jobs core
 
 fn build_remote_command(flake_ref: &str) -> String {
     let flake_q = shell_quote(flake_ref);
-    let bootstrap = crate::nix_conf::gccarch_bootstrap_remote();
-    let show = daemon_job_show_lines();
-    let build = crate::nixos_rebuild_bin::build_line(&flake_q);
-    format!("{bootstrap}\n{show}\n{build}")
+    let store = crate::paths::outer_vendor_store_uri();
+    let bootstrap = nix_store_on_config_show(
+        &crate::nix_conf::gccarch_bootstrap_remote(),
+        store.as_deref(),
+    );
+    let show = nix_store_on_config_show(daemon_job_show_lines(), store.as_deref());
+    let build = crate::nixos_rebuild_bin::build_line_in_store(&flake_q, store.as_deref());
+    let tools = crate::tool_path::remote_tool_path_prefix();
+    format!("{tools}{bootstrap}\n{show}\n{build}")
+}
+
+/// Prefix `$(nix config show` in the dry-run remote script. Echo text
+/// that mentions the same words is left alone. None keeps the script.
+/// The store client also gets an empty `build-users-group` so a root
+/// process does not chown the store directory. `nix config show` still
+/// runs.
+fn nix_store_on_config_show(script: &str, store_uri: Option<&str>) -> String {
+    let Some(uri) = store_uri.filter(|uri| !uri.is_empty()) else {
+        return script.to_string();
+    };
+    let flagged = format!(
+        "$(nix --store {} --option build-users-group '' config show",
+        shell_quote(uri)
+    );
+    script.replace("$(nix config show", &flagged)
 }
 
 /// One remote switch. Prints `synthetic-built-generation:` after the rebuild.
@@ -621,14 +646,38 @@ fn read_tee(mut src: impl Read, mut sink: impl Write) -> Vec<u8> {
     buf
 }
 
-fn ssh_command_args(host: &str, remote_args: &[&str]) -> Command {
-    let extra = ssh_extra_args(host);
-    let mut cmd = Command::new(ssh_bin());
-    cmd.args(&extra).arg("--").arg(host);
-    for arg in remote_args {
-        cmd.arg(*arg);
+fn command_from_argv(argv: &[String]) -> Command {
+    match argv.split_first() {
+        Some((prog, rest)) if !prog.is_empty() => {
+            let mut cmd = Command::new(prog);
+            cmd.args(rest);
+            cmd
+        }
+        // Empty argv is not an ssh client and is not a successful build.
+        _ => {
+            let mut cmd = Command::new(REMOTE_BASH);
+            cmd.arg("-c").arg("exit 1");
+            cmd
+        }
     }
-    cmd
+}
+
+/// SSH client argv, unless this process is already root on `host`.
+/// That case runs the same remote command locally and does not spawn ssh.
+fn ssh_command_args(host: &str, remote_args: &[&str]) -> Command {
+    let hostname = local_on_target::current_hostname();
+    let here = ExecHere {
+        hostname: &hostname,
+        euid: local_on_target::current_euid(),
+    };
+    let extra = if local_on_target::already_root_on_target(host, here) {
+        Vec::new()
+    } else {
+        ssh_extra_args(host)
+    };
+    let argv =
+        local_on_target::remote_exec_argv(&ssh_bin(), &extra, host, remote_args, REMOTE_BASH, here);
+    command_from_argv(&argv)
 }
 
 fn ssh_command(host: &str, remote_cmd: &str) -> Command {
@@ -806,6 +855,18 @@ where
     )))
 }
 
+/// A non-zero nix build stays an error. Exit 0 is the only success.
+/// This does not switch the running generation.
+pub fn nix_build_exit(code: i32) -> Result<(), ToolError> {
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(ToolError::fail(format!(
+            "nix build failed (exit {code}); the running generation was not switched"
+        )))
+    }
+}
+
 /// The build is one attempt. It must not fall through into a switch.
 fn build_outcome(finish: RemoteFinish) -> Result<i32, ToolError> {
     match finish {
@@ -847,14 +908,95 @@ fn ssh_run(host: &str, remote_cmd: &str) -> Result<(), ToolError> {
     }
 }
 
+/// Public-tree rsync argv. `None` means the checkout stays where it is.
+///
+/// `rsync_remote` used to build a copy of `/mnt/hdd/projects/server/`
+/// onto `/root/surmount-server` or `root@surmount-1:/root/surmount-server/`.
+/// This function is that builder. The same-host checkout returns `None`.
+/// A push from another host still returns an argv, and that argv
+/// excludes `vendor/`.
+pub fn tree_rsync_argv(
+    checkout: &Path,
+    target: &str,
+    remote_dir: &str,
+    here: ExecHere<'_>,
+) -> Option<Vec<String>> {
+    let checkout_s = checkout.to_string_lossy();
+    if local_on_target::same_host_checkout_skips_tree_copy(&checkout_s, target, here) {
+        return None;
+    }
+    let src_s = format!("{}/", checkout_s.trim().trim_end_matches('/'));
+    let dest_s = local_on_target::rsync_dest(target, remote_dir, here);
+    let mut argv = Vec::with_capacity(8 + RSYNC_EXCLUDES.len());
+    argv.push("rsync".to_string());
+    if local_on_target::rsync_invokes_ssh(target, here) {
+        argv.push("-e".to_string());
+        argv.push(ssh_rsh(target));
+    }
+    argv.push("-az".to_string());
+    argv.push("--delete".to_string());
+    argv.extend(RSYNC_EXCLUDES.iter().map(|s| (*s).to_string()));
+    argv.push(src_s);
+    argv.push(dest_s);
+    Some(argv)
+}
+
+fn spawn_rsync_status(argv: &[String]) -> io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new(&argv[0]);
+    if argv.len() > 1 {
+        cmd.args(&argv[1..]);
+    }
+    cmd.status()
+}
+
+fn run_tree_rsync(argv: &[String], via_ssh: bool) -> Result<(), ToolError> {
+    if argv.first().map(String::as_str) != Some("rsync") {
+        return Err(ToolError::fail("tree rsync argv must start with rsync"));
+    }
+    if !via_ssh {
+        let dest = argv.last().map(String::as_str).unwrap_or("");
+        let trimmed = dest.trim_end_matches('/');
+        let dest_path = Path::new(trimmed);
+        if !dest_path.is_absolute() {
+            return Err(ToolError::fail(
+                "refusing local rsync: remote dir is not an absolute path",
+            ));
+        }
+        fs::create_dir_all(dest_path)?;
+        let st = retry_local_exec(|| spawn_rsync_status(argv))
+            .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
+        if st.success() {
+            Ok(())
+        } else {
+            Err(ToolError::fail("rsync exited non-zero"))
+        }
+    } else {
+        let code = retry_remote("rsync", || {
+            match retry_local_exec(|| spawn_rsync_status(argv)) {
+                Ok(status) => classify_rsync_code(status.code()),
+                Err(e) => RemoteFinish::Local(format!("rsync failed: {e}")),
+            }
+        })?;
+        if code == 0 {
+            Ok(())
+        } else {
+            Err(ToolError::fail(format!("rsync exited {code}")))
+        }
+    }
+}
+
 fn rsync_local(flags: &[&str], src: &Path, dest: &Path) -> Result<(), ToolError> {
+    rsync_paths(flags, &[], src, dest)
+}
+
+fn rsync_paths(flags: &[&str], extra: &[&str], src: &Path, dest: &Path) -> Result<(), ToolError> {
     let src_s = format!("{}/", src.display());
     let dest_s = format!("{}/", dest.display());
     // Same ETXTBSY cap as the fake-ssh exec. The dry-run rsync is a
     // script the test just closed. status() is the spawn.
     let st = retry_local_exec(|| {
         let mut cmd = Command::new("rsync");
-        cmd.args(flags).arg(&src_s).arg(&dest_s);
+        cmd.args(flags).args(extra).arg(&src_s).arg(&dest_s);
         cmd.status()
     })
     .map_err(|e| ToolError::fail(format!("rsync failed: {e}")))?;
@@ -872,8 +1014,31 @@ fn rsync_remote(
     target: &str,
     remote_dir: &str,
 ) -> Result<(), ToolError> {
+    let hostname = local_on_target::current_hostname();
+    let here = ExecHere {
+        hostname: &hostname,
+        euid: local_on_target::current_euid(),
+    };
+    if local_on_target::same_host_checkout_skips_tree_copy(&src.to_string_lossy(), target, here) {
+        // Checkout is already the build directory on this host.
+        // Do not rsync it onto remote_dir, and do not copy vendor/.
+        return Ok(());
+    }
+    if !local_on_target::rsync_invokes_ssh(target, here) {
+        let dest_s = local_on_target::rsync_dest(target, remote_dir, here);
+        // trim_end_matches('/') turns "/" into empty. Do not rsync onto cwd.
+        let trimmed = dest_s.trim_end_matches('/');
+        let dest = Path::new(trimmed);
+        if !dest.is_absolute() {
+            return Err(ToolError::fail(
+                "refusing local rsync: remote dir is not an absolute path",
+            ));
+        }
+        fs::create_dir_all(dest)?;
+        return rsync_paths(flags, extra, src, dest);
+    }
     let src_s = format!("{}/", src.display());
-    let dest_s = format!("{target}:{}/", remote_dir.trim_end_matches('/'));
+    let dest_s = local_on_target::rsync_dest(target, remote_dir, here);
     let code = retry_remote("rsync", || {
         match retry_local_exec(|| {
             let mut cmd = Command::new("rsync");
@@ -934,6 +1099,10 @@ mod tests {
         assert!(
             patterns.contains(&"crates/target/"),
             "crate cargo target must stay off the wire: {patterns:?}"
+        );
+        assert!(
+            patterns.contains(&"vendor/"),
+            "vendor must stay off the wire: {patterns:?}"
         );
     }
 

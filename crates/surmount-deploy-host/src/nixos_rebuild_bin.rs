@@ -18,9 +18,28 @@ fn toplevel_installable(flake_q: &str) -> String {
 }
 
 pub fn build_line(flake_q: &str) -> String {
+    build_line_in_store(flake_q, None)
+}
+
+/// Same command as [`build_line`]. When `store_uri` is set, the nix
+/// client uses that store (`nix --store URI build`) and an empty
+/// `build-users-group`. A root client with a non-empty group chowns
+/// the store directory. Empty skips that chown. The build still runs.
+/// None keeps the default store. This string still does not switch
+/// the generation.
+pub fn build_line_in_store(flake_q: &str, store_uri: Option<&str>) -> String {
     let installable = toplevel_installable(flake_q);
+    let store_flag = match store_uri {
+        Some(uri) if !uri.is_empty() => {
+            format!(
+                "--store {} --option build-users-group '' ",
+                crate::paths::shell_quote(uri)
+            )
+        }
+        _ => String::new(),
+    };
     format!(
-        "nice -n 19 nix build --extra-experimental-features 'nix-command flakes' --keep-going --no-link --print-out-paths --option max-jobs 32 --option cores 32 {installable}"
+        "nice -n 19 nix {store_flag}build --extra-experimental-features 'nix-command flakes' --keep-going --no-link --print-out-paths --option max-jobs 32 --option cores 32 {installable}"
     )
 }
 
@@ -64,6 +83,23 @@ mod tests {
             )
         );
         assert!(build.starts_with("nice -n 19 nix build "));
+        let with_store = build_line_in_store(
+            "path:/tmp/repo#mail-vps",
+            Some("local:///mnt/hdd/projects/server/vendor/nix-store"),
+        );
+        assert!(
+            with_store.contains(
+                "nice -n 19 nix --store local:///mnt/hdd/projects/server/vendor/nix-store --option build-users-group '' build "
+            ),
+            "{with_store}"
+        );
+        assert!(with_store.contains("--keep-going"), "{with_store}");
+        assert!(with_store.contains("--no-link"), "{with_store}");
+        assert!(
+            !with_store.contains("switch-to-configuration"),
+            "{with_store}"
+        );
+        assert_eq!(build_line_in_store("path:/tmp/repo#mail-vps", None), build);
         assert!(build.contains("--keep-going"));
         assert!(build.contains("--no-link"));
         assert!(build.contains("--print-out-paths"));

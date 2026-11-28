@@ -407,7 +407,13 @@ fn run_cargo(args: &[String]) -> Result<(), ToolError> {
 }
 
 pub(crate) fn run_in(root: &Path, bin: &str, args: &[String]) -> Result<(), ToolError> {
-    let status = Command::new(bin).args(args).current_dir(root).status()?;
+    let program = crate::tool_path::resolve_tool(bin);
+    let mut cmd = Command::new(&program);
+    cmd.args(args)
+        .current_dir(root)
+        .env("PATH", crate::tool_path::child_path());
+    crate::tool_path::apply_nix_library_path(&mut cmd, &program);
+    let status = cmd.status()?;
     status_result(status)
 }
 

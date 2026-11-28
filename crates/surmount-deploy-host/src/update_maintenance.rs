@@ -21,7 +21,6 @@ use crate::paths::discover_repo_root;
 pub const MENHERA_COOLDOWN_REGISTRY: &str = "sparse+https://index.crates.menhera.org/10d/";
 
 const DEPLOY_TARGET: &str = "root@surmount-1";
-const DEPLOY_HOST_LOCAL: &str = "/home/hunter/.local/share/surmount/host-local";
 
 /// What `maybe_dispatch` will run. Tests use this so they do not spawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -806,7 +805,8 @@ fn run_recipe(name: &str, args: &[String]) -> Result<(), ToolError> {
             prefix.push("--target".to_string());
             prefix.push(DEPLOY_TARGET.to_string());
             prefix.push("--host-local".to_string());
-            prefix.push(DEPLOY_HOST_LOCAL.to_string());
+            // The directory is on the machine this process is running on.
+            prefix.push(crate::machine_host_local::host_local_dir_for_this_machine().to_string());
             prefix.extend(args.iter().cloned());
             exec_canonical(&prefix)
         }

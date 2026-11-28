@@ -72,8 +72,9 @@ deploy *args:
     nix run .#deploy -- "$@"
 
 # Does not activate and does not SSH a rollback. Not deploy-rs. That eval is a horizon check of tests/dry-run-reveals-deploy.nix, and running it on surmount-1 blocked the closure build on one CPU.
+# When uid is 0 and host-local authorized_keys exists, chown that file to uid 0 before nix run. Leave group and mode alone. A failing chown fails the recipe. Horizon is not uid 0, so the chown does not run there.
 deploy-dry-run *args:
-    nix run .#deploy-dry-run -- "$@"
+    if [ "$(id -u)" -eq 0 ] && [ -f /root/surmount-server/host-local/authorized_keys ]; then chown -- 0 /root/surmount-server/host-local/authorized_keys || exit 1; for f in /root/surmount-server/host-local/*.pub /root/surmount-server/host-local/authorized_keys.*; do if [ -f "$f" ]; then chown -- 0 "$f" || exit 1; fi; done; fi; nix run .#deploy-dry-run -- "$@"
 
 deploy-host *args:
     nix run .#deploy-host -- "$@"

@@ -1,20 +1,23 @@
-# Crane / `nix develop` rustc. Pass nixpkgs-rust, not the mail-host channel.
-# nixpkgs-rust is pinned to 981724d1e07192596b94a2dcd4bd3c30139cc508.
-# That commit sets rustcVersion = "1.100.0" in
-# pkgs/development/compilers/rust/1_100.nix. Not a newer compiler.
-# Not the mail-host channel (nixos-26.05 pkgs.rustc 1.95.0).
-# Prior lock 342414c3be9098a87dd50b560e96842a1c79cb9f was rustc 1.99.1.
-# A forgotten pkgsRust ? pkgs argument used to select mail-host rustc 1.95.0.
-# That path throws here instead of compiling.
+# Compilers from the package set the caller passes.
+# Crane, the dev shell, and Splora pass nixpkgs-rust.
+# Do not pass the mail-host channel.
+# This file does not select a compiler version and does not wrap cargo.
+# The derivation name is surmount-rust.
 { pkgs }:
-assert pkgs.lib.assertMsg (pkgs.rustc.version == "1.100.0")
-  "nix/rust-toolchain.nix: rustc ${pkgs.rustc.version} is not 1.100.0. Pass the nixpkgs-rust package set. Do not pass mail-host pkgs (rustc 1.95.0).";
-pkgs.symlinkJoin {
-  name = "surmount-rust-${pkgs.rustc.version}";
-  paths = [
+let
+  compilers = [
     pkgs.rustc
     pkgs.cargo
     pkgs.clippy
     pkgs.rustfmt
   ];
+in
+pkgs.symlinkJoin {
+  name = "surmount-rust";
+  paths = compilers;
+  passthru = {
+    paths = compilers;
+    rustc = pkgs.rustc;
+    cargo = pkgs.cargo;
+  };
 }
